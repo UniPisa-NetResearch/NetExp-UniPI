@@ -1,0 +1,152 @@
+:root {
+    --primary-blue: #007bff;
+    --primary-blue-dark: #0056b3; /* hover */
+    --light-background: #f8f9fa; /* background grey/white */
+    --white: #ffffff;
+    --text-dark: #343a40;
+}
+html, body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: 'Segoe UI', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    background-color: var(--light-background);
+}
+/*wrapper for  navbar and form*/
+.main-wrapper {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    background-color: var(--light-background);
+}
+/*navbar style*/
+.navbar {
+    width: 100%;
+    background-color: var(--white);
+    padding: 5px 15px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    flex-shrink: 0;
+}
+/* logo style */
+.navbar-logo {
+    height: 45px;
+}
+
+/* general layout */
+.container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    flex-grow: 1;
+    padding: 20px;
+}
+
+/* form card */
+.card {
+    background-color: var(--white);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    padding: 30px 40px;
+    width: 100%;
+    max-width: 400px;
+    text-align: center;
+}
+
+.title {
+    color: var(--text-dark);
+    margin-bottom: 20px;
+}
+
+/* toggle buttons (Login/Registration) */
+.toggle-group {
+    margin-bottom: 20px;
+}
+
+.toggle-button {
+    padding: 10px 20px;
+    margin: 0 10px;
+    border: none;
+    border-radius: 20px;
+    cursor: pointer;
+    font-size: 16px;
+    transition: all 0.3s ease;
+    background-color: var(--light-background);
+    color: var(--text-dark);
+}
+
+/* change color for active toggle button*/
+.toggle-button.active:hover{
+    background-color: var(--primary-blue-dark);
+}
+
+/* change color for non-active toggle button*/
+.toggle-button:hover{
+    background-color: #F0F8FF
+}
+/* toggle button active*/
+.toggle-button.active {
+    background-color: var(--primary-blue);
+    color: var(--white);
+    box-shadow: 0 2px 8px rgba(0, 123, 255, 0.4);
+}
+
+/* change color for active toggle button*/
+.toggle-button.active:hover{
+    background-color: var(--primary-blue-dark);
+}
+
+/* input fields */
+.input-field {
+    width: 100%;
+    padding: 12px;
+    margin: 10px 0;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    box-sizing: border-box;
+    font-size: 16px;
+    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.input-field:focus {
+    border-color: var(--primary-blue);
+    outline: none;
+    box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25); /* when the field is focus, the color is blue */
+}
+
+.textarea-field {
+    resize: vertical;
+}
+
+/* submit button */
+.submit-button {
+    background-color: var(--primary-blue);
+    color: var(--white);
+    padding: 12px 20px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-top: 20px;
+    font-size: 16px;
+    width: 100%;
+    transition: background-color 0.3s ease;
+}
+
+.submit-button:hover {
+    background-color: var(--primary-blue-dark);
+}
+
+/* Testo Footer */
+.footer-text {
+    margin-top: 20px;
+    color: #6c757d;
+    font-size: 14px;
+}
