@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  # Database PostgreSQL Service
+  db:
+    image: postgres:14-alpine
+    restart: always
+    environment:
+
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: root
+      POSTGRES_DB: netexp_db
+
+    ports:
+      - "5432:5432"
+    volumes:
+      # DB data persistent even if the container is stopped or rebuilt
+      - postgres_data:/var/lib/postgresql/data/
+
+volumes:
+  postgres_data:
+    driver: local

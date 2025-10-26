@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-
+import { useNavigate } from 'react-router-dom';
 import './style/style.css';
 
-const AuthForm = () => {
+const AuthForm = ({ onAuthSuccess }) => {
+    const navigate = useNavigate();
     const [isLogin, setIsLogin] = useState(true);
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
@@ -34,10 +35,13 @@ const AuthForm = () => {
             if (response.ok) {
                 // Success
                 setMessage(`Success: ${data.message}`);
+
+                onAuthSuccess(username); // update status in App.jsx
+                navigate('/');          // redirect to the Home (URL '/')
                 setUsername('');
                 setPassword('');
                 setSshKey('');
-                // Potresti reindirizzare l'utente qui dopo il login
+
             } else {
                 setMessage(`Error: ${data.message}`);
             }

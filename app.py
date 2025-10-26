@@ -2,12 +2,15 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
+import base64
 app = Flask(__name__)
 
 DB_USER = 'root'
 DB_PASSWORD = 'root'
-DB_HOST = 'gabri_db_1'
+DB_HOST = 'localhost'
 DB_NAME = 'netexp_db'
+
+SUPPORTED_KEY_TYPES = ['ssh-ed25519', 'ssh-rsa', 'ecdsa-sha2-nistp256']
 
 app.config['SQLALCHEMY_DATABASE_URI'] = f'postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:5432/{DB_NAME}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -62,7 +65,8 @@ def signup():
     data = request.get_json()
     username = data.get('username')
     password = data.get('password')
-    ssh_key = data.get('sshKey')
+    # remove initial/final spaces
+    ssh_key = data.get('sshKey', '').strip()
 
     # Check values
     if not username or not password or not ssh_key:
@@ -75,6 +79,27 @@ def signup():
     # User existence verification
     if User.query.filter_by(username=username).first():
         return jsonify({"message": "Username already exists"}), 409
+
+    # separate the key elements
+    key_parts = ssh_key.split()
+    # the kay has two or three parts (omission of comment)
+    if len(key_parts) < 2 or len(key_parts) > 3:
+        return jsonify({"message": "Invalid SSH Key format. Please ensure you copied the entire key."}), 400
+
+    # key type verification
+    key_type = key_parts[0]
+
+    if key_type not in SUPPORTED_KEY_TYPES:
+        return jsonify({"message": f"Unsupported SSH Key type: {key_type}. Supported types are: {', '.join(SUPPORTED_KEY_TYPES)}"}), 400
+
+    #key body verification
+    key_body_base64 = key_parts[1]
+    try:
+        # try to decode key body in Base64
+        base64.b64decode(key_body_base64)
+    except Exception as ex:
+        app.logger.error(f"Key decoding error: {ex}")
+        return jsonify({"message": "SSH Key body is corrupted or not valid Base64."}), 400
 
     # User creation
     new_user = User(username=username, ssh_key=ssh_key)
