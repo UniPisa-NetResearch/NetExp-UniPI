@@ -1,16 +1,17 @@
 import React, { useState } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom'; // router components
+import { Routes, Route, Navigate, Outlet } from 'react-router-dom'; // router components
 import AuthForm from './AuthForm.jsx';
+import NavbarLayout from './NavbarLayout.jsx';
 import Home from './Home.jsx';
 
 //Component to protect the routes
-const ProtectedRoute = ({ isAuthenticated, children }) => {
+const ProtectedRoute = ({ isAuthenticated}) => {
     if (!isAuthenticated) {
         // if the user is not authenticated, redirect to /login
         return <Navigate to="/login" replace />;
     }
-    // otherwise shows children components
-    return children;
+    // otherwise shows teh content of nested route
+    return <Outlet />;
 };
 
 function App() {
@@ -30,10 +31,17 @@ function App() {
         setCurrentUser(null);
     }
 
+    // wrapper component to show layout and content
+    const NavbarWrapper = ({ children }) => (
+        <NavbarLayout onLogout={handleLogout}>
+            {children}
+        </NavbarLayout>
+    );
+
     return (
         // routing logic
         <Routes>
-            {/* Login/Registrazione route (Public) */} {/* if the path is login, if the login has success, change to home (/) with replace to avoid accidentally go back to log in, otherwise stay on log in page*/}
+            {/* Login/Registration route (Public) */} {/* if the path is login, if the login has success, change to home (/) with replace to avoid accidentally go back to log in, otherwise stay on log in page*/}
             <Route
                 path="/login"
                 element={
@@ -46,14 +54,16 @@ function App() {
             />
 
             {/* Protected route (Home page), accessible only after authentication */}
-            <Route
-                path="/"
-                element={
-                    <ProtectedRoute isAuthenticated={isAuthenticated}>
-                        <Home username={currentUser} onLogout={handleLogout} />
-                    </ProtectedRoute>
-                }
-            />
+            <Route element={<ProtectedRoute isAuthenticated={isAuthenticated} />}>
+
+                {/* Home Page */}
+                <Route path="/" element={<NavbarWrapper><Home username={currentUser} /></NavbarWrapper>} />
+
+                {/* Nuove Pagine (usano lo stesso layout) */}
+                { /*<Route path="/reservation" element={<NavbarWrapper>{/* <ReservationPage /> *//*}</NavbarWrapper>} /> */}
+                {/* <Route path="/configuration" element={<NavbarWrapper>{/* <ConfigurationPage /> *//*}</NavbarWrapper>} />*/}
+                {/* ... (ecc.) */}
+            </Route>
 
             {/* default route for not found path */}
             <Route path="*" element={<Navigate to="/" />} />

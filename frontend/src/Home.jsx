@@ -1,35 +1,128 @@
-import React from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { useNavigate, Link, useLocation } from 'react-router-dom';
 import './style/style.css';
 
-const Home = ({ username, onLogout }) => {
-    const navigate = useNavigate();
+const UserKeyManager = ({ initialUsername }) => {
+    const [currentKey, setCurrentKey] = useState('Loading...');
+    const [newKey, setNewKey] = useState('');
+    const [message, setMessage] = useState('');
+    const [loading, setLoading] = useState(true);
 
-    const handleLogout = () => {
-        onLogout(); // reset the status in App.jsx (isAuthenticated=false)
-        navigate('/login'); // redirect to the login page
+    // fetch user data on page load
+    useEffect(() => {
+        const fetchUserData = async () => {
+            try {
+                const response = await fetch('/api/user/show_user', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: initialUsername }),
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    setCurrentKey(data.ssh_key);
+                } else {
+                    setMessage(`Error: Failed to fetch user data.`);
+                    setCurrentKey('Key retrieval failed.');
+                }
+            } catch (error) {
+                setMessage('Connection error to server.');
+                setCurrentKey('Connection error.');
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        if (initialUsername) {
+            fetchUserData();
+        }
+    }, [initialUsername]);
+
+    // key substitution handler
+    const handleKeyUpdate = async (e) => {
+        e.preventDefault();
+        setMessage('');
+
+        if (newKey.length < 50 || newKey === currentKey) {
+            setMessage('Error: Key is too short or unchanged.');
+            return;
+        }
+
+        try {
+            const response = await fetch('/api/user/change_key', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: initialUsername, newSshKey: newKey }),
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                setMessage(`Success: ${data.message}`);
+                setCurrentKey(newKey);
+                setNewKey('');
+            } else {
+                setMessage(`Error: ${data.message || 'Failed to update key.'}`);
+            }
+        } catch (error) {
+            setMessage('Connection error to Flask server.');
+        }
     };
 
     return (
-        <div className="main-wrapper">
-            <nav className="navbar">
-                <img src="/NetExp.png" alt="NetExp Logo" className="navbar-logo"/>
-                <div className="navbar-menu">
-                    <button onClick={handleLogout} className="logout-button">
-                        Logout
-                    </button>
-                </div>
-            </nav>
-
-            <div className="container">
-                <div className="card">
-                    <h2 className="title">Testbed Reservation Panel 🗓️</h2>
-                    <p>
-                        Welcome to the main application area. This is where you will manage your experiments.
-                    </p>
-                    {/* Futura navigazione (Reservation, Configuration, Measurement) andrà qui. */}
-                </div>
+        <div className="card key-manager-card">
+            <div className="profile-header">
+                <img
+                    src="/userIcon.png"
+                    alt="User Profile Icon"
+                    className="profile-icon"
+                />
+                <h2 className="title">User Profile & SSH Key Management</h2>
             </div>
+
+            <p className="user-info"><strong>Username:</strong> {initialUsername}</p>
+
+            {loading ? (
+                <p>Loading key...</p>
+            ) : (
+                <>
+                    <h4>Current Public Key:</h4>
+                    <textarea
+                        value={currentKey}
+                        readOnly
+                        rows="4"
+                        className="input-field textarea-field current-key"
+                    />
+                </>
+            )}
+
+            <form onSubmit={handleKeyUpdate}>
+                <h4>Update SSH Key:</h4>
+                <textarea
+                    placeholder="Paste new SSH Public Key here..."
+                    value={newKey}
+                    onChange={(e) => setNewKey(e.target.value.trim())}    //remove spaces before and after
+                    rows="4"
+                    className="input-field textarea-field"
+                    required
+                />
+                <button type="submit" className="submit-button update-button">Change Key</button>
+            </form>
+
+            {message && (
+                <p className="status-message" style={{ color: message.startsWith('Error') ? 'red' : 'green', marginTop: '15px' }}>
+                    {message}
+                </p>
+            )}
+        </div>
+    );
+};
+
+const Home = ({ username, onLogout }) => {
+
+    return (
+        <div className="container home-content">
+            <UserKeyManager initialUsername={username} />
         </div>
     );
 };

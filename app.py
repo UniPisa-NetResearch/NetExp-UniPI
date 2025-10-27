@@ -41,6 +41,29 @@ class User(db.Model):
     def __repr__(self):
         return '<User %r>' % self.username
 
+def check_ssh_key(ssh_key):
+    # separate the key elements
+    key_parts = ssh_key.split()
+    # the kay has two or three parts (omission of comment)
+    if len(key_parts) < 2 or len(key_parts) > 3 or len(ssh_key) <50:
+        return jsonify({"message": "Invalid SSH Key format. Please ensure you copied the entire key."}), 400
+
+    # key type verification
+    key_type = key_parts[0]
+
+    if key_type not in SUPPORTED_KEY_TYPES:
+        return jsonify({"message": f"Unsupported SSH Key type: {key_type}. Supported types are: {', '.join(SUPPORTED_KEY_TYPES)}"}), 400
+
+    # key body verification
+    key_body_base64 = key_parts[1]
+    try:
+        # try to decode key body in Base64
+        base64.b64decode(key_body_base64)
+    except Exception as ex:
+        app.logger.error(f"Key decoding error: {ex}")
+        return jsonify({"message": "SSH Key body is corrupted or not valid Base64."}), 400
+
+    return None
 @app.route('/')
 def serve_frontend_proxy():
     # can be used for testing, it is not the route used by the browser to load React.
@@ -80,26 +103,9 @@ def signup():
     if User.query.filter_by(username=username).first():
         return jsonify({"message": "Username already exists"}), 409
 
-    # separate the key elements
-    key_parts = ssh_key.split()
-    # the kay has two or three parts (omission of comment)
-    if len(key_parts) < 2 or len(key_parts) > 3:
-        return jsonify({"message": "Invalid SSH Key format. Please ensure you copied the entire key."}), 400
-
-    # key type verification
-    key_type = key_parts[0]
-
-    if key_type not in SUPPORTED_KEY_TYPES:
-        return jsonify({"message": f"Unsupported SSH Key type: {key_type}. Supported types are: {', '.join(SUPPORTED_KEY_TYPES)}"}), 400
-
-    #key body verification
-    key_body_base64 = key_parts[1]
-    try:
-        # try to decode key body in Base64
-        base64.b64decode(key_body_base64)
-    except Exception as ex:
-        app.logger.error(f"Key decoding error: {ex}")
-        return jsonify({"message": "SSH Key body is corrupted or not valid Base64."}), 400
+    error = check_ssh_key(ssh_key)
+    if error:
+        return error
 
     # User creation
     new_user = User(username=username, ssh_key=ssh_key)
@@ -114,6 +120,57 @@ def signup():
         # DB error
         app.logger.error(f"DB Error during signup: {ex}")
         return jsonify({"message": "An internal error occurred during registration."}), 500
+
+@app.route('/api/user/show_user', methods=['POST'])
+def show_user():
+    # shows username and the public key of the user
+    data = request.get_json()
+    username = data.get('username')
+
+    if not username:
+        return jsonify({"message": "Username required"}), 400
+
+    user = User.query.filter_by(username=username).first()
+
+    if user:
+        return jsonify({
+            "username": user.username,
+            "ssh_key": user.ssh_key,
+            "message": "User data retrieved successfully"
+        }), 200
+    else:
+        return jsonify({"message": "User not found"}), 404
+
+
+@app.route('/api/user/change_key', methods=['POST'])
+def change_key():
+    # allows user to change the public key
+    data = request.get_json()
+    username = data.get('username')
+    new_ssh_key = data.get('newSshKey', '').strip()
+
+    if not username or not new_ssh_key:
+        return jsonify({"message": "Missing username or new SSH key"}), 400
+
+    error = check_ssh_key(new_ssh_key)
+
+    if error:
+        return error
+
+    # 2. Aggiornamento nel DB
+    user = User.query.filter_by(username=username).first()
+
+    if user:
+        user.ssh_key = new_ssh_key
+        try:
+            db.session.commit()
+            return jsonify({"message": "SSH Key updated successfully"}), 200
+        except Exception as ex:
+            db.session.rollback()
+            app.logger.error(f"DB Error during key change: {ex}")
+            return jsonify({"message": "An internal error occurred."}), 500
+    else:
+        return jsonify({"message": "User not found"}), 404
 
 if __name__ == '__main__':
     with app.app_context():
