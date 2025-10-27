@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate, Link, useLocation } from 'react-router-dom';
 import './style/style.css';
 
 const UserKeyManager = ({ initialUsername }) => {
@@ -118,7 +117,7 @@ const UserKeyManager = ({ initialUsername }) => {
     );
 };
 
-const Home = ({ username, onLogout }) => {
+const Home = ({ username}) => {
 
     return (
         <div className="container home-content">

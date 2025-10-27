@@ -3,6 +3,7 @@ import { Routes, Route, Navigate, Outlet } from 'react-router-dom'; // router co
 import AuthForm from './AuthForm.jsx';
 import NavbarLayout from './NavbarLayout.jsx';
 import Home from './Home.jsx';
+import Reservation from './Reservation.jsx';
 
 //Component to protect the routes
 const ProtectedRoute = ({ isAuthenticated}) => {
@@ -58,9 +59,8 @@ function App() {
 
                 {/* Home Page */}
                 <Route path="/" element={<NavbarWrapper><Home username={currentUser} /></NavbarWrapper>} />
-
+                <Route path="/reservation" element={<NavbarWrapper><Reservation username={currentUser} /> </NavbarWrapper>} />
                 {/* Nuove Pagine (usano lo stesso layout) */}
-                { /*<Route path="/reservation" element={<NavbarWrapper>{/* <ReservationPage /> *//*}</NavbarWrapper>} /> */}
                 {/* <Route path="/configuration" element={<NavbarWrapper>{/* <ConfigurationPage /> *//*}</NavbarWrapper>} />*/}
                 {/* ... (ecc.) */}
             </Route>

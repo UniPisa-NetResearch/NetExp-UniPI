@@ -3,8 +3,8 @@ import time
 
 # services list
 services = [
-    ("Auth", "python auth_service/app.py 5000"),
-    ("Orchestrator", "python orchestrator_service/app.py 5001"),
+    ("Authentication", "python authentication/app.py 5000"),
+    ("Orchestrator", "python orchestrator/orchestrator.py 5001"),
     ("Controller", "python controller_service/app.py 5002"),
 ]
 

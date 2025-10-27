@@ -58,7 +58,6 @@ const AuthForm = ({ onAuthSuccess }) => {
         <div className="main-wrapper"> {/* wrapper for navbar and container */}
             <nav className="navbar">
                 <img src="/NetExp.png" alt="NetExp Logo" className="navbar-logo"/>
-                {/* a new element of the navbar can be added here */}
             </nav>
             <div className="container">
                 <div className="card">

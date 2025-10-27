@@ -1,7 +1,6 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-from flask_sqlalchemy import SQLAlchemy
-from werkzeug.security import generate_password_hash, check_password_hash
+from ..database.db import db, User
 import base64
 app = Flask(__name__)
 
@@ -17,29 +16,12 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 # Aumenta timeout per connessioni lente in caso di avvio DB
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'connect_args': {'connect_timeout': 10}}
 
-db = SQLAlchemy(app)
+with app.app_context():
+    db.init_app(app)
 
 # enable CORS for development frontend, it is limited only for api endpoints
 # in this way, react app can call flask methods
 CORS(app, resources={r"/api/*": {"origins": "http://localhost:5173"}}) #address for local development
-
-# User table
-class User(db.Model):
-    # La tabella sarà creata automaticamente con il tipo di dati corretto da SQLAlchemy per PostgreSQL
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(80), unique=True, nullable=False)
-    password = db.Column(db.String(255), nullable=False)
-    ssh_key = db.Column(db.Text, nullable=False)  # Text è preferito per chiavi lunghe
-
-    # ... (metodi set_password, check_password e __repr__ rimangono invariati)
-    def set_password(self, plain_password):
-        self.password = generate_password_hash(plain_password)
-
-    def check_password(self, plain_password):
-        return check_password_hash(self.password, plain_password)
-
-    def __repr__(self):
-        return '<User %r>' % self.username
 
 def check_ssh_key(ssh_key):
     # separate the key elements
@@ -177,9 +159,9 @@ if __name__ == '__main__':
         # create tables on the DB, if they don't exist
         try:
             db.create_all()
-            print("PostgreSQL Database tables created/checked.")
+            print("PostgresSQL Database tables created/checked.")
         except Exception as e:
-            print(f"ERROR: Could not connect to PostgreSQL. Ensure the DB server is running and accessible: {e}")
+            print(f"ERROR: Could not connect to PostgresSQL. Ensure the DB server is running and accessible: {e}")
 
     # host 0.0.0.0 often necessary in virtual environments or containers.
     app.run(debug=True, host='0.0.0.0', port=5000)
