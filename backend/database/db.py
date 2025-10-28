@@ -18,3 +18,18 @@ class User(db.Model):
 
     def __repr__(self):
         return '<User %r>' % self.username
+
+# Reservation table
+class Reservation(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), nullable=False)
+    # startDate/endDate = "YYYY-MM-DD"  => length 10
+    # startTime/endTime = "HH:MM"       => length 5 (es. "08:00")
+    startDate = db.Column(db.Date, nullable=False)
+    endDate = db.Column(db.Date, nullable=False)
+    startTime = db.Column(db.Time, nullable=False)
+    endTime = db.Column(db.Time, nullable=False)
+
+
+    def __repr__(self):
+        return f'<Reservation id={self.id} user={self.username} start={self.start_date} {self.start_time} end={self.end_date} {self.end_time}>'

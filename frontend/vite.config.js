@@ -6,11 +6,16 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      '/api': {
+      '/api/auth': {
         target: 'http://localhost:5000',
-        changeOrigin: true, // virtual host
-        secure: false, // localhost
+        changeOrigin: true,
+        secure: false,
       },
+      '/api/orchestrator': {
+        target: 'http://localhost:5001',
+        changeOrigin: true,
+        secure: false,
+      }
     },
   },
 })

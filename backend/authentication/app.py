@@ -51,7 +51,7 @@ def serve_frontend_proxy():
     # can be used for testing, it is not the route used by the browser to load React.
     return 'Flask Backend Running. React is expected on port 5173.'
 
-@app.route('/api/login', methods=['POST'])
+@app.route('/api/auth/login', methods=['POST'])
 def login():
     data = request.get_json()
     username = data.get('username')
@@ -65,7 +65,7 @@ def login():
     else:
         return jsonify({"message": "Invalid username or password"}), 401
 
-@app.route('/api/signup', methods=['POST'])
+@app.route('/api/auth/signup', methods=['POST'])
 def signup():
     data = request.get_json()
     username = data.get('username')
@@ -103,7 +103,7 @@ def signup():
         app.logger.error(f"DB Error during signup: {ex}")
         return jsonify({"message": "An internal error occurred during registration."}), 500
 
-@app.route('/api/user/show_user', methods=['POST'])
+@app.route('/api/auth/user/show_user', methods=['POST'])
 def show_user():
     # shows username and the public key of the user
     data = request.get_json()
@@ -124,7 +124,7 @@ def show_user():
         return jsonify({"message": "User not found"}), 404
 
 
-@app.route('/api/user/change_key', methods=['POST'])
+@app.route('/api/auth/user/change_key', methods=['POST'])
 def change_key():
     # allows user to change the public key
     data = request.get_json()

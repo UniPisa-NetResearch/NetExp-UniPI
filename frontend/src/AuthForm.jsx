@@ -15,7 +15,7 @@ const AuthForm = ({ onAuthSuccess }) => {
         e.preventDefault();
         // if the user presses 'Login'
         setMessage(''); // reset previous message
-        const url = isLogin ? '/api/login' : '/api/signup';
+        const url = isLogin ? '/api/auth/login' : '/api/auth/signup';
 
         const payload = isLogin
             ? {username, password}

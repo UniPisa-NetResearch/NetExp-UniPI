@@ -11,7 +11,7 @@ const UserKeyManager = ({ initialUsername }) => {
     useEffect(() => {
         const fetchUserData = async () => {
             try {
-                const response = await fetch('/api/user/show_user', {
+                const response = await fetch('/api/auth/user/show_user', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ username: initialUsername }),
@@ -48,7 +48,7 @@ const UserKeyManager = ({ initialUsername }) => {
         }
 
         try {
-            const response = await fetch('/api/user/change_key', {
+            const response = await fetch('/api/auth/user/change_key', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ username: initialUsername, newSshKey: newKey }),
