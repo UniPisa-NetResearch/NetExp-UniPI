@@ -1,11 +1,18 @@
 import React, {useState, useEffect, useMemo} from 'react';
 import './style/style.css';
 
+// max allowed number of hours for the reservation
+const MAX_HOURS = 72;
+
+const formatLocalDate = (date) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0'); // getMonth() parte da 0
+  const d = String(date.getDate()).padStart(2, '0');      // getDate() -> giorno del mese
+  return `${y}-${m}-${d}`;
+};
+
 // get the correct current hour
 const getCurrentHour = () => new Date().getHours();
-
-// format date in YYYY-MM-DD
-const formatDate = (date) => date.toISOString().split('T')[0];
 
 // function that generates the hour booking options from 0 to 23
 const generateTimeOptions = () => {
@@ -16,28 +23,17 @@ const generateTimeOptions = () => {
 };
 const timeOptions = generateTimeOptions();
 
-const calculateEndTimeDetails = (startDate, startTime, endTime) => {
-    if (!startDate || !startTime || !endTime) return null;
+const calculateEndTimeDetails = (startDate, startTime, endDate, endTime) => {
+    if (!startDate || !startTime || !endDate || !endTime) return null;
 
     const startDateTime = new Date(`${startDate}T${startTime}:00`);
-    const startHour = parseInt(startTime.split(':')[0]);
-    const endHour = parseInt(endTime.split(':')[0]);
-    const endDateTime = new Date(startDateTime);
+    const endDateTime = new Date(`${endDate}T${endTime}:00`);
 
-    // set end hour
-    endDateTime.setHours(endHour, 0, 0, 0);
-
-    // end hour is <= start hour (20:00 -> 08:00)
-    // if endHour <= startHour, the reservation ends the next day
-    if(endHour <= startHour) {
-        endDateTime.setDate(endDateTime.getDate() + 1);
-    }
-
-    // Check max duration
+    // Check chronological order and max duration
     const durationMs = endDateTime.getTime() - startDateTime.getTime();
     const durationHours = durationMs / (1000 * 60 * 60);
 
-    if (durationHours <= 0 || durationHours > 24) {
+    if (durationHours <= 0 || durationHours > MAX_HOURS) {
         return { valid: false }; // Not valid
     }
 
@@ -51,6 +47,7 @@ const calculateEndTimeDetails = (startDate, startTime, endTime) => {
 const Reservation = ({ username }) => {
     const [startDate, setStartDate] = useState('');
     const [startTime, setStartTime] = useState('');
+    const [endDate, setEndDate] = useState('');
     const [endTime, setEndTime] = useState('');
     const [statusMessage, setStatusMessage] = useState('');
     const [isAvailable, setIsAvailable] = useState(null); // null, true, false
@@ -58,7 +55,7 @@ const Reservation = ({ username }) => {
     const [reservationData, setReservationData] = useState(null); // reserved devices
 
     // minimum allowed date (today)
-    const minDate = useMemo(() => formatDate(new Date()), []);
+    const minDate = useMemo(() => formatLocalDate(new Date()), []);
 
     // validation and button enabling
     const isCurrentDate = startDate === minDate;
@@ -78,19 +75,49 @@ const Reservation = ({ username }) => {
         });
     }, [startDate, isCurrentDate]);
 
+    // compute maxEndDateTime based on startDate+startTime
+    const maxEndInfo = useMemo(() => {
+        if (!startDate || !startTime) return null;
+        const startDt = new Date(`${startDate}T${startTime}:00`);
+        const maxEndDt = new Date(startDt.getTime() + MAX_HOURS * 3600 * 1000);
+        return {
+            startDt,
+            maxEndDt,
+            maxEndDateStr: formatLocalDate(maxEndDt),
+            maxEndHour: maxEndDt.getHours()
+        };
+    }, [startDate, startTime]);
+
+    // compute available end times depending on which endDate is selected
+    const availableEndTimes = useMemo(() => {
+        if (!endDate || !startDate || !startTime || !maxEndInfo) return [];
+
+        const startHour = parseInt(startTime.split(':')[0], 10);
+        const lastPossibleDate = maxEndInfo.maxEndDateStr;
+        const lastPossibleHour = maxEndInfo.maxEndHour;
+
+        if (endDate === startDate) {
+            // same day: hours from startHour + 1 ... 23
+            return timeOptions.filter(t => parseInt(t.split(':')[0], 10) >= (startHour + 1));
+        }
+
+        if (endDate !== lastPossibleDate) {
+            // intermediate day: all hours allowed (from 00 to 23)
+            return timeOptions.map(t => String(t));
+        }
+
+        // endDate is the last possible date: allow hours from 00 up to lastPossibleHour (inclusive only if minute 0)
+        return timeOptions.filter(t => parseInt(t.split(':')[0], 10) <= lastPossibleHour).map(t => String(t));
+    }, [endDate, startDate, startTime, maxEndInfo]);
+
     const finalDetails = useMemo(() => {
         // Ora viene usata per ogni cambio di data/ora
-        return calculateEndTimeDetails(startDate, startTime, endTime);
-    }, [startDate, startTime, endTime]);
+        return calculateEndTimeDetails(startDate, startTime, endDate, endTime);
+    }, [startDate, startTime, endDate, endTime]);
 
-    const formatLocalDate = (date) => {
-      const y = date.getFullYear();         // gets the year (ex 2025)
-      const m = String(date.getMonth() + 1).padStart(2, '0');  // +1 because getMonth() starts from 0, padStart(2, '0') transforms the number in string and add 0 if the number is between 1 and 9
-      const d = String(date.getDate()).padStart(2, '0');
-      return `${y}-${m}-${d}`;
-    };
+
     // check if all fields are selected
-    const isFormValid = startDate && startTime && endTime;
+    const isFormValid = startDate && startTime && endDate && endTime;
 
     const isButtonEnabled = isFormValid && finalDetails && finalDetails.valid && isAvailable === null;
 
@@ -101,9 +128,6 @@ const Reservation = ({ username }) => {
         setIsAvailable(null);
         setTimer(null);
         setReservationData(null);
-
-        //setEndDate(finalDetails.end.toISOString().slice(0, 10))
-        const endDate = formatLocalDate(finalDetails.end);
 
         // Simula i device prenotati
         const devices = ['testbed-1'];
@@ -117,7 +141,6 @@ const Reservation = ({ username }) => {
             devices: devices
         };
 
-
         try {
             const resp = await fetch('/api/orchestrator/checkReservation', {
                 method: 'POST',
@@ -127,20 +150,19 @@ const Reservation = ({ username }) => {
 
             const data = await resp.json().catch(() => ({}));
 
-
             if (resp.ok && data.ok) {
-                // prenotazione confermata
+                // reservation confirmed
                 setStatusMessage(`Testbed available! Reservation confirmed for ${payload.startDate} ${payload.startTime} - ${payload.endDate} ${payload.endTime}.`);
                 setIsAvailable(true);
                 setReservationData({ finalDetails, devices: payload.devices });
 
-                // start timer basato sul finalDetails.start
+                // start timer based on finalDetails.start
                 const reservationStartTime = finalDetails.start.getTime();
                 const now = new Date().getTime();
                 const initialDelay = reservationStartTime > now ? reservationStartTime - now : 0;
                 setTimer(Math.max(0, Math.ceil(initialDelay / 1000))); // in seconds
             } else {
-                // gestione errori e conflitti (409)
+                // errors e conflicts management (409)
                 if (resp.status === 409 && data && data.conflict) {
                     const c = data.conflict;
                     const conflictMsg = `Requested slot overlaps existing reservation (id=${c.id}) by ${c.username}: ${c.startDate} ${c.startTime} - ${c.endDate} ${c.endTime}`;
@@ -161,6 +183,22 @@ const Reservation = ({ username }) => {
         }
     };
 
+    // reset dependent fields when startDate/startTime changes
+    useEffect(() => {
+        setEndDate('');
+        setEndTime('');
+        setIsAvailable(null);
+        setStatusMessage('');
+        setTimer(null);
+    }, [startDate, startTime]);
+
+    // if endDate changes, reset endTime and messages
+    useEffect(() => {
+        setEndTime('');
+        setIsAvailable(null);
+        setStatusMessage('');
+        setTimer(null);
+    }, [endDate]);
 
     useEffect(() => {
         if (timer === null || timer <= 0) return;
@@ -188,6 +226,10 @@ const Reservation = ({ username }) => {
         return `${h}:${m}:${s}`;
     };
 
+    // min/max values for input endDate
+  const endMin = startDate || '';
+  const endMax = maxEndInfo ? maxEndInfo.maxEndDateStr : '';
+
     return (
         <div className="container home-content">
             <div className="card reservation-card">
@@ -195,7 +237,7 @@ const Reservation = ({ username }) => {
 
                 {/* date selection */}
                 <div className="input-group">
-                    <label htmlFor="date-picker">Select Date:</label>
+                    <label htmlFor="date-picker">Select Start Date:</label>
                     <input
                         type="date"
                         id="date-picker"
@@ -205,10 +247,6 @@ const Reservation = ({ username }) => {
                         onChange={(e) => {
                             setStartDate(e.target.value);
                             setStartTime('');
-                            setEndTime('');
-                            setIsAvailable(null);
-                            setStatusMessage('');
-                            setTimer(null);
                         }}
                     />
                 </div>
@@ -222,10 +260,6 @@ const Reservation = ({ username }) => {
                         value={startTime}
                         onChange={(e) => {
                             setStartTime(e.target.value);
-                            setEndTime('');
-                            setIsAvailable(null);
-                            setStatusMessage('');
-                            setTimer(null);
                         }}
                         disabled={!startDate}
                     >
@@ -239,6 +273,25 @@ const Reservation = ({ username }) => {
                     )}
                 </div>
 
+                {/* end date selection */}
+                <div className="input-group">
+                    <label htmlFor="end-date">Select End Date:</label>
+                    <input
+                        type="date"
+                        id="end-date"
+                        className="input-field"
+                        value={endDate}
+                        min={endMin}
+                        max={endMax}
+                        onChange={(e) => setEndDate(e.target.value)}
+                        disabled={!startDate || !startTime}
+                    />
+                    {endDate && (
+                        <small>Max reservation duration: {MAX_HOURS} hours</small>
+
+                    )}
+                </div>
+
                 {/* end hour selection */}
                 <div className="input-group">
                     <label htmlFor="end-time">End Time:</label>
@@ -248,19 +301,16 @@ const Reservation = ({ username }) => {
                         value={endTime}
                         onChange={(e) => {
                             setEndTime(e.target.value);
-                            setIsAvailable(null);
-                            setStatusMessage('');
-                            setTimer(null);
                         }}
-                        disabled={!startTime}
+                        disabled={!endDate}
                     >
                         <option value="">-- Select End Time --</option>
-                        {timeOptions.map(time => (
-                            <option key={time} value={time}>{time}</option>
+                        {availableEndTimes.map(time => (
+                            <option key={String(time)} value={String(time)}>{time}</option>
                         ))}
                     </select>
                     {isFormValid && finalDetails && !finalDetails.valid && (
-                        <p className="error-text">Reservation duration must be between 1 and 24 hours.</p>
+                        <p className="error-text">Reservation duration must be between 1 and {MAX_HOURS} hours.</p>
                     )}
                 </div>
 

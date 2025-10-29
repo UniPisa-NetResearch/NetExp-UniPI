@@ -11,6 +11,8 @@ DB_PASSWORD = 'root'
 DB_HOST = 'localhost'
 DB_NAME = 'netexp_db'
 
+MAX_HOURS = 72
+
 app.config['SQLALCHEMY_DATABASE_URI'] = f'postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:5432/{DB_NAME}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'connect_args': {'connect_timeout': 10}}
@@ -52,10 +54,10 @@ def check_reservation():
     except ValueError:
         return jsonify({"ok": False, "message": "Invalid date/time format"}), 400
 
-    # valid durations: >0 e <= 24h
+    # valid durations: >0 e <= MAX_HOURS
     delta_seconds = (end_dt - start_dt).total_seconds()
-    if delta_seconds <= 0 or delta_seconds > 24 * 3600:
-        return jsonify({"ok": False, "message": "Invalid duration (must be >0 and <=24h)"}), 400
+    if delta_seconds <= 0 or delta_seconds > MAX_HOURS * 3600:
+        return jsonify({"ok": False, "message": f"Invalid duration (must be >0 and <={MAX_HOURS}h)"}), 400
 
     now = datetime.now()
 
