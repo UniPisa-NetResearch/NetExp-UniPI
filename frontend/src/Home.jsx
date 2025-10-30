@@ -109,7 +109,7 @@ const UserKeyManager = ({ initialUsername }) => {
             </form>
 
             {message && (
-                <p className="status-message" style={{ color: message.startsWith('Error') ? 'red' : 'green', marginTop: '15px' }}>
+                <p style={{ color: message.startsWith('Error') ? 'red' : 'green', marginTop: '15px' }}>
                     {message}
                 </p>
             )}

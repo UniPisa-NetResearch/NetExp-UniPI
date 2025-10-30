@@ -262,20 +262,119 @@ body {
 }
 /* ------------------------------------------------------------------------------------------------------*/
 /* -----------------------  Reservation style -----------------------------------------------------------*/
-
-.card.reservation-card {
-    max-width: 600px; /* Allarga la card per il calendario */
-    padding: 30px;
+.home-content-wrapper {
+    display: flex;
+    gap: 20px;
+    padding: 20px;
+    max-width: 1200px;
+    margin: 0 auto;
+    width: 100%;
 }
 
-.reservation-card .title {
-    margin-bottom: 30px;
-    font-size: 1.8em;
+.card .title {
+    margin-bottom: 24px;
+    font-size: 1.6em;
+    font-weight: 700;
 }
 
 .input-group {
     margin-bottom: 20px;
     text-align: left;
+}
+
+.side-by-side-container {
+    width: 50%;
+    padding: 30px 40px;
+    box-sizing: border-box;
+}
+
+#reservations-card-scrolling {
+    max-height: 500px;
+    overflow-y: auto;
+    padding-right: 10px;
+}
+
+#user-reservations-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.reservation-item {
+    margin-bottom: 15px;
+    padding: 10px;
+    border: 1px solid #eee;
+    border-radius: 4px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    transition: background-color 0.3s;
+}
+
+.reservation-item.expired {
+    background-color: #f1f1f1;
+    opacity: 0.8;
+}
+
+.reservation-info {
+    flex-grow: 1;
+    text-align: left;
+    font-size: 0.90em;
+    font-weight: 500;
+    line-height: 1.25;
+}
+
+.reservation-info .date-line {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.reservation-info .date,
+.reservation-info .time {
+    display: inline-block;
+    white-space: nowrap;
+}
+
+.reservation-info .date-line + .date-line {
+    margin-top: 4px;
+}
+
+.delete-button {
+    padding: 8px 12px;
+    cursor: pointer;
+    background-color: #dc3545;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    font-size: 0.9em;
+    flex-shrink: 0;
+}
+
+.delete-button:hover:not(:disabled) {
+    background-color: #a71d2a;
+}
+
+.delete-button:disabled {
+    background-color: #e3afb0;
+    cursor: not-allowed;
+}
+
+.timer-display-list {
+    font-weight: 700;
+    color: var(--primary-blue);
+    min-width: 95px;
+    text-align: right;
+    font-size: 1em;
+    flex-shrink: 0;
+}
+
+.container.home-content {
+
+    justify-content: flex-start;
+    padding-top: 50px;
 }
 
 .input-group label {
@@ -332,8 +431,10 @@ body {
     font-size: 0.9em;
     margin-top: 5px;
 }
-
-.input-field {
+.input-field[type="date"] {
+  cursor: pointer;
+}
+select {
   cursor: pointer;
 }
 .input-field[type="date"]::-webkit-calendar-picker-indicator {

@@ -2,8 +2,7 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 from ..database.db import db, Reservation
 from datetime import datetime
-from sqlalchemy import tuple_, and_
-
+from sqlalchemy import tuple_, and_, text
 app = Flask(__name__)
 
 DB_USER = 'root'
@@ -21,6 +20,19 @@ db.init_app(app)
 
 # enable CORS for development frontend
 CORS(app, resources={r"/api/*": {"origins": "http://localhost:5173"}}) #address for local development
+
+
+def serialize_reservation(reservation):
+
+    start_dt = datetime.combine(reservation.startDate, reservation.startTime)
+    end_dt = datetime.combine(reservation.endDate, reservation.endTime)
+
+    return {
+        'id': reservation.id,
+        #  ISO format 2025-10-30T10:00:00
+        'startDate': start_dt.isoformat(),
+        'endDate': end_dt.isoformat(),
+    }
 
 @app.route('/api/orchestrator/checkReservation', methods=['POST'])
 def check_reservation():
@@ -123,6 +135,69 @@ def check_reservation():
         # DB error
         app.logger.error(f"DB Error on adding registration: {ex}")
         return jsonify({"message": "An internal error occurred during registration."}), 500
+
+@app.route('/api/orchestrator/userResList', methods=['POST'])
+def user_reservation_list():
+    data = request.get_json()
+    current_username = data.get('username')
+
+    try:
+        reservations = Reservation.query.filter_by(username=current_username).all()
+
+        # order by start date/hour asc
+        reservations.sort(key=lambda r: datetime.combine(r.startDate, r.startTime))
+
+        return jsonify([serialize_reservation(res) for res in reservations])
+    except Exception as e:
+        app.logger.error(f"Error fetching user reservations: {e}")
+        return jsonify({"message": "Error fetching reservations"}), 500
+
+
+@app.route('/api/orchestrator/deleteReservation', methods=['POST'])
+def delete_reservation():
+    data = request.get_json()
+    reservation_id = data.get('reservationId')
+
+    if not reservation_id:
+        return jsonify({"message": "Missing reservationId"}), 400
+
+    try:
+        reservation_to_delete = Reservation.query.get(reservation_id)
+
+        if not reservation_to_delete:
+            return jsonify({"message": "Reservation not found"}), 404
+
+        reservation_start_dt = datetime.combine(
+            reservation_to_delete.startDate,
+            reservation_to_delete.startTime
+        )
+        current_dt = datetime.now()
+        if current_dt >= reservation_start_dt:
+            return jsonify({
+                "message": "Cannot delete: reservation is already in progress or has finished."
+            }), 403  # HTTP 403 Forbidden
+
+        db.session.delete(reservation_to_delete)
+        db.session.commit()
+
+        # reset sequence so the next inserted id is coherent
+        reset_sql = text("""
+                    SELECT setval(
+                        pg_get_serial_sequence('reservation', 'id'),
+                        COALESCE((SELECT MAX(id) FROM reservation), 0),
+                        true
+                    );
+                """)
+        db.session.execute(reset_sql)
+        db.session.commit()
+        return jsonify({"message": "Reservation deleted successfully"}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"Error deleting reservation {reservation_id}: {e}")
+        return jsonify({"message": "Internal server error"}), 500
+
+
 
 if __name__ == '__main__':
 

@@ -1,343 +1,355 @@
-import React, {useState, useEffect, useMemo} from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import './style/style.css';
 
 // max allowed number of hours for the reservation
 const MAX_HOURS = 72;
 
 const formatLocalDate = (date) => {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0'); // getMonth() parte da 0
-  const d = String(date.getDate()).padStart(2, '0');      // getDate() -> giorno del mese
+  const dObj = typeof date === 'string' ? new Date(date) : date;
+  const y = dObj.getFullYear();
+  const m = String(dObj.getMonth() + 1).padStart(2, '0');
+  const d = String(dObj.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
 };
-
-// get the correct current hour
-const getCurrentHour = () => new Date().getHours();
-
-// function that generates the hour booking options from 0 to 23
-const generateTimeOptions = () => {
-    return Array.from({ length: 24 }, (_, i) => {
-        const hour = i.toString().padStart(2, '0'); //add 0 if the hour is one digit
-        return `${hour}:00`;
-    });
+const formatLocalTime = (date) => {
+  const dObj = typeof date === 'string' ? new Date(date) : date;
+  const h = String(dObj.getHours()).padStart(2, '0');
+  const min = String(dObj.getMinutes()).padStart(2, '0');
+  return `${h}:${min}`;
 };
+const formatDuration = (ms) => {
+  if (ms <= 0) return '--:--';
+  const totalSeconds = Math.floor(ms / 1000);
+  const h = String(Math.floor(totalSeconds / 3600)).padStart(2, '0');
+  const m = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, '0');
+  const s = String(totalSeconds % 60).padStart(2, '0');
+  return `${h}:${m}:${s}`;
+};
+
+const getCurrentHour = () => new Date().getHours();
+const generateTimeOptions = () => Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}:00`);
 const timeOptions = generateTimeOptions();
 
 const calculateEndTimeDetails = (startDate, startTime, endDate, endTime) => {
-    if (!startDate || !startTime || !endDate || !endTime) return null;
-
-    const startDateTime = new Date(`${startDate}T${startTime}:00`);
-    const endDateTime = new Date(`${endDate}T${endTime}:00`);
-
-    // Check chronological order and max duration
-    const durationMs = endDateTime.getTime() - startDateTime.getTime();
-    const durationHours = durationMs / (1000 * 60 * 60);
-
-    if (durationHours <= 0 || durationHours > MAX_HOURS) {
-        return { valid: false }; // Not valid
-    }
-
-    return {
-        valid: true,
-        start: startDateTime,
-        end: endDateTime,
-    };
+  if (!startDate || !startTime || !endDate || !endTime) return null;
+  const startDateTime = new Date(`${startDate}T${startTime}:00`);
+  const endDateTime = new Date(`${endDate}T${endTime}:00`);
+  const durationMs = endDateTime.getTime() - startDateTime.getTime();
+  const durationHours = durationMs / (1000 * 60 * 60);
+  if (durationHours <= 0 || durationHours > MAX_HOURS) return { valid: false };
+  return { valid: true, start: startDateTime, end: endDateTime };
 };
 
-const Reservation = ({ username }) => {
-    const [startDate, setStartDate] = useState('');
-    const [startTime, setStartTime] = useState('');
-    const [endDate, setEndDate] = useState('');
-    const [endTime, setEndTime] = useState('');
-    const [statusMessage, setStatusMessage] = useState('');
-    const [isAvailable, setIsAvailable] = useState(null); // null, true, false
-    const [timer, setTimer] = useState(null);
-    const [reservationData, setReservationData] = useState(null); // reserved devices
+export default function Reservation({ username }) {
+  // form state
+  const [startDate, setStartDate] = useState('');
+  const [startTime, setStartTime] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [endTime, setEndTime] = useState('');
 
-    // minimum allowed date (today)
-    const minDate = useMemo(() => formatLocalDate(new Date()), []);
+  // app state
+  const [statusMessage, setStatusMessage] = useState('');
+  const [isAvailable, setIsAvailable] = useState(null);
+  const [timer, setTimer] = useState(null); // seconds to next starting reservation (same behavior as before)
 
-    // validation and button enabling
-    const isCurrentDate = startDate === minDate;
-    const currentHour = getCurrentHour();
+  // reservations stored in state (replaces direct DOM manipulation)
+  const [reservations, setReservations] = useState([]);
 
-    // only hours (without minutes) >= current hour  (if same day)
-    const availableStartTimes = useMemo(() => {
-        if (!startDate) return timeOptions;
+  // a "clock" state used to update countdowns every second
+  const [now, setNow] = useState(Date.now());
 
-        const currentHour = getCurrentHour();
+  // minimum allowed date (today)
+  const minDate = useMemo(() => formatLocalDate(new Date()), []);
 
-        return timeOptions.filter(time => {
-            const hour = parseInt(time.split(':')[0]);
-            // if the selected day is today, start hour must be >= current hour + 1
-            // if the selected day is not today, every hour is available
-            return isCurrentDate ? hour > currentHour : true;
-        });
-    }, [startDate, isCurrentDate]);
+  const isCurrentDate = startDate === minDate;
+  const currentHour = getCurrentHour();
 
-    // compute maxEndDateTime based on startDate+startTime
-    const maxEndInfo = useMemo(() => {
-        if (!startDate || !startTime) return null;
-        const startDt = new Date(`${startDate}T${startTime}:00`);
-        const maxEndDt = new Date(startDt.getTime() + MAX_HOURS * 3600 * 1000);
-        return {
-            startDt,
-            maxEndDt,
-            maxEndDateStr: formatLocalDate(maxEndDt),
-            maxEndHour: maxEndDt.getHours()
-        };
-    }, [startDate, startTime]);
+  const availableStartTimes = useMemo(() => {
+    if (!startDate) return timeOptions;
+    const currentHourNow = getCurrentHour();
+    return timeOptions.filter(time => {
+      const hour = parseInt(time.split(':')[0], 10);
+      return isCurrentDate ? hour > currentHourNow : true;
+    });
+  }, [startDate, isCurrentDate]);
 
-    // compute available end times depending on which endDate is selected
-    const availableEndTimes = useMemo(() => {
-        if (!endDate || !startDate || !startTime || !maxEndInfo) return [];
-
-        const startHour = parseInt(startTime.split(':')[0], 10);
-        const lastPossibleDate = maxEndInfo.maxEndDateStr;
-        const lastPossibleHour = maxEndInfo.maxEndHour;
-
-        if (endDate === startDate) {
-            // same day: hours from startHour + 1 ... 23
-            return timeOptions.filter(t => parseInt(t.split(':')[0], 10) >= (startHour + 1));
-        }
-
-        if (endDate !== lastPossibleDate) {
-            // intermediate day: all hours allowed (from 00 to 23)
-            return timeOptions.map(t => String(t));
-        }
-
-        // endDate is the last possible date: allow hours from 00 up to lastPossibleHour (inclusive only if minute 0)
-        return timeOptions.filter(t => parseInt(t.split(':')[0], 10) <= lastPossibleHour).map(t => String(t));
-    }, [endDate, startDate, startTime, maxEndInfo]);
-
-    const finalDetails = useMemo(() => {
-        // Ora viene usata per ogni cambio di data/ora
-        return calculateEndTimeDetails(startDate, startTime, endDate, endTime);
-    }, [startDate, startTime, endDate, endTime]);
-
-
-    // check if all fields are selected
-    const isFormValid = startDate && startTime && endDate && endTime;
-
-    const isButtonEnabled = isFormValid && finalDetails && finalDetails.valid && isAvailable === null;
-
-    const handleCheckReservation = async () => {
-        if (!isButtonEnabled || !finalDetails || !finalDetails.valid) return;
-
-        setStatusMessage("Checking availability...");
-        setIsAvailable(null);
-        setTimer(null);
-        setReservationData(null);
-
-        // Simula i device prenotati
-        const devices = ['testbed-1'];
-
-        const payload = {
-            username: username,
-            startDate: startDate,
-            startTime: startTime,
-            endDate: endDate,
-            endTime: endTime,
-            devices: devices
-        };
-
-        try {
-            const resp = await fetch('/api/orchestrator/checkReservation', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-
-            const data = await resp.json().catch(() => ({}));
-
-            if (resp.ok && data.ok) {
-                // reservation confirmed
-                setStatusMessage(`Testbed available! Reservation confirmed for ${payload.startDate} ${payload.startTime} - ${payload.endDate} ${payload.endTime}.`);
-                setIsAvailable(true);
-                setReservationData({ finalDetails, devices: payload.devices });
-
-                // start timer based on finalDetails.start
-                const reservationStartTime = finalDetails.start.getTime();
-                const now = new Date().getTime();
-                const initialDelay = reservationStartTime > now ? reservationStartTime - now : 0;
-                setTimer(Math.max(0, Math.ceil(initialDelay / 1000))); // in seconds
-            } else {
-                // errors e conflicts management (409)
-                if (resp.status === 409 && data && data.conflict) {
-                    const c = data.conflict;
-                    const conflictMsg = `Requested slot overlaps existing reservation (id=${c.id}) by ${c.username}: ${c.startDate} ${c.startTime} - ${c.endDate} ${c.endTime}`;
-                    setStatusMessage(conflictMsg);
-                } else if (data && data.message) {
-                    setStatusMessage(data.message);
-                } else {
-                    setStatusMessage('Reservation failed (server error)');
-                }
-                setIsAvailable(false);
-                setTimer(null);
-            }
-        } catch (err) {
-            console.error('Network error', err);
-            setStatusMessage('Network error while checking reservation');
-            setIsAvailable(false);
-            setTimer(null);
-        }
+  const maxEndInfo = useMemo(() => {
+    if (!startDate || !startTime) return null;
+    const startDt = new Date(`${startDate}T${startTime}:00`);
+    const maxEndDt = new Date(startDt.getTime() + MAX_HOURS * 3600 * 1000);
+    return {
+      startDt,
+      maxEndDt,
+      maxEndDateStr: formatLocalDate(maxEndDt),
+      maxEndHour: maxEndDt.getHours()
     };
+  }, [startDate, startTime]);
 
-    // reset dependent fields when startDate/startTime changes
-    useEffect(() => {
-        setEndDate('');
-        setEndTime('');
-        setIsAvailable(null);
-        setStatusMessage('');
+  const availableEndTimes = useMemo(() => {
+    if (!endDate || !startDate || !startTime || !maxEndInfo) return [];
+    const startHour = parseInt(startTime.split(':')[0], 10);
+    const lastPossibleDate = maxEndInfo.maxEndDateStr;
+    const lastPossibleHour = maxEndInfo.maxEndHour;
+
+    if (endDate === startDate) {
+      return timeOptions.filter(t => parseInt(t.split(':')[0], 10) >= (startHour + 1));
+    }
+
+    if (endDate !== lastPossibleDate) {
+      return timeOptions.map(t => String(t));
+    }
+
+    return timeOptions.filter(t => parseInt(t.split(':')[0], 10) <= lastPossibleHour).map(t => String(t));
+  }, [endDate, startDate, startTime, maxEndInfo]);
+
+  const finalDetails = useMemo(() => calculateEndTimeDetails(startDate, startTime, endDate, endTime), [startDate, startTime, endDate, endTime]);
+
+  // keep a ticking clock to update every reservation countdown without creating many intervals
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // fetch reservations from server and set state
+  const fetchUserReservations = async () => {
+    try {
+      const payload = { username };
+      const resp = await fetch('/api/orchestrator/userResList', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await resp.json().catch(() => ({}));
+
+      if (resp.ok) {
+        // server might return either an array or { ok: true, reservations: [...] }
+        const arr = Array.isArray(data) ? data : [];
+
+        // sort by startDate asc
+        arr.sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime());
+        setReservations(arr);
+      } else {
+        console.error('Error fetching reservations', resp.status);
+        setReservations([]);
+      }
+    } catch (err) {
+      console.error('Network error fetching reservations', err);
+      setReservations([]);
+    }
+  };
+
+  useEffect(() => {
+    fetchUserReservations();
+  }, []);
+
+  const deleteReservation = async (reservationId) => {
+    try {
+      // disable optimistic duplicate clicks by local filter immediately (optimistic removal)
+      setReservations(prev => prev.map(r => r.id === reservationId ? ({ ...r, deleting: true }) : r));
+
+      const resp = await fetch('/api/orchestrator/deleteReservation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reservationId })
+      });
+
+      if (resp.ok) {
+        setReservations(prev => prev.filter(r => r.id !== reservationId));
+      } else {
+        const txt = await resp.text().catch(() => 'Server error');
+        window.alert(`Error deleting reservation: ${resp.status} - ${txt}`);
+        // rollback "deleting" flag
+        setReservations(prev => prev.map(r => r.id === reservationId ? ({ ...r, deleting: false }) : r));
+      }
+    } catch (err) {
+      window.alert('Impossible to delete reservation: ' + err.message);
+      setReservations(prev => prev.map(r => r.id === reservationId ? ({ ...r, deleting: false }) : r));
+    }
+  };
+
+  // pressing "Check Availability & Reserve"
+  const handleCheckReservation = async () => {
+    if (!finalDetails || !finalDetails.valid) return;
+    setStatusMessage('Checking availability...');
+    setIsAvailable(null);
+    setTimer(null);
+
+    const devices = ['testbed-1'];
+    const payload = { username, startDate, startTime, endDate, endTime, devices };
+
+    try {
+      const resp = await fetch('/api/orchestrator/checkReservation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await resp.json().catch(() => ({}));
+
+      if (resp.ok && data.ok) {
+        setStatusMessage(`Testbed available! Reservation confirmed for ${payload.startDate} ${payload.startTime} - ${payload.endDate} ${payload.endTime}.`);
+        setIsAvailable(true);
+        // set reservationData-like logic (to keep previous UX of starting timer)
+        const startMs = finalDetails.start.getTime();
+        const secondsToStart = Math.max(0, Math.floor((startMs - Date.now()) / 1000));
+        if (secondsToStart > 0) setTimer(secondsToStart);
+
+        // refresh authoritative list from server (recommended)
+        // this avoids DOM-manipulation complexity and keeps state consistent
+        await fetchUserReservations();
+      } else {
+        if (resp.status === 409 && data && data.conflict) {
+          const c = data.conflict;
+          const conflictMsg = `Requested slot overlaps existing reservation (id=${c.id}) by ${c.username}: ${c.startDate} ${c.startTime} - ${c.endDate} ${c.endTime}`;
+          setStatusMessage(conflictMsg);
+        } else if (data && data.message) {
+          setStatusMessage(data.message);
+        } else {
+          setStatusMessage('Reservation failed (server error)');
+        }
+        setIsAvailable(false);
         setTimer(null);
-    }, [startDate, startTime]);
+      }
+    } catch (err) {
+      console.error('Network error', err);
+      setStatusMessage('Network error while checking reservation');
+      setIsAvailable(false);
+      setTimer(null);
+    }
+  };
 
-    // if endDate changes, reset endTime and messages
-    useEffect(() => {
-        setEndTime('');
-        setIsAvailable(null);
-        setStatusMessage('');
-        setTimer(null);
-    }, [endDate]);
+  // countdown effect (for the smaller "timer" used after creating a reservation)
+  useEffect(() => {
+    if (timer === null || timer <= 0) return;
+    const id = setInterval(() => {
+      setTimer(prev => {
+        if (!prev || prev <= 1) {
+          clearInterval(id);
+          setStatusMessage('Reservation for Testbed has started! You can now proceed to the Configuration phase.');
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(id);
+  }, [timer]);
 
-    useEffect(() => {
-        if (timer === null || timer <= 0) return;
+  // reset dependent fields when startDate/startTime changes
+  useEffect(() => {
+    setEndDate('');
+    setEndTime('');
+    setIsAvailable(null);
+    setStatusMessage('');
+    setTimer(null);
+  }, [startDate, startTime]);
 
-        const intervalId = setInterval(() => {
-            setTimer(prevTimer => {
-                if (prevTimer <= 1) {
-                    clearInterval(intervalId);
-                    setStatusMessage(`Reservation for Testbed has started! You can now proceed to the Configuration phase.`);
-                    return 0;
-                }
-                return prevTimer - 1;
-            });
-        }, 1000);
+  // if endDate changes, reset endTime and messages
+  useEffect(() => {
+    setEndTime('');
+    setIsAvailable(null);
+    setStatusMessage('');
+    setTimer(null);
+  }, [endDate]);
 
-        return () => clearInterval(intervalId);
-    }, [timer]);
+  const isFormValid = startDate && startTime && endDate && endTime;
+  const isButtonEnabled = isFormValid && finalDetails && finalDetails.valid && isAvailable === null;
 
-
-    // format timer (h:m:s)
-    const formatTime = (seconds) => {
-        const h = String(Math.floor(seconds / 3600)).padStart(2, '0');
-        const m = String(Math.floor((seconds % 3600) / 60)).padStart(2, '0');
-        const s = String(seconds % 60).padStart(2, '0');
-        return `${h}:${m}:${s}`;
-    };
-
-    // min/max values for input endDate
+  // min/max values for input endDate
   const endMin = startDate || '';
   const endMax = maxEndInfo ? maxEndInfo.maxEndDateStr : '';
 
-    return (
-        <div className="container home-content">
-            <div className="card reservation-card">
-                <h2 className="title">📅 Reserve the Testbed</h2>
+  return (
+    <div className="home-content-wrapper">
+      <div className="card reservation-card side-by-side-container">
+        <h2 className="title">📅 Reserve the Testbed</h2>
 
-                {/* date selection */}
-                <div className="input-group">
-                    <label htmlFor="date-picker">Select Start Date:</label>
-                    <input
-                        type="date"
-                        id="date-picker"
-                        className="input-field"
-                        value={startDate}
-                        min={minDate}
-                        onChange={(e) => {
-                            setStartDate(e.target.value);
-                            setStartTime('');
-                        }}
-                    />
-                </div>
-
-                {/* start hour selection */}
-                <div className="input-group">
-                    <label htmlFor="start-time">Start Time:</label>
-                    <select
-                        id="start-time"
-                        className="input-field"
-                        value={startTime}
-                        onChange={(e) => {
-                            setStartTime(e.target.value);
-                        }}
-                        disabled={!startDate}
-                    >
-                        <option value="">-- Select Start Time --</option>
-                        {availableStartTimes.map(time => (
-                            <option key={time} value={time}>{time}</option>
-                        ))}
-                    </select>
-                    {isCurrentDate && startTime && parseInt(startTime.split(':')[0]) <= currentHour && (
-                        <p className="error-text">Start time must be later than the current hour ({currentHour.toString().padStart(2, '0')}:00).</p>
-                    )}
-                </div>
-
-                {/* end date selection */}
-                <div className="input-group">
-                    <label htmlFor="end-date">Select End Date:</label>
-                    <input
-                        type="date"
-                        id="end-date"
-                        className="input-field"
-                        value={endDate}
-                        min={endMin}
-                        max={endMax}
-                        onChange={(e) => setEndDate(e.target.value)}
-                        disabled={!startDate || !startTime}
-                    />
-                    {endDate && (
-                        <small>Max reservation duration: {MAX_HOURS} hours</small>
-
-                    )}
-                </div>
-
-                {/* end hour selection */}
-                <div className="input-group">
-                    <label htmlFor="end-time">End Time:</label>
-                    <select
-                        id="end-time"
-                        className="input-field"
-                        value={endTime}
-                        onChange={(e) => {
-                            setEndTime(e.target.value);
-                        }}
-                        disabled={!endDate}
-                    >
-                        <option value="">-- Select End Time --</option>
-                        {availableEndTimes.map(time => (
-                            <option key={String(time)} value={String(time)}>{time}</option>
-                        ))}
-                    </select>
-                    {isFormValid && finalDetails && !finalDetails.valid && (
-                        <p className="error-text">Reservation duration must be between 1 and {MAX_HOURS} hours.</p>
-                    )}
-                </div>
-
-                {/* submit button */}
-                <button
-                    className="submit-button reservation-button"
-                    onClick={handleCheckReservation}
-                    disabled={!isButtonEnabled}
-                >
-                    Check Availability & Reserve
-                </button>
-
-                {/* timer and messages */}
-                {statusMessage && (
-                    <div className={`status-message ${isAvailable === true ? 'success' : isAvailable === false ? 'error' : 'pending'}`}>
-                        <p>{statusMessage}</p>
-
-                        {timer !== null && isAvailable === true && (
-                            <div className="timer-display">
-                                Time remaining until start: **{formatTime(timer)}**
-                            </div>
-                        )}
-                    </div>
-                )}
-            </div>
+        <div className="input-group">
+          <label htmlFor="date-picker">Select Start Date:</label>
+          <input type="date" id="date-picker" className="input-field" value={startDate} min={minDate}
+                 onChange={(e) => { setStartDate(e.target.value); setStartTime(''); }} />
         </div>
-    );
-};
 
-export default Reservation;
+        <div className="input-group">
+          <label htmlFor="start-time">Start Time:</label>
+          <select id="start-time" className="input-field" value={startTime}
+                  onChange={(e) => setStartTime(e.target.value)} disabled={!startDate}>
+            <option value="">-- Select Start Time --</option>
+            {availableStartTimes.map(time => <option key={time} value={time}>{time}</option>)}
+          </select>
+          {isCurrentDate && startTime && parseInt(startTime.split(':')[0]) <= currentHour && (
+            <p className="error-text">Start time must be later than the current hour ({currentHour.toString().padStart(2, '0')}:00).</p>
+          )}
+        </div>
+
+        <div className="input-group">
+          <label htmlFor="end-date">Select End Date:</label>
+          <input type="date" id="end-date" className="input-field" value={endDate} min={endMin} max={endMax}
+                 onChange={(e) => setEndDate(e.target.value)} disabled={!startDate || !startTime} />
+          {endDate && (<small>Max reservation duration: {MAX_HOURS} hours</small>)}
+        </div>
+
+        <div className="input-group">
+          <label htmlFor="end-time">End Time:</label>
+          <select id="end-time" className="input-field" value={endTime}
+                  onChange={(e) => setEndTime(e.target.value)} disabled={!endDate}>
+            <option value="">-- Select End Time --</option>
+            {availableEndTimes.map(time => <option key={String(time)} value={String(time)}>{time}</option>)}
+          </select>
+          {isFormValid && finalDetails && !finalDetails.valid && (
+            <p className="error-text">Reservation duration must be between 1 and {MAX_HOURS} hours.</p>
+          )}
+        </div>
+
+        <button className="submit-button reservation-button" onClick={handleCheckReservation} disabled={!isButtonEnabled}>
+          Check Availability & Reserve
+        </button>
+
+        {statusMessage && (
+          <div className={`status-message ${isAvailable === true ? 'success' : isAvailable === false ? 'error' : 'pending'}`}>
+            <p>{statusMessage}</p>
+          </div>
+        )}
+      </div>
+
+      <div id="reservations-list-container" className="card side-by-side-container">
+        <h2 className="title">⏳ Your Reservations</h2>
+
+        <div id="reservations-card-scrolling">
+          <ul id="user-reservations-list">
+            {reservations.length === 0 && (
+              <li>No reservation found</li>
+            )}
+
+            {reservations.map(res => {
+              const startDateObj = new Date(res.startDate);
+              const endDateObj = new Date(res.endDate);
+              const remainingMs = startDateObj.getTime() - now;
+              const isPast = remainingMs <= 0;
+              return (
+                <li key={res.id} id={`reservation-item-${res.id}`} className={`reservation-item ${isPast ? 'expired' : ''}`}>
+                  <span className="reservation-info">
+                    <div className="date-line start">
+                    <span className="date">{formatLocalDate(startDateObj)}</span>&nbsp;
+                    <span className="time">{formatLocalTime(startDateObj)}</span>
+                    </div>
+                    <div className="date-line end">
+                      <span className="date">{formatLocalDate(endDateObj)}</span>&nbsp;
+                      <span className="time">{formatLocalTime(endDateObj)}</span>
+                    </div>
+                  </span>
+
+                  <span id={`timer-${res.id}`}
+                        className="timer-display-list">{isPast ? '--:--' : formatDuration(remainingMs)}</span>
+
+                  <button id={`delete-btn-${res.id}`} className="delete-button" disabled={isPast || res.deleting}
+                          onClick={() => deleteReservation(res.id)} data-reservation-id={res.id}>
+                    {res.deleting ? 'Deleting...' : 'Delete'}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      </div>
+    </div>
+  );
+}
