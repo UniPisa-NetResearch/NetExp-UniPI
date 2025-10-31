@@ -92,21 +92,23 @@ def check_reservation():
                 # res_end > now  (ignor terminated reservations)
                 tuple_(Reservation.endDate, Reservation.endTime) > now_tuple
             )
-        ).first() #take only the first one
+        ).all() #take all conflicts
 
-        if conflict:
+        if conflict and len(conflict) > 0:
             # conflict found
+            conflicts = []
+            for r in conflict:
+                conflicts.append({
+                    "startDate": r.startDate.isoformat(),
+                    "startTime": (r.startTime.strftime("%H:%M") if r.startTime else None),
+                    "endDate": r.endDate.isoformat(),
+                    "endTime": (r.endTime.strftime("%H:%M") if r.endTime else None)
+                })
+
             return jsonify({
                 "ok": False,
-                "message": "Requested slot overlaps an existing reservation",
-                "conflict": {
-                    "id": conflict.id,
-                    "username": conflict.username,
-                    "startDate": conflict.startDate.isoformat(),
-                    "startTime": (conflict.startTime.strftime("%H:%M") if conflict.startTime else None),
-                    "endDate": conflict.endDate.isoformat(),
-                    "endTime": (conflict.endTime.strftime("%H:%M") if conflict.endTime else None)
-                }
+                "message": "Requested slot overlaps an existing reservations",
+                "conflicts": conflicts
             }), 409
 
     # no conflict found, reservation creation

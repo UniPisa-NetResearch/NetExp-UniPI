@@ -57,6 +57,8 @@ export default function Reservation({ username }) {
 
   // a "clock" state used to update countdowns every second
   const [now, setNow] = useState(Date.now());
+  // state of the reservations in conflict
+  const [conflicts, setConflicts] = useState(null);
 
   // minimum allowed date (today)
   const minDate = useMemo(() => formatLocalDate(new Date()), []);
@@ -126,7 +128,7 @@ export default function Reservation({ username }) {
         const arr = Array.isArray(data) ? data : [];
 
         // sort by startDate asc
-        arr.sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime());
+        arr.sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime());
         setReservations(arr);
       } else {
         console.error('Error fetching reservations', resp.status);
@@ -173,6 +175,7 @@ export default function Reservation({ username }) {
     setStatusMessage('Checking availability...');
     setIsAvailable(null);
     setTimer(null);
+    setConflicts(null);
 
     const devices = ['testbed-1'];
     const payload = { username, startDate, startTime, endDate, endTime, devices };
@@ -192,19 +195,25 @@ export default function Reservation({ username }) {
         const startMs = finalDetails.start.getTime();
         const secondsToStart = Math.max(0, Math.floor((startMs - Date.now()) / 1000));
         if (secondsToStart > 0) setTimer(secondsToStart);
-
+        setConflicts(null);
         // refresh authoritative list from server (recommended)
         // this avoids DOM-manipulation complexity and keeps state consistent
         await fetchUserReservations();
       } else {
-        if (resp.status === 409 && data && data.conflict) {
-          const c = data.conflict;
-          const conflictMsg = `Requested slot overlaps existing reservation (id=${c.id}) by ${c.username}: ${c.startDate} ${c.startTime} - ${c.endDate} ${c.endTime}`;
-          setStatusMessage(conflictMsg);
+        if (resp.status === 409 && data) {
+          if (Array.isArray(data.conflicts) && data.conflicts.length > 0) {
+          setConflicts(data.conflicts);
+          setStatusMessage('Requested slot overlaps existing reservations:');
+          } else {
+            setStatusMessage(data.message || 'Requested slot overlaps existing reservations');
+            setConflicts(null);
+          }
         } else if (data && data.message) {
           setStatusMessage(data.message);
+          setConflicts(null);
         } else {
           setStatusMessage('Reservation failed (server error)');
+          setConflicts(null);
         }
         setIsAvailable(false);
         setTimer(null);
@@ -214,6 +223,7 @@ export default function Reservation({ username }) {
       setStatusMessage('Network error while checking reservation');
       setIsAvailable(false);
       setTimer(null);
+      setConflicts(null);
     }
   };
 
@@ -306,6 +316,19 @@ export default function Reservation({ username }) {
         {statusMessage && (
           <div className={`status-message ${isAvailable === true ? 'success' : isAvailable === false ? 'error' : 'pending'}`}>
             <p>{statusMessage}</p>
+              {Array.isArray(conflicts) && conflicts.length > 0 && (
+              <ul className="conflict-list" style={{ marginTop: 12, textAlign: 'left', paddingLeft: 16 }}>
+                {conflicts.map((c, idx) => {
+                  const start = `${c.startDate} ${c.startTime || ''}`.trim();
+                  const end = `${c.endDate} ${c.endTime || ''}`.trim();
+                  return (
+                    <li key={idx} className="conflict-item">
+                      {`${start} - ${end}`}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
           </div>
         )}
       </div>

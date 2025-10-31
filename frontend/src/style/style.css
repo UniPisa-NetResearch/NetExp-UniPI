@@ -415,6 +415,19 @@ body {
     border: 1px solid #ffeeba;
 }
 
+.conflict-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0 0;
+}
+.conflict-list .conflict-item {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 4px 0;
+  font-size: 0.95em;
+}
+
 .timer-display {
     margin-top: 10px;
     font-size: 1.2em;
