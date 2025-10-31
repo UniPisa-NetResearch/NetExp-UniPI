@@ -7,8 +7,8 @@ const MAX_HOURS = 72;
 const formatLocalDate = (date) => {
   const dObj = typeof date === 'string' ? new Date(date) : date;
   const y = dObj.getFullYear();
-  const m = String(dObj.getMonth() + 1).padStart(2, '0');
-  const d = String(dObj.getDate()).padStart(2, '0');
+  const m = String(dObj.getMonth() + 1).padStart(2, '0');     //+1 because returns moths between 0 and 11
+  const d = String(dObj.getDate()).padStart(2, '0');                //add 0 before if day between 1 and 9
   return `${y}-${m}-${d}`;
 };
 const formatLocalTime = (date) => {
@@ -17,8 +17,9 @@ const formatLocalTime = (date) => {
   const min = String(dObj.getMinutes()).padStart(2, '0');
   return `${h}:${min}`;
 };
+//format timer duration
 const formatDuration = (ms) => {
-  if (ms <= 0) return '--:--';
+  if (ms <= 0) return '--:--';                                //timer expired
   const totalSeconds = Math.floor(ms / 1000);
   const h = String(Math.floor(totalSeconds / 3600)).padStart(2, '0');
   const m = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, '0');
@@ -28,7 +29,7 @@ const formatDuration = (ms) => {
 
 const getCurrentHour = () => new Date().getHours();
 const generateTimeOptions = () => Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}:00`);
-const timeOptions = generateTimeOptions();
+const timeOptions = generateTimeOptions(); //all hours from 00:00 to 23:00
 
 const calculateEndTimeDetails = (startDate, startTime, endDate, endTime) => {
   if (!startDate || !startTime || !endDate || !endTime) return null;
@@ -36,29 +37,24 @@ const calculateEndTimeDetails = (startDate, startTime, endDate, endTime) => {
   const endDateTime = new Date(`${endDate}T${endTime}:00`);
   const durationMs = endDateTime.getTime() - startDateTime.getTime();
   const durationHours = durationMs / (1000 * 60 * 60);
-  if (durationHours <= 0 || durationHours > MAX_HOURS) return { valid: false };
+  if (durationHours <= 0 || durationHours > MAX_HOURS) return { valid: false }; //valid duration if it is in (0, MAX_HOURS]
   return { valid: true, start: startDateTime, end: endDateTime };
 };
 
 export default function Reservation({ username }) {
-  // form state
+  // form data state
   const [startDate, setStartDate] = useState('');
   const [startTime, setStartTime] = useState('');
   const [endDate, setEndDate] = useState('');
   const [endTime, setEndTime] = useState('');
 
-  // app state
+  // reservation state
   const [statusMessage, setStatusMessage] = useState('');
   const [isAvailable, setIsAvailable] = useState(null);
-  const [timer, setTimer] = useState(null); // seconds to next starting reservation (same behavior as before)
-
-  // reservations stored in state (replaces direct DOM manipulation)
-  const [reservations, setReservations] = useState([]);
-
-  // a "clock" state used to update countdowns every second
-  const [now, setNow] = useState(Date.now());
-  // state of the reservations in conflict
-  const [conflicts, setConflicts] = useState(null);
+  const [timer, setTimer] = useState(null);                    // seconds to next starting reservation
+  const [reservations, setReservations] = useState([]); // reservations stored in state
+  const [now, setNow] = useState(Date.now());                   // a clock state used to update countdowns every second
+  const [conflicts, setConflicts] = useState(null);            // state of the reservations in conflict
 
   // minimum allowed date (today)
   const minDate = useMemo(() => formatLocalDate(new Date()), []);

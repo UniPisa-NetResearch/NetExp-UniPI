@@ -17,6 +17,52 @@ services:
       # DB data persistent even if the container is stopped or rebuilt
       - postgres_data:/var/lib/postgresql/data/
 
+  # NetBox DB
+  netbox-db:
+    image: postgres:14-alpine
+    environment:
+      POSTGRES_DB: netbox
+      POSTGRES_USER: netbox
+      POSTGRES_PASSWORD: netbox
+    volumes:
+      - netbox_db_data:/var/lib/postgresql/data
+
+  # Redis for NetBox
+  netbox-redis:
+    image: redis:6-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    volumes:
+      - netbox_redis_data:/data
+
+  # NetBox application
+  netbox:
+    image: netboxcommunity/netbox:latest
+    depends_on:
+      - netbox-db
+      - netbox-redis
+    environment:
+      # variables
+      - ALLOWED_HOSTS=*
+      - DB_NAME=netbox
+      - DB_USER=netbox
+      - DB_PASSWORD=netbox
+      - DB_HOST=netbox-db
+      - REDIS_HOST=netbox-redis
+      - ALLOWED_HOSTS=*
+      - DB_WAIT_DEBUG=1
+      - DB_WAIT_TIMEOUT=120
+      - SECRET_KEY=(z_uou$(IYNeA%7Z5n*-fA5gW+Jqk3R)Jv+hPBtM_KY(A8dsou
+    ports:
+      - "8080:8080"   #  NetBox web UI
+    volumes:
+      - netbox_media:/opt/netbox/netbox/media
+
 volumes:
   postgres_data:
+    driver: local
+  netbox_db_data:
+    driver: local
+  netbox_redis_data:
+    driver: local
+  netbox_media:
     driver: local
