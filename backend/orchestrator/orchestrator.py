@@ -1,11 +1,10 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-from ..database.db import db, Reservation
+from ..database.db import db, Reservation, ReservationDevice
 from datetime import datetime
 from sqlalchemy import tuple_, and_, text
 import os
 import pynetbox
-import json
 
 app = Flask(__name__)
 
@@ -50,11 +49,18 @@ def serialize_reservation(reservation):
     start_dt = datetime.combine(reservation.startDate, reservation.startTime)
     end_dt = datetime.combine(reservation.endDate, reservation.endTime)
 
+    try:
+        res_dev = ReservationDevice.query.filter_by(reservation_id=reservation.id).all()
+        devices = [rd.asset_tag for rd in res_dev]
+    except Exception:
+        devices = []
+
     return {
         'id': reservation.id,
         #  ISO format 2025-10-30T10:00:00
         'startDate': start_dt.isoformat(),
         'endDate': end_dt.isoformat(),
+        'devices': devices
     }
 
 @app.route("/api/orchestrator/showDevices", methods=["GET"])
@@ -93,8 +99,6 @@ def show_devices():
                 "primary_ip": primary_ip,
                 "role": role
             })
-
-        print("output letto da netbox: ", json.dumps(out, indent=4))
 
         return jsonify(out), 200
 
@@ -190,6 +194,17 @@ def check_reservation():
 
     db.session.add(new_res)
     try:
+        # flush to assign new_res.id to create child rows (commit not already done)
+        db.session.flush()
+
+        # create ReservationDevice rows (se normalized_devices non vuoto)
+        for at in devices:
+            rd = ReservationDevice(
+                reservation_id=new_res.id,
+                asset_tag=at
+            )
+            db.session.add(rd)
+
         db.session.commit()
         print("Reservation created id=%s user=%s devices=%s", new_res.id, username, devices)
         return jsonify({
@@ -250,12 +265,31 @@ def delete_reservation():
         db.session.commit()
 
         # reset sequence so the next inserted id is coherent
+        # if the table is empty, lst attribute os setval is false, otherwise true
         reset_sql = text("""
+                    WITH max_ids AS (
+                        SELECT
+                            (SELECT MAX(id) FROM reservation) AS max_res_id,
+                            (SELECT MAX(id) FROM reservation_device) AS max_dev_id
+                    )
                     SELECT setval(
                         pg_get_serial_sequence('reservation', 'id'),
-                        COALESCE((SELECT MAX(id) FROM reservation), 0),
-                        true
-                    );
+                        COALESCE(t1.max_res_id, 1),
+                        CASE 
+                            WHEN t1.max_res_id IS NULL THEN FALSE  
+                            ELSE TRUE
+                        END
+                    ) AS res_reset_value,
+            
+                   setval(
+                        pg_get_serial_sequence('reservation_device', 'id'),
+                        COALESCE(t1.max_dev_id, 1),
+                        CASE 
+                            WHEN t1.max_dev_id IS NULL THEN FALSE
+                            ELSE TRUE
+                        END
+                    ) AS dev_reset_value
+                    FROM max_ids AS t1;
                 """)
         db.session.execute(reset_sql)
         db.session.commit()

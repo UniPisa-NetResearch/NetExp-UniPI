@@ -307,9 +307,16 @@ body {
     border-radius: 4px;
     display: flex;
     justify-content: space-between;
-    align-items: center;
-    gap: 10px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
     transition: background-color 0.3s;
+}
+.reservation-top-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
 }
 
 .reservation-item.expired {
@@ -371,10 +378,30 @@ body {
     flex-shrink: 0;
 }
 
-.container.home-content {
+.reservation-devices {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 0;
+}
+.device-pill {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 12px;
+    background: #eef2ff;
+    color: #3730a3;
+    font-size: 12px;
+    border: 1px solid rgba(55,48,163,0.08);
+}
 
-    justify-content: flex-start;
-    padding-top: 50px;
+.device-pill {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 12px;
+    background: #eef2ff;
+    color: #3730a3;
+    font-size: 12px;
+    border: 1px solid rgba(55,48,163,0.08);
 }
 
 .input-group label {
@@ -479,6 +506,10 @@ select {
   height: 18px;
   flex-shrink: 0;
   cursor: pointer;
+  accent-color: #53ff9e;
+}
+.device-checkbox:hover {
+  accent-color: #5aef9e; /* verde quando selezionato */
 }
 /* icon area */
 .device-item .device-icon {
@@ -525,10 +556,5 @@ select {
 .device-item:hover {
   transform: translateY(-1px);
   box-shadow: 0 1px 4px rgba(0,0,0,0.04);
-}
-
-.device-item .device-checkbox:checked + .device-icon,
-.device-item input:checked ~ .device-main {
-  outline: 2px solid rgba(0,0,0,0.06);
 }
 /* ------------------------------------------------------------------------------------------------------*/

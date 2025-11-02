@@ -23,8 +23,8 @@ class User(db.Model):
 class Reservation(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), nullable=False)
-    # startDate/endDate = "YYYY-MM-DD"  => length 10
-    # startTime/endTime = "HH:MM"       => length 5 (es. "08:00")
+    # startDate/endDate = "YYYY-MM-DD"  --> length 10
+    # startTime/endTime = "HH:MM"       --> length 5 (08:00)
     startDate = db.Column(db.Date, nullable=False)
     endDate = db.Column(db.Date, nullable=False)
     startTime = db.Column(db.Time, nullable=False)
@@ -33,3 +33,19 @@ class Reservation(db.Model):
 
     def __repr__(self):
         return f'<Reservation id={self.id} user={self.username} start={self.start_date} {self.start_time} end={self.end_date} {self.end_time}>'
+
+ # association between reservation and devices table
+class ReservationDevice(db.Model):
+    __table_name__ = 'reservation_device'
+
+    id = db.Column(db.Integer, primary_key=True)
+    reservation_id = db.Column(
+        db.Integer,
+        db.ForeignKey('reservation.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True
+    )
+    asset_tag = db.Column(db.String(255), nullable=False)
+
+    def __repr__(self):
+        return f'<ReservationDevice id={self.id} reservation_id={self.reservation_id} asset_tag={self.asset_tag}>'

@@ -310,7 +310,7 @@ export default function Reservation({ username }) {
           ) : (
               devices.map((d) => {
                 // identifier for selection
-                const key = `${d.asset_tag || d.name || ''}-${d.id || ''}`;
+                const key = `${d.asset_tag || d.name || ''}`;
                 const role = (d.role || '').toLowerCase();
                 const selected = selectedDevices.includes(key);
 
@@ -422,30 +422,43 @@ export default function Reservation({ username }) {
               const endDateObj = new Date(res.endDate);
               const remainingMs = startDateObj.getTime() - now;
               const isPast = remainingMs <= 0;
+              const resDevices = Array.isArray(res.devices) ? res.devices : [];
               return (
-                <li key={res.id} id={`reservation-item-${res.id}`} className={`reservation-item ${isPast ? 'expired' : ''}`}>
-                  <span className="reservation-info">
-                    <div className="date-line start">
-                    <span className="date">{formatLocalDate(startDateObj)}</span>&nbsp;
-                    <span className="time">{formatLocalTime(startDateObj)}</span>
-                    </div>
-                    <div className="date-line end">
-                      <span className="date">{formatLocalDate(endDateObj)}</span>&nbsp;
-                      <span className="time">{formatLocalTime(endDateObj)}</span>
-                    </div>
-                  </span>
+                  <li key={res.id} id={`reservation-item-${res.id}`}
+                      className={`reservation-item ${isPast ? 'expired' : ''}`}>
+                    <div className="reservation-top-row">
+                      <span className="reservation-info">
+                        <div className="date-line start">
+                          <span className="date">{formatLocalDate(startDateObj)}</span>&nbsp;
+                          <span className="time">{formatLocalTime(startDateObj)}</span>
+                        </div>
+                        <div className="date-line end">
+                          <span className="date">{formatLocalDate(endDateObj)}</span>&nbsp;
+                          <span className="time">{formatLocalTime(endDateObj)}</span>
+                        </div>
+                      </span>
 
-                  <span id={`timer-${res.id}`}
-                        className="timer-display-list">{isPast ? '--:--' : formatDuration(remainingMs)}</span>
+                      <span id={`timer-${res.id}`}
+                            className="timer-display-list">{isPast ? '--:--' : formatDuration(remainingMs)}</span>
 
-                  <button id={`delete-btn-${res.id}`} className="delete-button" disabled={isPast || res.deleting}
-                          onClick={() => deleteReservation(res.id)} data-reservation-id={res.id}>
-                    {res.deleting ? 'Deleting...' : 'Delete'}
-                  </button>
-                </li>
-              );
+                      <button id={`delete-btn-${res.id}`} className="delete-button" disabled={isPast || res.deleting}
+                              onClick={() => deleteReservation(res.id)} data-reservation-id={res.id}>
+                        {res.deleting ? 'Deleting...' : 'Delete'}
+                      </button>
+                    </div>
+                      {resDevices.length > 0 && (
+                          <div className="reservation-devices">
+                            {resDevices.map((tag, idx) => (
+                                <span key={`${tag}-${idx}`} className="device-pill">
+                                  {tag}
+                                </span>
+                            ))}
+                          </div>
+                      )}
+                  </li>
+            );
             })}
-          </ul>
+            </ul>
         </div>
       </div>
     </div>
