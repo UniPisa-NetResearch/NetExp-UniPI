@@ -453,4 +453,82 @@ select {
 .input-field[type="date"]::-webkit-calendar-picker-indicator {
   cursor: pointer;
 }
+
+.device-card .device-list {
+  max-height: 500px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.device-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid #e9ecef;
+  transition: background-color 0.15s, transform 0.08s;
+}
+/* selectable input - visually hidden but accessible, or show checkbox */
+.device-item .device-checkbox {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+/* icon area */
+.device-item .device-icon {
+  font-size: 1.25em;
+  flex-shrink: 0;
+  width: 28px;
+  text-align: center;
+}
+/* main info (name above, ip below) */
+.device-item .device-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.device-item .device-name {
+  font-weight: 600;
+  font-size: 0.95em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.device-item .device-ip {
+  font-size: 0.85em;
+  color: #555;
+  margin-top: 2px;
+}
+
+/* background colors by role */
+.device-item.spine {
+  background-color: #fff3e0;
+  border-color: #ffd9a3;
+}
+.device-item.leaf {
+  background-color: #e8f8ea;
+  border-color: #bfe9c5;
+}
+.device-item.host {
+  background-color: #fffbe6;
+  border-color: #f3e7a8;
+}
+
+.device-item:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+}
+
+.device-item .device-checkbox:checked + .device-icon,
+.device-item input:checked ~ .device-main {
+  outline: 2px solid rgba(0,0,0,0.06);
+}
 /* ------------------------------------------------------------------------------------------------------*/

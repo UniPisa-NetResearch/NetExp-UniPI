@@ -51,11 +51,13 @@ export default function Reservation({ username }) {
   // reservation state
   const [statusMessage, setStatusMessage] = useState('');
   const [isAvailable, setIsAvailable] = useState(null);
-  const [timer, setTimer] = useState(null);                    // seconds to next starting reservation
-  const [reservations, setReservations] = useState([]); // reservations stored in state
-  const [now, setNow] = useState(Date.now());                   // a clock state used to update countdowns every second
-  const [conflicts, setConflicts] = useState(null);            // state of the reservations in conflict
-
+  const [timer, setTimer] = useState(null);                            // seconds to next starting reservation
+  const [reservations, setReservations] = useState([]);         // reservations stored in state
+  const [now, setNow] = useState(Date.now());                           // a clock state used to update countdowns every second
+  const [conflicts, setConflicts] = useState(null);                    // state of the reservations in conflict
+  const [devices, setDevices] = useState([]);                   // devices list received from orchestrator
+  const [selectedDevices, setSelectedDevices] = useState([]);   // array of asset_tag selected
+  const [loadingDevices, setLoadingDevices] = useState(true);
   // minimum allowed date (today)
   const minDate = useMemo(() => formatLocalDate(new Date()), []);
 
@@ -140,6 +142,37 @@ export default function Reservation({ username }) {
     fetchUserReservations();
   }, []);
 
+  const toggleSelectDevice = (deviceKey) => {
+    setSelectedDevices(prev => {
+      if (prev.includes(deviceKey)) return prev.filter(k => k !== deviceKey);
+      return [...prev, deviceKey];
+    });
+  };
+
+  const fetchDevices = async () => {
+      try {
+        const resp = await fetch('/api/orchestrator/showDevices', { method: 'GET' });
+        const data = await resp.json().catch(() => ({}));
+        if (resp.ok && Array.isArray(data)) {
+          setDevices(data);
+        } else if (resp.ok && Array.isArray(data.devices)) {
+          setDevices(data.devices);
+        } else {
+          setDevices([]);
+          console.error('Unexpected devices payload', data);
+        }
+      } catch (err) {
+        console.error('Error fetching devices', err);
+        setDevices([]);
+      } finally {
+        setLoadingDevices(false);
+      }
+    };
+
+  useEffect(() => {
+    fetchDevices();
+  }, []);
+
   const deleteReservation = async (reservationId) => {
     try {
       // disable optimistic duplicate clicks by local filter immediately (optimistic removal)
@@ -172,8 +205,9 @@ export default function Reservation({ username }) {
     setIsAvailable(null);
     setTimer(null);
     setConflicts(null);
+    setSelectedDevices([]);
 
-    const devices = ['testbed-1'];
+    const devices = selectedDevices.slice();
     const payload = { username, startDate, startTime, endDate, endTime, devices };
 
     try {
@@ -257,7 +291,7 @@ export default function Reservation({ username }) {
   }, [endDate]);
 
   const isFormValid = startDate && startTime && endDate && endTime;
-  const isButtonEnabled = isFormValid && finalDetails && finalDetails.valid && isAvailable === null;
+  const isButtonEnabled = isFormValid && finalDetails && finalDetails.valid && isAvailable === null  && selectedDevices.length >= 2;
 
   // min/max values for input endDate
   const endMin = startDate || '';
@@ -265,13 +299,57 @@ export default function Reservation({ username }) {
 
   return (
     <div className="home-content-wrapper">
-      <div className="card reservation-card side-by-side-container">
+
+      <div className="card device-card side-by-side-container">
+        <h2 className="title">🖧 Select devices</h2>
+        <div className="device-list">
+          {loadingDevices ? (
+              <p>Loading devices...</p>
+              ) : devices.length === 0 ? (
+          <p>No devices found.</p>
+          ) : (
+              devices.map((d) => {
+                // identifier for selection
+                const key = `${d.asset_tag || d.name || ''}-${d.id || ''}`;
+                const role = (d.role || '').toLowerCase();
+                const selected = selectedDevices.includes(key);
+
+                // choose icon
+                const icon = (role === 'leaf' || role === 'spine') ? '🖧' : (role === 'host' ? '💻' : '🔹');
+
+                return (
+                    <label
+                        key={key}
+                        className={`device-item ${role || ''}`}
+                        title={`${d.asset_tag || d.name || ''} ${d.primary_ip ? ' - ' + d.primary_ip : ''}`}
+                    >
+                      <input
+                          type="checkbox"
+                          checked={selected}
+                          onChange={() => toggleSelectDevice(key)}
+                          className="device-checkbox"
+                      />
+                      <span className="device-icon" aria-hidden="true">{icon}</span>
+                      <span className="device-main">
+                        <span className="device-name">{d.name}</span>
+                        <span className="device-ip">{d.primary_ip}</span>
+                      </span>
+                    </label>
+                );
+              })
+          )}
+        </div>
+      </div>
+      <div className="card  side-by-side-container">
         <h2 className="title">📅 Reserve the Testbed</h2>
 
         <div className="input-group">
           <label htmlFor="date-picker">Select Start Date:</label>
           <input type="date" id="date-picker" className="input-field" value={startDate} min={minDate}
-                 onChange={(e) => { setStartDate(e.target.value); setStartTime(''); }} />
+                 onChange={(e) => {
+                   setStartDate(e.target.value);
+                   setStartTime('');
+                 }}/>
         </div>
 
         <div className="input-group">
@@ -282,14 +360,15 @@ export default function Reservation({ username }) {
             {availableStartTimes.map(time => <option key={time} value={time}>{time}</option>)}
           </select>
           {isCurrentDate && startTime && parseInt(startTime.split(':')[0]) <= currentHour && (
-            <p className="error-text">Start time must be later than the current hour ({currentHour.toString().padStart(2, '0')}:00).</p>
+              <p className="error-text">Start time must be later than the current hour
+                ({currentHour.toString().padStart(2, '0')}:00).</p>
           )}
         </div>
 
         <div className="input-group">
           <label htmlFor="end-date">Select End Date:</label>
           <input type="date" id="end-date" className="input-field" value={endDate} min={endMin} max={endMax}
-                 onChange={(e) => setEndDate(e.target.value)} disabled={!startDate || !startTime} />
+                 onChange={(e) => setEndDate(e.target.value)} disabled={!startDate || !startTime}/>
           {endDate && (<small>Max reservation duration: {MAX_HOURS} hours</small>)}
         </div>
 

@@ -3,7 +3,14 @@ from flask_cors import CORS
 from ..database.db import db, Reservation
 from datetime import datetime
 from sqlalchemy import tuple_, and_, text
+import os
+import pynetbox
+import json
+
 app = Flask(__name__)
+
+NETBOX_URL = os.getenv("NETBOX_URL", "http://localhost:8080")
+NETBOX_TOKEN = os.getenv("NETBOX_TOKEN", "6152fbb91529522c72307b194a690c4ca5253e93")
 
 DB_USER = 'root'
 DB_PASSWORD = 'root'
@@ -16,11 +23,27 @@ app.config['SQLALCHEMY_DATABASE_URI'] = f'postgresql://{DB_USER}:{DB_PASSWORD}@{
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'connect_args': {'connect_timeout': 10}}
 
+nb = pynetbox.api(NETBOX_URL, token=NETBOX_TOKEN)
+
 db.init_app(app)
 
 # enable CORS for development frontend
 CORS(app, resources={r"/api/*": {"origins": "http://localhost:5173"}}) #address for local development
 
+
+def _find_site(site_identifier):
+
+    if not site_identifier:
+        return None
+    # try slug
+    site = nb.dcim.sites.get(slug=site_identifier)
+    if site:
+        return site
+    # try name
+    sites = nb.dcim.sites.filter(name=site_identifier)
+    if sites:
+        return sites[0]
+    return None
 
 def serialize_reservation(reservation):
 
@@ -33,6 +56,51 @@ def serialize_reservation(reservation):
         'startDate': start_dt.isoformat(),
         'endDate': end_dt.isoformat(),
     }
+
+@app.route("/api/orchestrator/showDevices", methods=["GET"])
+def show_devices():
+
+    #Return JSON array of devices for testbed site
+    site_q = "testbed"
+    try:
+        site = _find_site(site_q)
+        if not site:
+            # if the site is not found, return empty array
+            return jsonify([]), 200
+
+        # retrieve devices
+        devices = nb.dcim.devices.filter(site=site.slug)
+
+        out = []
+        for d in devices:
+            asset_tag = getattr(d, "asset_tag", None) or getattr(d, "name", None)
+
+            primary_ip = getattr(d.primary_ip, "address", None) or (
+                d.primary_ip.get("address") if isinstance(d.primary_ip, dict) else None
+            )
+
+            primary_ip = str(primary_ip).split("/")[0] if primary_ip else None
+
+            role_obj = getattr(d, "role", None)
+            # when it is an object with attributes
+            role = getattr(role_obj, "slug", None) or getattr(role_obj, "name", None)
+
+            role = role.lower() if role else None
+
+            out.append({
+                "name": getattr(d, "name", None),
+                "asset_tag": asset_tag,
+                "primary_ip": primary_ip,
+                "role": role
+            })
+
+        print("output letto da netbox: ", json.dumps(out, indent=4))
+
+        return jsonify(out), 200
+
+    except Exception as exc:
+        app.logger.exception("Error in show devices: %s", exc)
+        return jsonify({"ok": False, "message": "Unable to fetch devices from NetBox"}), 500
 
 @app.route('/api/orchestrator/checkReservation', methods=['POST'])
 def check_reservation():
@@ -154,7 +222,6 @@ def user_reservation_list():
         app.logger.error(f"Error fetching user reservations: {e}")
         return jsonify({"message": "Error fetching reservations"}), 500
 
-
 @app.route('/api/orchestrator/deleteReservation', methods=['POST'])
 def delete_reservation():
     data = request.get_json()
@@ -198,8 +265,6 @@ def delete_reservation():
         db.session.rollback()
         app.logger.error(f"Error deleting reservation {reservation_id}: {e}")
         return jsonify({"message": "Internal server error"}), 500
-
-
 
 if __name__ == '__main__':
 
