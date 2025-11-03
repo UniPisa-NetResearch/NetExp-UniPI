@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, {useState, useEffect, useMemo, useRef} from 'react';
 import './style/style.css';
 
 // max allowed number of hours for the reservation
@@ -49,15 +49,15 @@ export default function Reservation({ username }) {
   const [endTime, setEndTime] = useState('');
 
   // reservation state
-  const [statusMessage, setStatusMessage] = useState('');
+  const [statusMessage, setStatusMessage] = useState('');       //message after reservation
   const [isAvailable, setIsAvailable] = useState(null);
   const [timer, setTimer] = useState(null);                            // seconds to next starting reservation
-  const [reservations, setReservations] = useState([]);         // reservations stored in state
+  const [reservations, setReservations] = useState([]);         // reservations information stored in state
   const [now, setNow] = useState(Date.now());                           // a clock state used to update countdowns every second
   const [conflicts, setConflicts] = useState(null);                    // state of the reservations in conflict
   const [devices, setDevices] = useState([]);                   // devices list received from orchestrator
   const [selectedDevices, setSelectedDevices] = useState([]);   // array of asset_tag selected
-  const [loadingDevices, setLoadingDevices] = useState(true);
+  const [loadingDevices, setLoadingDevices] = useState(true); // loading state of the device area
   // minimum allowed date (today)
   const minDate = useMemo(() => formatLocalDate(new Date()), []);
 
@@ -65,18 +65,18 @@ export default function Reservation({ username }) {
   const currentHour = getCurrentHour();
 
   const availableStartTimes = useMemo(() => {
-    if (!startDate) return timeOptions;
+    if (!startDate) return timeOptions;                                 // return all hours 00 - 23, if start date is not assigned
     const currentHourNow = getCurrentHour();
     return timeOptions.filter(time => {
       const hour = parseInt(time.split(':')[0], 10);
-      return isCurrentDate ? hour > currentHourNow : true;
+      return isCurrentDate ? hour > currentHourNow : true;                      // return all hours after current hour if the selected date is the current date
     });
   }, [startDate, isCurrentDate]);
 
   const maxEndInfo = useMemo(() => {
     if (!startDate || !startTime) return null;
     const startDt = new Date(`${startDate}T${startTime}:00`);
-    const maxEndDt = new Date(startDt.getTime() + MAX_HOURS * 3600 * 1000);
+    const maxEndDt = new Date(startDt.getTime() + MAX_HOURS * 3600 * 1000);   //end date = start date + MAX_HOURS
     return {
       startDt,
       maxEndDt,
@@ -90,15 +90,15 @@ export default function Reservation({ username }) {
     const startHour = parseInt(startTime.split(':')[0], 10);
     const lastPossibleDate = maxEndInfo.maxEndDateStr;
     const lastPossibleHour = maxEndInfo.maxEndHour;
-
+    // end date = start date --> hours available: from start hour + 1 to 23
     if (endDate === startDate) {
       return timeOptions.filter(t => parseInt(t.split(':')[0], 10) >= (startHour + 1));
     }
-
+    // end date is not last possible date --> hours available: 00 - 23
     if (endDate !== lastPossibleDate) {
       return timeOptions.map(t => String(t));
     }
-
+    // end date = last possible date --> hours available: 00 - start hour
     return timeOptions.filter(t => parseInt(t.split(':')[0], 10) <= lastPossibleHour).map(t => String(t));
   }, [endDate, startDate, startTime, maxEndInfo]);
 
@@ -122,10 +122,10 @@ export default function Reservation({ username }) {
       const data = await resp.json().catch(() => ({}));
 
       if (resp.ok) {
-        // server might return either an array or { ok: true, reservations: [...] }
+        // server return a JSON
         const arr = Array.isArray(data) ? data : [];
 
-        // sort by startDate asc
+        // sort by startDate desc
         arr.sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime());
         setReservations(arr);
       } else {
@@ -137,27 +137,25 @@ export default function Reservation({ username }) {
       setReservations([]);
     }
   };
-
+  // when the page is loaded, call the function
   useEffect(() => {
     fetchUserReservations();
   }, []);
 
   const toggleSelectDevice = (deviceKey) => {
-    setSelectedDevices(prev => {
-      if (prev.includes(deviceKey)) return prev.filter(k => k !== deviceKey);
-      return [...prev, deviceKey];
+    setSelectedDevices(prev => {                                    // prev is previous value of selectedDevices
+      if (prev.includes(deviceKey)) return prev.filter(k => k !== deviceKey);   // if the element deviceKey is present, return an array without deviceKey
+      return [...prev, deviceKey];                                              // otherwise create an array with the same elements as before and add deviceKey at the end
     });
   };
-
+  // show available devices
   const fetchDevices = async () => {
       try {
         const resp = await fetch('/api/orchestrator/showDevices', { method: 'GET' });
         const data = await resp.json().catch(() => ({}));
         if (resp.ok && Array.isArray(data)) {
           setDevices(data);
-        } else if (resp.ok && Array.isArray(data.devices)) {
-          setDevices(data.devices);
-        } else {
+        }  else {
           setDevices([]);
           console.error('Unexpected devices payload', data);
         }
@@ -168,11 +166,11 @@ export default function Reservation({ username }) {
         setLoadingDevices(false);
       }
     };
-
+  // when the page is loaded, call the function
   useEffect(() => {
     fetchDevices();
   }, []);
-
+  // delete reservation from GUI and from database
   const deleteReservation = async (reservationId) => {
     try {
       // disable optimistic duplicate clicks by local filter immediately (optimistic removal)
@@ -185,11 +183,11 @@ export default function Reservation({ username }) {
       });
 
       if (resp.ok) {
-        setReservations(prev => prev.filter(r => r.id !== reservationId));
+        setReservations(prev => prev.filter(r => r.id !== reservationId));   // remove the element with reservationId
       } else {
         const txt = await resp.text().catch(() => 'Server error');
         window.alert(`Error deleting reservation: ${resp.status} - ${txt}`);
-        // rollback "deleting" flag
+        // rollback "deleting" flag, update an element in the list, for the reservationId element set deleting: false; the other remain the same
         setReservations(prev => prev.map(r => r.id === reservationId ? ({ ...r, deleting: false }) : r));
       }
     } catch (err) {
@@ -207,7 +205,7 @@ export default function Reservation({ username }) {
     setConflicts(null);
     setSelectedDevices([]);
 
-    const devices = selectedDevices.slice();
+    const devices = selectedDevices.slice();        //array of device selected by user
     const payload = { username, startDate, startTime, endDate, endTime, devices };
 
     try {
@@ -221,18 +219,19 @@ export default function Reservation({ username }) {
       if (resp.ok && data.ok) {
         setStatusMessage(`Testbed available! Reservation confirmed for ${payload.startDate} ${payload.startTime} - ${payload.endDate} ${payload.endTime}.`);
         setIsAvailable(true);
-        // set reservationData-like logic (to keep previous UX of starting timer)
+        // set timer of new reservation
         const startMs = finalDetails.start.getTime();
         const secondsToStart = Math.max(0, Math.floor((startMs - Date.now()) / 1000));
         if (secondsToStart > 0) setTimer(secondsToStart);
         setConflicts(null);
-        // refresh authoritative list from server (recommended)
-        // this avoids DOM-manipulation complexity and keeps state consistent
+        // refresh reservation list from server
         await fetchUserReservations();
+        setStartDate('');             //when the reservation succeed, input fields are empty
+        setStartTime('');
       } else {
         if (resp.status === 409 && data) {
           if (Array.isArray(data.conflicts) && data.conflicts.length > 0) {
-          setConflicts(data.conflicts);
+          setConflicts(data.conflicts);                                               // set reservation in conflict
           setStatusMessage('Requested slot overlaps existing reservations:');
           } else {
             setStatusMessage(data.message || 'Requested slot overlaps existing reservations');
@@ -257,7 +256,7 @@ export default function Reservation({ username }) {
     }
   };
 
-  // countdown effect (for the smaller "timer" used after creating a reservation)
+  // countdown used after creating a reservation
   useEffect(() => {
     if (timer === null || timer <= 0) return;
     const id = setInterval(() => {
@@ -277,16 +276,20 @@ export default function Reservation({ username }) {
   useEffect(() => {
     setEndDate('');
     setEndTime('');
-    setIsAvailable(null);
-    setStatusMessage('');
+    if(startDate !== '') {            //reset message when the first field goes from empty to full
+      setIsAvailable(null);
+      setStatusMessage('');
+    }
     setTimer(null);
   }, [startDate, startTime]);
 
   // if endDate changes, reset endTime and messages
   useEffect(() => {
     setEndTime('');
-    setIsAvailable(null);
-    setStatusMessage('');
+    if(startDate !== '') {
+      setIsAvailable(null);    //reset message when the first field goes from empty to full
+      setStatusMessage('');
+    }
     setTimer(null);
   }, [endDate]);
 
@@ -321,14 +324,13 @@ export default function Reservation({ username }) {
                 const selected = selectedDevices.includes(key);
 
                 // choose icon
-                //const icon = (role === 'leaf' || role === 'spine') ? '🖧' : (role === 'host' ? '💻' : '🔹');
                 const icon = (role === 'leaf' || role === 'spine') ?
                     <img src="/networkSwitch.png" alt="" className="device-icon-img"/> : (role === 'host' ? '💻' : '🔹');
                 return (
                     <label
                         key={key}
                         className={`device-item ${role || ''}`}
-                        title={`${d.asset_tag || d.name || ''} ${d.primary_ip ? ' - ' + d.primary_ip : ''}`}
+                        title={`${d.asset_tag || d.name || ''} ${d.primary_ip ? ' - ' + d.primary_ip : ''}`} /* information shown when the mouse is hover the element*/
                     >
                       <input
                           type="checkbox"
