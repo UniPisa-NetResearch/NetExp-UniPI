@@ -291,7 +291,7 @@ body {
 #reservations-card-scrolling {
     max-height: 500px;
     overflow-y: auto;
-    padding-right: 10px;
+    overflow-x: hidden;
 }
 
 #user-reservations-list {
@@ -301,6 +301,7 @@ body {
 }
 
 .reservation-item {
+    width: 100%;
     margin-bottom: 15px;
     padding: 10px;
     border: 1px solid #eee;
@@ -310,12 +311,14 @@ body {
     flex-direction: column;
     align-items: stretch;
     gap: 8px;
+    box-sizing: border-box;
     transition: background-color 0.3s;
 }
 .reservation-top-row {
   display: flex;
+  box-sizing: border-box;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   width: 100%;
 }
 
@@ -326,6 +329,7 @@ body {
 
 .reservation-info {
     flex-grow: 1;
+    box-sizing: border-box;
     text-align: left;
     font-size: 0.90em;
     font-weight: 500;
@@ -518,6 +522,12 @@ select {
   width: 28px;
   text-align: center;
 }
+.device-item .device-icon-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
 /* main info (name above, ip below) */
 .device-item .device-main {
   display: flex;
@@ -557,4 +567,39 @@ select {
   transform: translateY(-1px);
   box-shadow: 0 1px 4px rgba(0,0,0,0.04);
 }
+.rack-icon-img {
+  width: 30px;
+  height: 30px;
+  vertical-align: middle;
+}
+.device-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 5px;
+  font-size: 0.95em;
+  white-space: nowrap;
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 500;
+  margin-right: 15px;
+}
+
+/* color square */
+.device-legend .legend-color {
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  display: inline-block;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.04) inset;
+}
+
+.legend-color.spine { background-color: #ffd9a3; }
+.legend-color.leaf  { background-color: #bfe9c5; }
+.legend-color.host  { background-color: #f3e7a8; }
 /* ------------------------------------------------------------------------------------------------------*/

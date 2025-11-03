@@ -301,12 +301,18 @@ export default function Reservation({ username }) {
     <div className="home-content-wrapper">
 
       <div className="card device-card side-by-side-container">
-        <h2 className="title">🖧 Select devices</h2>
+
+        <h2 className="title"><img src="/Rack.png" alt="" className="rack-icon-img"/> Select devices</h2>
+        <div className="device-legend" aria-hidden="true">
+          <span className="legend-item"><span className="legend-color spine"/> Spine</span>
+          <span className="legend-item"><span className="legend-color leaf"/> Leaf</span>
+          <span className="legend-item"><span className="legend-color host"/> Host</span>
+        </div>
         <div className="device-list">
           {loadingDevices ? (
               <p>Loading devices...</p>
-              ) : devices.length === 0 ? (
-          <p>No devices found.</p>
+          ) : devices.length === 0 ? (
+              <p>No devices found.</p>
           ) : (
               devices.map((d) => {
                 // identifier for selection
@@ -315,8 +321,9 @@ export default function Reservation({ username }) {
                 const selected = selectedDevices.includes(key);
 
                 // choose icon
-                const icon = (role === 'leaf' || role === 'spine') ? '🖧' : (role === 'host' ? '💻' : '🔹');
-
+                //const icon = (role === 'leaf' || role === 'spine') ? '🖧' : (role === 'host' ? '💻' : '🔹');
+                const icon = (role === 'leaf' || role === 'spine') ?
+                    <img src="/networkSwitch.png" alt="" className="device-icon-img"/> : (role === 'host' ? '💻' : '🔹');
                 return (
                     <label
                         key={key}
