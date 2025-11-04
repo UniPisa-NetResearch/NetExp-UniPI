@@ -1,0 +1,52 @@
+.profile-header {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 25px;
+    width: 100%;
+}
+.profile-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    margin-right: 15px;
+    object-fit: cover;
+}
+.container.home-content {
+    justify-content: flex-start;
+    padding-top: 50px;
+}
+/* style for the key management card */
+.card.key-manager-card {
+    max-width: 800px;
+    padding: 30px;
+    text-align: left;
+}
+.key-manager-card .title {
+    text-align: center;
+    margin-bottom: 25px;
+}
+.key-manager-card h4 {
+    color: var(--text-dark);
+    margin-top: 20px;
+    margin-bottom: 5px;
+}
+.key-manager-card .user-info {
+    margin-bottom: 20px;
+    font-size: 1.1em;
+}
+.key-manager-card .current-key {
+    background-color: #f0f0f0;
+    cursor: default;
+    resize: none;
+}
+.key-manager-card .update-button {
+    width: auto;
+    padding: 10px 20px;
+    margin-top: 15px;
+    background-color: #28a745;
+    display: block;
+}
+.key-manager-card .update-button:hover {
+    background-color: #1e7e34;
+}

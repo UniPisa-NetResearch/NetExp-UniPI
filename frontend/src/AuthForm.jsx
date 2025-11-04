@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import './style/style.css';
+import './style/navbar.css';
 
 const AuthForm = ({ onAuthSuccess }) => {
     const navigate = useNavigate();

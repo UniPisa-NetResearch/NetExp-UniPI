@@ -1,0 +1,296 @@
+.home-content-wrapper {
+    display: flex;
+    gap: 20px;
+    padding: 20px;
+    max-width: 1200px;
+    margin: 0 auto;
+    width: 100%;
+}
+.card .title {
+    margin-bottom: 24px;
+    font-size: 1.6em;
+    font-weight: 700;
+}
+.side-by-side-container {
+    width: 50%;
+    padding: 30px 40px;
+    box-sizing: border-box;
+}
+.rack-icon-img {
+  width: 30px;
+  height: 30px;
+  vertical-align: middle;
+}
+.device-card .device-list {
+  max-height: 500px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+}
+.device-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 5px;
+  font-size: 0.95em;
+  white-space: nowrap;
+}
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 500;
+  margin-right: 15px;
+}
+/* color square */
+.device-legend .legend-color {
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  display: inline-block;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.04) inset;
+}
+.legend-color.spine { background-color: #ffd9a3; }
+.legend-color.leaf  { background-color: #bfe9c5; }
+.legend-color.host  { background-color: #f3e7a8; }
+
+.device-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid #e9ecef;
+  transition: background-color 0.15s, transform 0.08s;
+}
+/* selectable input - visually hidden but accessible, or show checkbox */
+.device-item .device-checkbox {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  cursor: pointer;
+  accent-color: #53ff9e;
+}
+.device-checkbox:hover {
+  accent-color: #5aef9e; /* verde quando selezionato */
+}
+/* icon area */
+.device-item .device-icon {
+  font-size: 1.25em;
+  flex-shrink: 0;
+  width: 28px;
+  text-align: center;
+}
+.device-item .device-icon-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+/* main info (name above, ip below) */
+.device-item .device-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.device-item .device-name {
+  font-weight: 600;
+  font-size: 0.95em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.device-item .device-ip {
+  font-size: 0.85em;
+  color: #555;
+  margin-top: 2px;
+}
+/* background colors by role */
+.device-item.spine {
+  background-color: #fff3e0;
+  border-color: #ffd9a3;
+}
+.device-item.leaf {
+  background-color: #e8f8ea;
+  border-color: #bfe9c5;
+}
+.device-item.host {
+  background-color: #fffbe6;
+  border-color: #f3e7a8;
+}
+.device-item:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+}
+.input-group {
+    margin-bottom: 20px;
+    text-align: left;
+}
+.input-group label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: 600;
+    color: var(--text-dark);
+}
+.input-group select:disabled {
+    background-color: #e9ecef;
+    cursor: not-allowed;
+}
+.input-field[type="date"] {
+  cursor: pointer;
+}
+select {
+  cursor: pointer;
+}
+.input-field[type="date"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+}
+.error-text {
+    color: #dc3545;
+    font-size: 0.9em;
+    margin-top: 5px;
+}
+.reservation-button:disabled {
+    background-color: #90b8e6;
+    cursor: not-allowed;
+}
+.status-message {
+    margin-top: 25px;
+    padding: 15px;
+    border-radius: 4px;
+    font-weight: 500;
+    text-align: center;
+}
+.status-message.success {
+    background-color: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+}
+.status-message.error {
+    background-color: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+}
+.status-message.pending {
+    background-color: #fff3cd;
+    color: #856404;
+    border: 1px solid #ffeeba;
+}
+.conflict-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0 0;
+}
+.conflict-list .conflict-item {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 4px 0;
+  font-size: 0.95em;
+}
+#reservations-card-scrolling {
+    max-height: 500px;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+#user-reservations-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+.reservation-item {
+    width: 100%;
+    margin-bottom: 15px;
+    padding: 10px;
+    border: 1px solid #eee;
+    border-radius: 4px;
+    display: flex;
+    justify-content: space-between;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    box-sizing: border-box;
+    transition: background-color 0.3s;
+}
+.reservation-item.expired {
+    background-color: #f1f1f1;
+    opacity: 0.8;
+}
+.reservation-top-row {
+  display: flex;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+.reservation-info {
+    flex-grow: 1;
+    box-sizing: border-box;
+    text-align: left;
+    font-size: 0.90em;
+    font-weight: 500;
+    line-height: 1.25;
+}
+.reservation-info .date-line {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.reservation-info .date,
+.reservation-info .time {
+    display: inline-block;
+    white-space: nowrap;
+}
+.reservation-info .date-line + .date-line {
+    margin-top: 4px;
+}
+.timer-display-list {
+    font-weight: 700;
+    color: var(--primary-blue);
+    min-width: 95px;
+    text-align: right;
+    font-size: 1em;
+    flex-shrink: 0;
+}
+.timer-display {
+    margin-top: 10px;
+    font-size: 1.2em;
+    font-weight: 700;
+}
+.delete-button {
+    padding: 8px 12px;
+    cursor: pointer;
+    background-color: #dc3545;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    font-size: 0.9em;
+    flex-shrink: 0;
+}
+.delete-button:hover:not(:disabled) {
+    background-color: #a71d2a;
+}
+.delete-button:disabled {
+    background-color: #e3afb0;
+    cursor: not-allowed;
+}
+.reservation-devices {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 0;
+}
+.device-pill {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 12px;
+    background: #eef2ff;
+    color: #3730a3;
+    font-size: 12px;
+    border: 1px solid rgba(55,48,163,0.08);
+}

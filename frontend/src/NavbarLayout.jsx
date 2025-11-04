@@ -1,6 +1,7 @@
 import React from 'react';
 import { useNavigate, Link, useLocation } from 'react-router-dom';
 import './style/style.css';
+import './style/navbar.css';
 
 const navItems = [
     { name: 'Home', path: '/' },
@@ -56,7 +57,7 @@ const NavbarLayout = ({ children, onLogout, showLogoutButton = true }) => {
             </nav>
 
             {/* dynamic content */}
-            <div className="content-area">
+            <div>
                 {children}
             </div>
         </div>

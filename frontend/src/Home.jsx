@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import './style/style.css';
+import './style/home.css';
 
 const UserKeyManager = ({ initialUsername }) => {
     const [currentKey, setCurrentKey] = useState('Loading...');

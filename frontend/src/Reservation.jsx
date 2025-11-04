@@ -1,5 +1,6 @@
-import React, {useState, useEffect, useMemo, useRef} from 'react';
+import React, {useState, useEffect, useMemo} from 'react';
 import './style/style.css';
+//import './style/reservation.css';
 
 // max allowed number of hours for the reservation
 const MAX_HOURS = 72;
@@ -49,7 +50,7 @@ export default function Reservation({ username }) {
   const [endTime, setEndTime] = useState('');
 
   // reservation state
-  const [statusMessage, setStatusMessage] = useState('');       //message after reservation
+  const [statusMessage, setStatusMessage] = useState('');       // message after reservation
   const [isAvailable, setIsAvailable] = useState(null);
   const [timer, setTimer] = useState(null);                            // seconds to next starting reservation
   const [reservations, setReservations] = useState([]);         // reservations information stored in state
@@ -294,7 +295,7 @@ export default function Reservation({ username }) {
   }, [endDate]);
 
   const isFormValid = startDate && startTime && endDate && endTime;
-  const isButtonEnabled = isFormValid && finalDetails && finalDetails.valid && isAvailable === null  && selectedDevices.length >= 2;
+  const isButtonEnabled = isFormValid && finalDetails && finalDetails.valid && isAvailable === null && selectedDevices.length >= 2;
 
   // min/max values for input endDate
   const endMin = startDate || '';
