@@ -12,7 +12,6 @@
 .navbar-logo {
     height: 45px;
 }
-
 .navbar-menu{
     display: flex;
     align-items: center;
@@ -35,19 +34,16 @@
     transition: background-color 0.3s ease, color 0.3s ease;
     font-weight: 500;
 }
-
 .nav-link:hover {
     color: var(--primary-blue-dark);
     background-color: rgba(219, 236, 255, 0.35);
 
 }
-
 .nav-link.active {
     color: var(--primary-blue);
     background-color: rgba(219, 236, 255, 0.25);
     font-weight: 700;
 }
-
 .logout-button{
     padding: 10px 15px;
     background-color: #dc3545;
@@ -58,7 +54,12 @@
     font-size: 14px;
     transition: background-color 0.3s ease;
 }
-
 .logout-button:hover {
     background-color: #a71d2a;
+}
+.active-timer{
+    font-weight: 700;
+    color: var(--primary-blue);
+    font-size: 1em;
+    margin-right: 10px;
 }

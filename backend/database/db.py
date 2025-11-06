@@ -29,6 +29,7 @@ class Reservation(db.Model):
     endDate = db.Column(db.Date, nullable=False)
     startTime = db.Column(db.Time, nullable=False)
     endTime = db.Column(db.Time, nullable=False)
+    token = db.Column(db.String(255), nullable=True, default=None)
 
 
     def __repr__(self):

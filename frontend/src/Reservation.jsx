@@ -1,6 +1,6 @@
 import React, {useState, useEffect, useMemo} from 'react';
 import './style/style.css';
-//import './style/reservation.css';
+import './style/reservation.css';
 
 // max allowed number of hours for the reservation
 const MAX_HOURS = 72;
@@ -431,11 +431,13 @@ export default function Reservation({ username }) {
               const startDateObj = new Date(res.startDate);
               const endDateObj = new Date(res.endDate);
               const remainingMs = startDateObj.getTime() - now;
-              const isPast = remainingMs <= 0;
+               const isActive = remainingMs <= 0 &&
+                   endDateObj.getTime() > now;
+              const isExpired = endDateObj.getTime() <= now;
               const resDevices = Array.isArray(res.devices) ? res.devices : [];
               return (
                   <li key={res.id} id={`reservation-item-${res.id}`}
-                      className={`reservation-item ${isPast ? 'expired' : ''}`}>
+                      className={`reservation-item ${isExpired ? 'expired' : isActive ? 'active' : ''}`}>
                     <div className="reservation-top-row">
                       <span className="reservation-info">
                         <div className="date-line start">
@@ -449,9 +451,9 @@ export default function Reservation({ username }) {
                       </span>
 
                       <span id={`timer-${res.id}`}
-                            className="timer-display-list">{isPast ? '--:--' : formatDuration(remainingMs)}</span>
+                            className="timer-display-list">{isActive || isExpired ? '--:--' : formatDuration(remainingMs)}</span>
 
-                      <button id={`delete-btn-${res.id}`} className="delete-button" disabled={isPast || res.deleting}
+                      <button id={`delete-btn-${res.id}`} className="delete-button" disabled={isActive || isExpired || res.deleting}
                               onClick={() => deleteReservation(res.id)} data-reservation-id={res.id}>
                         {res.deleting ? 'Deleting...' : 'Delete'}
                       </button>

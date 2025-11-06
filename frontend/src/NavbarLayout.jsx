@@ -47,6 +47,7 @@ const NavbarLayout = ({ children, onLogout, showLogoutButton = true }) => {
                 </div>
 
                 <div className="navbar-menu">
+                    <div className="active-timer">--:--</div>
                     {/* logout button is visible only in Home page*/}
                     {showLogoutButton && (
                         <button onClick={handleLogout} className="logout-button">

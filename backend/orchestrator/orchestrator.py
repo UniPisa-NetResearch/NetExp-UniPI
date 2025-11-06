@@ -1,10 +1,15 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+
+from backend.orchestrator.orchestrator_jobs import reservation_start_job, reservation_end_job
 from ..database.db import db, Reservation, ReservationDevice
 from datetime import datetime
 from sqlalchemy import tuple_, and_, text
+from sqlalchemy.exc import SQLAlchemyError
 import os
 import pynetbox
+from redis import Redis
+from rq import Queue
 
 app = Flask(__name__)
 
@@ -29,6 +34,7 @@ db.init_app(app)
 # enable CORS for development frontend
 CORS(app, resources={r"/api/*": {"origins": "http://localhost:5173"}}) #address for local development
 
+queue = Queue(connection=Redis())
 
 def _find_site(site_identifier):
 
@@ -52,7 +58,7 @@ def serialize_reservation(reservation):
     try:
         res_dev = ReservationDevice.query.filter_by(reservation_id=reservation.id).all()
         devices = [rd.asset_tag for rd in res_dev]
-    except Exception:
+    except SQLAlchemyError:
         devices = []
 
     return {
@@ -189,28 +195,46 @@ def check_reservation():
         startDate=start_dt.date(),
         endDate=end_dt.date(),
         startTime=start_dt.time().replace(second=0, microsecond=0),
-        endTime=end_dt.time().replace(second=0, microsecond=0)
+        endTime=end_dt.time().replace(second=0, microsecond=0),
+        token=None
     )
 
     db.session.add(new_res)
     try:
         # flush to assign new_res.id to create child rows (commit not already done)
         db.session.flush()
+        # take new reservation id
+        reservation_id = new_res.id
 
-        # create ReservationDevice rows (se normalized_devices non vuoto)
+        # create ReservationDevice rows
         for at in devices:
             rd = ReservationDevice(
-                reservation_id=new_res.id,
+                reservation_id=reservation_id,
                 asset_tag=at
             )
             db.session.add(rd)
 
         db.session.commit()
-        print("Reservation created id=%s user=%s devices=%s", new_res.id, username, devices)
+
+        # job scheduling
+        # each start job has an id like: res-12-start
+        start_job_id = f"res-{reservation_id}-start"
+        print("arriva?")
+        # end job scheduled at the same hour of start job has major priority (5 better priority than 10) end job must be executed before next start job
+        queue.enqueue_at(start_dt, reservation_start_job,reservation_id, job_id=start_job_id, priority=10)
+        print(f"Start job {start_job_id} scheduled for {start_dt}")
+
+        # each end job has an id like: res-12-end
+        end_job_id = f"res-{reservation_id}-end"
+
+        queue.enqueue_at(end_dt, reservation_end_job,reservation_id, job_id=end_job_id, priority=5)
+        print(f"End job {end_job_id} scheduled for {end_dt}")
+
+        print("Reservation created id=%s user=%s devices=%s",  reservation_id, username, devices)
         return jsonify({
             "ok": True,
             "message": "Reservation created",
-            "id": new_res.id,
+            "id": reservation_id,
             "start": f"{start_date} {start_time}",
             "end": f"{end_date} {end_time}"
         }), 201
@@ -261,6 +285,20 @@ def delete_reservation():
                 "message": "Cannot delete: reservation is already in progress or has finished."
             }), 403  # HTTP 403 Forbidden
 
+        start_job_id = f"res-{reservation_id}-start"
+        end_job_id = f"res-{reservation_id}-end"
+
+        start_job = queue.fetch_job(start_job_id)
+        # check if job is scheduled
+        if start_job and start_job.is_scheduled:
+            start_job.cancel()
+            print(f"job start {start_job_id} cancelled.")
+
+        end_job = queue.fetch_job(end_job_id)
+        if end_job and end_job.is_scheduled:
+            end_job.cancel()
+            app.logger.info(f"job end {end_job_id} cancelled.")
+
         db.session.delete(reservation_to_delete)
         db.session.commit()
 
@@ -300,7 +338,35 @@ def delete_reservation():
         app.logger.error(f"Error deleting reservation {reservation_id}: {e}")
         return jsonify({"message": "Internal server error"}), 500
 
-if __name__ == '__main__':
 
+def remove_all_scheduled_jobs():
+
+    # get all  scheduled job ID
+    scheduled_job_ids = queue.scheduled_job_registry.get_job_ids()
+
+    if not scheduled_job_ids:
+        print("No scheduled job found")
+        return 0
+
+    jobs_removed = 0
+    print(f"Found {len(scheduled_job_ids)} scheduled job. Removing...")
+
+    for job_id in scheduled_job_ids:
+        try:
+            # retrieve job
+            job = queue.fetch_job(job_id)
+            if job:
+                # remove job from Redis
+                job.cancel()
+                jobs_removed += 1
+
+        except Exception as e:
+            print(f"Error during job elimination{job_id}: {e}")
+
+    print(f"Elimination completed. {jobs_removed}  scheduled job removed.")
+    return jobs_removed
+
+if __name__ == '__main__':
+    #remove_all_scheduled_jobs()
     # host 0.0.0.0 often necessary in virtual environments or containers.
     app.run(debug=True, host='0.0.0.0', port=5001)

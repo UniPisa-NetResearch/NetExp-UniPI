@@ -9,7 +9,7 @@ DB_PASSWORD = 'root'
 DB_HOST = 'localhost'
 DB_NAME = 'netexp_db'
 
-SUPPORTED_KEY_TYPES = ['ssh-ed25519', 'ssh-rsa', 'ecdsa-sha2-nistp256']
+SUPPORTED_KEY_TYPES = ['ssh-ed25519', 'ssh-rsa']
 
 app.config['SQLALCHEMY_DATABASE_URI'] = f'postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:5432/{DB_NAME}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False

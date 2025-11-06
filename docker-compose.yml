@@ -55,6 +55,12 @@ services:
     volumes:
       - netbox_media:/opt/netbox/netbox/media
 
+  rq-redis:
+    image: redis:6-alpine
+    ports:
+      - "6379:6379"
+    command: [ "redis-server", "--save", "", "--appendonly", "no" ]
+
 volumes:
   postgres_data:
     driver: local
@@ -63,4 +69,6 @@ volumes:
   netbox_redis_data:
     driver: local
   netbox_media:
+    driver: local
+  rq_redis_data:
     driver: local
