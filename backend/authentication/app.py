@@ -61,7 +61,7 @@ def login():
     user = User.query.filter_by(username=username).first()
 
     if user and user.check_password(password):
-        return jsonify({"message": "Login successful", "username": user.username}), 200
+        return jsonify({"message": "Login successful", "user_id": user.id, "username": user.username}), 200
     else:
         return jsonify({"message": "Invalid username or password"}), 401
 
@@ -96,7 +96,7 @@ def signup():
     db.session.add(new_user)
     try:
         db.session.commit()
-        return jsonify({"message": "Registration successful. You can now log in."}), 201
+        return jsonify({"message": "Registration successful. You can now log in.", "user_id": new_user.id, "username": new_user.username}), 201
     except Exception as ex:
         db.session.rollback()
         # DB error

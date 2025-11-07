@@ -7,3 +7,5 @@ sqlalchemy~=2.0.25
 pynetbox~=7.5.0
 redis~=6.4.0
 rq~=2.6.0
+flask-socketio~=5.5.1
+eventlet~=0.40.3

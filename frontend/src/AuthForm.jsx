@@ -37,7 +37,7 @@ const AuthForm = ({ onAuthSuccess }) => {
                 // Success
                 setMessage(`Success: ${data.message}`);
 
-                onAuthSuccess(username); // update status in App.jsx
+                onAuthSuccess({username: data.username, user_id: data.user_id}); // update status in App.jsx
                 navigate('/');          // redirect to the Home (URL '/')
                 setUsername('');
                 setPassword('');

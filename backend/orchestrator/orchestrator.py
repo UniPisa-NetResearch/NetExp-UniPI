@@ -1,6 +1,8 @@
+import eventlet
+eventlet.monkey_patch()
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-
+from .orchestrator_ws_server import socketio
 from backend.orchestrator.orchestrator_jobs import reservation_start_job, reservation_end_job
 from ..database.db import db, Reservation, ReservationDevice
 from datetime import datetime
@@ -30,6 +32,8 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'connect_args': {'connect_timeout': 1
 nb = pynetbox.api(NETBOX_URL, token=NETBOX_TOKEN)
 
 db.init_app(app)
+
+socketio.init_app(app, cors_allowed_origins="http://localhost:5173")
 
 # enable CORS for development frontend
 CORS(app, resources={r"/api/*": {"origins": "http://localhost:5173"}}) #address for local development
@@ -369,4 +373,5 @@ def remove_all_scheduled_jobs():
 if __name__ == '__main__':
     #remove_all_scheduled_jobs()
     # host 0.0.0.0 often necessary in virtual environments or containers.
-    app.run(debug=True, host='0.0.0.0', port=5001)
+    #app.run(debug=True, host='0.0.0.0', port=5001)
+    socketio.run(app, debug=True, host='0.0.0.0', port=5001, use_reloader=False)
