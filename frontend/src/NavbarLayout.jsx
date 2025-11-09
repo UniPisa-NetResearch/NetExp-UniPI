@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate, Link, useLocation } from 'react-router-dom';
 import './style/style.css';
 import './style/navbar.css';
@@ -20,13 +20,67 @@ const isLinkActive = (itemPath, currentPath) => {
 };
 
 // this component will receive teh children component to show (Home, Reservation, etc)
-const NavbarLayout = ({ children, onLogout, showLogoutButton = true }) => {
+const NavbarLayout = ({ children, onLogout, showLogoutButton = true,   isReservationActive = false, activeReservationExpiration = null }) => {
     const location = useLocation();
     const navigate = useNavigate();
 
     const handleLogout = () => {
         onLogout();
         navigate('/login');
+    };
+
+    // timer display state
+    const [timerDisplay, setTimerDisplay] = useState('--:--');
+
+    useEffect(() => {
+        let intervalId = null;
+
+        const updateTimer = () => {
+        if (!isReservationActive || !activeReservationExpiration) {
+            setTimerDisplay('--:--');
+            return;
+        }
+
+        // parse expiration
+        const expires = new Date(activeReservationExpiration)
+
+        const diffMs = expires.getTime() - Date.now();
+        const diffSec = Math.max(0, Math.floor(diffMs / 1000));
+
+        if (diffSec <= 0) {
+            setTimerDisplay('--:--');
+            return;
+        }
+
+        const hours = Math.floor(diffSec / 3600);
+        const minutes = Math.floor((diffSec % 3600) / 60);
+        const seconds = diffSec % 60;
+
+        const pad = (n) => n.toString().padStart(2, '0');
+        const formatted = hours > 0 ? `${pad(hours)}:${pad(minutes)}:${pad(seconds)}` : `${pad(minutes)}:${pad(seconds)}`;
+        setTimerDisplay(formatted);
+        };
+
+        // initial update
+        updateTimer();
+
+        if (isReservationActive && activeReservationExpiration) {
+            intervalId = setInterval(updateTimer, 1000);
+        }
+
+        return () => {
+            if (intervalId) clearInterval(intervalId);
+        };
+    }, [isReservationActive, activeReservationExpiration]);
+
+
+    const handleNavClick = (e, item) => {
+        // block navigation to configuration if there is no active reservation/token
+        if (item.path === '/configuration' && !isReservationActive) {
+            e.preventDefault();
+            // give feedback and remain on current page
+            alert('Access denied: you do not have an active reservation token');
+        }
     };
 
     return (
@@ -39,6 +93,7 @@ const NavbarLayout = ({ children, onLogout, showLogoutButton = true }) => {
                         <Link
                             key={item.name}
                             to={item.path}
+                            onClick={(e) => handleNavClick(e, item)}
                             className={`nav-link ${isLinkActive(item.path, location.pathname) ? 'active' : ''}`}
                         >
                             {item.name}
@@ -47,7 +102,7 @@ const NavbarLayout = ({ children, onLogout, showLogoutButton = true }) => {
                 </div>
 
                 <div className="navbar-menu">
-                    <div className="active-timer">--:--</div>
+                    <div className="active-timer">{timerDisplay}</div>
                     {/* logout button is visible only in Home page*/}
                     {showLogoutButton && (
                         <button onClick={handleLogout} className="logout-button">

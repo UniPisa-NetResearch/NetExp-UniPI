@@ -342,6 +342,47 @@ def delete_reservation():
         app.logger.error(f"Error deleting reservation {reservation_id}: {e}")
         return jsonify({"message": "Internal server error"}), 500
 
+@app.route('/api/orchestrator/activeReservationStatus', methods=['POST'])
+def get_active_reservation_status():
+    # Check if the user has an active reservation token.
+
+    data = request.get_json() or {}
+    username = data.get('username')
+
+    if not username:
+        return jsonify({"ok": False, "message": "Missing username"}), 400
+
+    now = datetime.now()
+    now_tuple = (now.date(), now.time().replace(second=0, microsecond=0))
+
+    # res_end > now & now > res_start (reservation is currently active)
+    start_condition = tuple_(Reservation.startDate, Reservation.startTime) < now_tuple
+    end_condition = tuple_(Reservation.endDate, Reservation.endTime) > now_tuple
+    # check for an ACTIVE reservation (token assigned AND not ended yet)
+    active_reservation = Reservation.query.filter(
+        and_(
+            Reservation.username == username,
+            Reservation.token.isnot(None),
+            start_condition,
+            end_condition
+        )
+    ).order_by(Reservation.startDate.desc(), Reservation.startTime.desc()).first()
+
+    if active_reservation:
+        return jsonify({
+            "ok": True,
+            "isActive": True,
+            "token": active_reservation.token,
+            "reservation_id": active_reservation.id,
+            # SO string: YYYY-MM-DDTHH:MM:SS
+            "expires_at": f"{active_reservation.endDate.isoformat()}T{active_reservation.endTime.strftime('%H:%M:%S')}"
+        }), 200
+
+    # no active reservation
+    return jsonify({
+        "ok": True,
+        "isActive": False
+    }), 200
 
 def remove_all_scheduled_jobs():
 

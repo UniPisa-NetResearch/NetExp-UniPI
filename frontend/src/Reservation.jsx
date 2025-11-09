@@ -42,7 +42,7 @@ const calculateEndTimeDetails = (startDate, startTime, endDate, endTime) => {
   return { valid: true, start: startDateTime, end: endDateTime };
 };
 
-export default function Reservation({ username }) {
+export default function Reservation({ username, isReservationActive }) {
   // form data state
   const [startDate, setStartDate] = useState('');
   const [startTime, setStartTime] = useState('');
@@ -437,7 +437,7 @@ export default function Reservation({ username }) {
               const resDevices = Array.isArray(res.devices) ? res.devices : [];
               return (
                   <li key={res.id} id={`reservation-item-${res.id}`}
-                      className={`reservation-item ${isExpired ? 'expired' : isActive ? 'active' : ''}`}>
+                      className={`reservation-item ${isExpired || !isReservationActive ? 'expired' : isActive ? 'active' : ''}`}>
                     <div className="reservation-top-row">
                       <span className="reservation-info">
                         <div className="date-line start">
