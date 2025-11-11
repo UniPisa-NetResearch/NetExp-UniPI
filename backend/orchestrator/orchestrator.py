@@ -1,42 +1,28 @@
 import eventlet
 eventlet.monkey_patch()
-from flask import Flask, jsonify, request
-from flask_cors import CORS
+from flask import jsonify, request
 from .orchestrator_ws_server import socketio
 from backend.orchestrator.orchestrator_jobs import reservation_start_job, reservation_end_job
 from ..database.db import db, Reservation, ReservationDevice
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from sqlalchemy import tuple_, and_, text
 from sqlalchemy.exc import SQLAlchemyError
 import os
 import pynetbox
 from redis import Redis
 from rq import Queue
-
-app = Flask(__name__)
+from app import app
 
 NETBOX_URL = os.getenv("NETBOX_URL", "http://localhost:8080")
 NETBOX_TOKEN = os.getenv("NETBOX_TOKEN", "6152fbb91529522c72307b194a690c4ca5253e93")
 
-DB_USER = 'root'
-DB_PASSWORD = 'root'
-DB_HOST = 'localhost'
-DB_NAME = 'netexp_db'
-
 MAX_HOURS = 72
-
-app.config['SQLALCHEMY_DATABASE_URI'] = f'postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:5432/{DB_NAME}'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'connect_args': {'connect_timeout': 10}}
+TEST = True
 
 nb = pynetbox.api(NETBOX_URL, token=NETBOX_TOKEN)
 
-db.init_app(app)
-
 socketio.init_app(app, cors_allowed_origins="http://localhost:5173")
-
-# enable CORS for development frontend
-CORS(app, resources={r"/api/*": {"origins": "http://localhost:5173"}}) #address for local development
 
 queue = Queue(connection=Redis())
 
@@ -142,11 +128,38 @@ def check_reservation():
         return jsonify({"ok": False, "message": "Missing fields"}), 400
 
     # parsing in datetime
-    try:
-        start_dt = datetime.strptime(f"{start_date} {start_time}", "%Y-%m-%d %H:%M")
-        end_dt = datetime.strptime(f"{end_date} {end_time}", "%Y-%m-%d %H:%M")
-    except ValueError:
-        return jsonify({"ok": False, "message": "Invalid date/time format"}), 400
+    if TEST:
+
+        now = datetime.now()
+        future_start_dt = now.replace(second=0, microsecond=0) + timedelta(minutes=2)
+        start_dt = future_start_dt
+        end_dt = start_dt + timedelta(minutes=2)
+        # necessary for date mismatch
+        now = datetime.now().astimezone(ZoneInfo("Europe/Rome"))
+        future_start_dt = (now.replace(second=0, microsecond=0) + timedelta(minutes=2))
+        start_dt_utc = future_start_dt.astimezone(timezone.utc)
+        end_dt_utc = start_dt_utc + timedelta(minutes=2) - timedelta(seconds=1)   # -1 second to execute an end job before a start job scheduled at the same hour
+
+        print("start_date = ", start_dt.strftime("%Y-%m-%d"))
+        print("start_time = ", start_dt.strftime("%H:%M"))
+        print("end_date = ", end_dt.strftime("%Y-%m-%d"))
+        print("end_time = ", end_dt.strftime("%H:%M"))
+
+    else:
+        try:
+            start_dt = datetime.strptime(f"{start_date} {start_time}", "%Y-%m-%d %H:%M")
+            end_dt = datetime.strptime(f"{end_date} {end_time}", "%Y-%m-%d %H:%M")
+            # format date for RQ
+            rome_tz = ZoneInfo("Europe/Rome")
+            temp_start_dt = start_dt
+            temp_end_dt = end_dt
+
+            start_dt_utc = temp_start_dt.replace(tzinfo=rome_tz).astimezone(timezone.utc)
+            end_dt_utc = temp_end_dt.replace(tzinfo=rome_tz).astimezone(timezone.utc)
+            end_dt_utc = end_dt_utc - timedelta(seconds=1)     # -1 second to execute an end job before a start job scheduled at the same hour
+
+        except ValueError:
+            return jsonify({"ok": False, "message": "Invalid date/time format"}), 400
 
     # valid durations: >0 e <= MAX_HOURS
     delta_seconds = (end_dt - start_dt).total_seconds()
@@ -223,15 +236,14 @@ def check_reservation():
         # job scheduling
         # each start job has an id like: res-12-start
         start_job_id = f"res-{reservation_id}-start"
-        print("arriva?")
-        # end job scheduled at the same hour of start job has major priority (5 better priority than 10) end job must be executed before next start job
-        queue.enqueue_at(start_dt, reservation_start_job,reservation_id, job_id=start_job_id, priority=10)
+        # start_dt_utc to avoid date mismatch
+        queue.enqueue_at(start_dt_utc, reservation_start_job,reservation_id, job_id=start_job_id)
         print(f"Start job {start_job_id} scheduled for {start_dt}")
 
         # each end job has an id like: res-12-end
         end_job_id = f"res-{reservation_id}-end"
-
-        queue.enqueue_at(end_dt, reservation_end_job,reservation_id, job_id=end_job_id, priority=5)
+        # end_dt_utc to avoid date mismatch
+        queue.enqueue_at(end_dt_utc, reservation_end_job,reservation_id, job_id=end_job_id)
         print(f"End job {end_job_id} scheduled for {end_dt}")
 
         print("Reservation created id=%s user=%s devices=%s",  reservation_id, username, devices)
@@ -291,13 +303,13 @@ def delete_reservation():
 
         start_job_id = f"res-{reservation_id}-start"
         end_job_id = f"res-{reservation_id}-end"
-
+        # retrieve job from the queue
         start_job = queue.fetch_job(start_job_id)
         # check if job is scheduled
         if start_job and start_job.is_scheduled:
             start_job.cancel()
             print(f"job start {start_job_id} cancelled.")
-
+        # retrieve job from the queue
         end_job = queue.fetch_job(end_job_id)
         if end_job and end_job.is_scheduled:
             end_job.cancel()
@@ -410,6 +422,39 @@ def remove_all_scheduled_jobs():
 
     print(f"Elimination completed. {jobs_removed}  scheduled job removed.")
     return jobs_removed
+
+"""
+def remove_all_scheduled_jobs():
+    # get all  scheduled job ID
+    queue_names = ['default', 'high']
+    jobs_removed = 0
+    jobs_found = 0
+    for qname in queue_names:
+        q = Queue(name=qname, connection=Redis())
+        scheduled_job_ids = q.scheduled_job_registry.get_job_ids()
+
+        if not scheduled_job_ids:
+            print("No scheduled job found")
+            return 0
+
+        print(f"[{qname}] Found {len(scheduled_job_ids)} scheduled job. Removing...")
+        jobs_found += len(scheduled_job_ids)
+
+        for job_id in scheduled_job_ids:
+            try:
+                # retrieve job
+                job = q.fetch_job(job_id)
+                if job:
+                    # remove job from Redis
+                    job.cancel()
+                    jobs_removed += 1
+
+            except Exception as e:
+                print(f"Error during job elimination{job_id}: {e}")
+
+    print(f"Elimination completed. {jobs_removed}  scheduled job removed.")
+    return jobs_removed
+"""
 
 if __name__ == '__main__':
     #remove_all_scheduled_jobs()

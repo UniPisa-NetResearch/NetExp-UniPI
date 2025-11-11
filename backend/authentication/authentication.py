@@ -1,27 +1,9 @@
-from flask import Flask, jsonify, request
-from flask_cors import CORS
+from flask import jsonify, request
 from ..database.db import db, User
 import base64
-app = Flask(__name__)
-
-DB_USER = 'root'
-DB_PASSWORD = 'root'
-DB_HOST = 'localhost'
-DB_NAME = 'netexp_db'
+from app import app
 
 SUPPORTED_KEY_TYPES = ['ssh-ed25519', 'ssh-rsa']
-
-app.config['SQLALCHEMY_DATABASE_URI'] = f'postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:5432/{DB_NAME}'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-# Aumenta timeout per connessioni lente in caso di avvio DB
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'connect_args': {'connect_timeout': 10}}
-
-with app.app_context():
-    db.init_app(app)
-
-# enable CORS for development frontend, it is limited only for api endpoints
-# in this way, react app can call flask methods
-CORS(app, resources={r"/api/*": {"origins": "http://localhost:5173"}}) #address for local development
 
 def check_ssh_key(ssh_key):
     # separate the key elements

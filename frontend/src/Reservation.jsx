@@ -431,8 +431,7 @@ export default function Reservation({ username, isReservationActive }) {
               const startDateObj = new Date(res.startDate);
               const endDateObj = new Date(res.endDate);
               const remainingMs = startDateObj.getTime() - now;
-               const isActive = remainingMs <= 0 &&
-                   endDateObj.getTime() > now;
+               const isActive = remainingMs <= 0 && endDateObj.getTime() > now;
               const isExpired = endDateObj.getTime() <= now;
               const resDevices = Array.isArray(res.devices) ? res.devices : [];
               return (
