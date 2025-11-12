@@ -19,7 +19,7 @@ NETBOX_URL = os.getenv("NETBOX_URL", "http://localhost:8080")
 NETBOX_TOKEN = os.getenv("NETBOX_TOKEN", "6152fbb91529522c72307b194a690c4ca5253e93")
 
 MAX_HOURS = 72
-TEST = True
+TEST = False
 EXPERIMENT_DURATION = 2        #expressed in minutes
 
 nb = pynetbox.api(NETBOX_URL, token=NETBOX_TOKEN)
@@ -33,7 +33,7 @@ def _redis_listener():
     print("Subscribed to reservation_events channel")
     for message in pubsub.listen():
         try:
-            data = json.loads(message['data'])
+            data = json.loads(message['data'])           #read data sent from jobs
         except Exception as e:
             print("Bad message from redis:", e, message)
             continue
@@ -152,14 +152,13 @@ def check_reservation():
     if not all([username, start_date, start_time, end_date, end_time]):
         return jsonify({"ok": False, "message": "Missing fields"}), 400
 
-    # parsing in datetime
+    # if true, create a reservation from now + 2 minutes (start) to start + EXPERIMENT_DURATION
     if TEST:
 
         now = datetime.now()
-        future_start_dt = now.replace(second=0, microsecond=0) + timedelta(minutes=2)
-        start_dt = future_start_dt
+        start_dt = now.replace(second=0, microsecond=0) + timedelta(minutes=2)
         end_dt = start_dt + timedelta(minutes=EXPERIMENT_DURATION)
-        # necessary for date mismatch
+        # necessary for date mismatch between server and redis
         now = datetime.now().astimezone(ZoneInfo("Europe/Rome"))
         future_start_dt = (now.replace(second=0, microsecond=0) + timedelta(minutes=2))
         start_dt_utc = future_start_dt.astimezone(timezone.utc)

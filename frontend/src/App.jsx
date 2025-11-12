@@ -7,11 +7,11 @@ import Home from './Home.jsx';
 import Reservation from './Reservation.jsx';
 import Configuration from './Configuration.jsx';
 
-const ConfigurationGuard = ({ isReservationActive, children }) => {
+const ConfigurationGuard = ({ isReservationPermitted, children }) => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (!isReservationActive) {
+    if (!isReservationPermitted) {
        alert('Access denied: you do not have an active reservation token');
       // go back in the chronology
       // if chronology miss, go back to home
@@ -21,9 +21,9 @@ const ConfigurationGuard = ({ isReservationActive, children }) => {
         navigate('/', { replace: true });
       }
     }
-  }, [isReservationActive, navigate]);
+  }, [isReservationPermitted, navigate]);
 
-  if (!isReservationActive) {
+  if (!isReservationPermitted) {
     return null;
   }
   return children;
@@ -72,11 +72,9 @@ function App() {
                 if (data.isActive) {
                     setIsReservationActive(true);
                     setActiveReservationExpiration(data.expires_at);
-                    console.log("active reservation");
                 } else {
                     setIsReservationActive(false);
                     setActiveReservationExpiration(null);
-                    console.log("non active reservation");
                 }
             } else {
                 console.error("Error checking reservation status: ", data.message);
@@ -148,7 +146,6 @@ function App() {
 
         socket.on("connect", () => {
           console.log("[socket] connected: ", socket.id);
-          //socket.emit("identify", { user_id: currentUserId, username: currentUser });
           socket.emit("identify", /** @type {any} */ ({ user_id: currentUserId, username: currentUser }));
         });
 
@@ -158,7 +155,6 @@ function App() {
 
         socket.on("identify_ack", (ack) => {
           console.log("[socket] identify_ack: ", ack);
-          // dopo ack effettua controllo endpoint per aggiornamenti in caso di client offline
         });
 
         socket.on("reservation_event", handleReservationEvent);

@@ -1,5 +1,5 @@
 from flask_socketio import SocketIO
-
+# shared orchestrator socket instance
 socketio = SocketIO(
     #logger=True,
     cors_allowed_origins="http://localhost:5173",
