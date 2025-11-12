@@ -1,6 +1,6 @@
 from flask import Flask
 from flask_cors import CORS
-from database.db import db
+from backend.database.db import db
 
 DB_USER = 'root'
 DB_PASSWORD = 'root'

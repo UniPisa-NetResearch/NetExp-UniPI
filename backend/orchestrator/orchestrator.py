@@ -1,7 +1,7 @@
 import eventlet
 eventlet.monkey_patch()
 from flask import jsonify, request
-from .orchestrator_ws_server import socketio
+from backend.orchestrator.socketio_instance import socketio
 from backend.orchestrator.orchestrator_jobs import reservation_start_job, reservation_end_job
 from ..database.db import db, Reservation, ReservationDevice
 from datetime import datetime, timedelta, timezone
@@ -12,18 +12,19 @@ import os
 import pynetbox
 from redis import Redis
 from rq import Queue
-from app import app
+from ..app import app
 
 NETBOX_URL = os.getenv("NETBOX_URL", "http://localhost:8080")
 NETBOX_TOKEN = os.getenv("NETBOX_TOKEN", "6152fbb91529522c72307b194a690c4ca5253e93")
 
 MAX_HOURS = 72
 TEST = True
+EXPERIMENT_DURATION = 2        #expressed in minutes
 
 nb = pynetbox.api(NETBOX_URL, token=NETBOX_TOKEN)
 
 socketio.init_app(app, cors_allowed_origins="http://localhost:5173")
-
+# to create a new queue with a specific name use: Queue(name='high', connection=Redis())
 queue = Queue(connection=Redis())
 
 def _find_site(site_identifier):
@@ -133,12 +134,12 @@ def check_reservation():
         now = datetime.now()
         future_start_dt = now.replace(second=0, microsecond=0) + timedelta(minutes=2)
         start_dt = future_start_dt
-        end_dt = start_dt + timedelta(minutes=2)
+        end_dt = start_dt + timedelta(minutes=EXPERIMENT_DURATION)
         # necessary for date mismatch
         now = datetime.now().astimezone(ZoneInfo("Europe/Rome"))
         future_start_dt = (now.replace(second=0, microsecond=0) + timedelta(minutes=2))
         start_dt_utc = future_start_dt.astimezone(timezone.utc)
-        end_dt_utc = start_dt_utc + timedelta(minutes=2) - timedelta(seconds=1)   # -1 second to execute an end job before a start job scheduled at the same hour
+        end_dt_utc = start_dt_utc + timedelta(minutes=EXPERIMENT_DURATION) - timedelta(seconds=1)   # -1 second to execute an end job before a start job scheduled at the same hour
 
         print("start_date = ", start_dt.strftime("%Y-%m-%d"))
         print("start_time = ", start_dt.strftime("%H:%M"))
@@ -368,8 +369,9 @@ def get_active_reservation_status():
     now_tuple = (now.date(), now.time().replace(second=0, microsecond=0))
 
     # res_end > now & now > res_start (reservation is currently active)
-    start_condition = tuple_(Reservation.startDate, Reservation.startTime) < now_tuple
-    end_condition = tuple_(Reservation.endDate, Reservation.endTime) > now_tuple
+    start_condition = tuple_(Reservation.startDate, Reservation.startTime) <= now_tuple
+    end_condition = tuple_(Reservation.endDate, Reservation.endTime) >= now_tuple
+
     # check for an ACTIVE reservation (token assigned AND not ended yet)
     active_reservation = Reservation.query.filter(
         and_(

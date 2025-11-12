@@ -1,15 +1,7 @@
-from flask_socketio import SocketIO
+from backend.orchestrator.socketio_instance import socketio
 from flask import request
 from flask_socketio import emit, join_room, leave_room, disconnect
 from ..database.db import User
-
-socketio = SocketIO(
-    logger=True,
-    engineio_logger=True,
-    cors_allowed_origins="http://localhost:5173",
-    #message_queue='redis://localhost:6379',
-    async_mode='eventlet'
-)
 
 @socketio.on('connect')
 def handle_connect():

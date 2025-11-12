@@ -72,9 +72,11 @@ function App() {
                 if (data.isActive) {
                     setIsReservationActive(true);
                     setActiveReservationExpiration(data.expires_at);
+                    console.log("active reservation");
                 } else {
                     setIsReservationActive(false);
                     setActiveReservationExpiration(null);
+                    console.log("non active reservation");
                 }
             } else {
                 console.error("Error checking reservation status: ", data.message);

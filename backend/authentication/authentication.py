@@ -1,7 +1,7 @@
 from flask import jsonify, request
 from ..database.db import db, User
 import base64
-from app import app
+from ..app import app
 
 SUPPORTED_KEY_TYPES = ['ssh-ed25519', 'ssh-rsa']
 

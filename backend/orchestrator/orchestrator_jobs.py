@@ -1,7 +1,7 @@
 import uuid
 from ..database.db import db, Reservation, User
-from .orchestrator_ws_server import socketio
-from app import create_app
+from ..app import create_app
+from backend.orchestrator.socketio_instance import socketio
 
 def reservation_start_job(reservation_id):
     app = create_app()
