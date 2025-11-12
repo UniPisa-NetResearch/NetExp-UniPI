@@ -12,6 +12,7 @@ import os
 import pynetbox
 from redis import Redis
 from rq import Queue
+import json
 from ..app import app
 
 NETBOX_URL = os.getenv("NETBOX_URL", "http://localhost:8080")
@@ -23,7 +24,30 @@ EXPERIMENT_DURATION = 2        #expressed in minutes
 
 nb = pynetbox.api(NETBOX_URL, token=NETBOX_TOKEN)
 
+REDIS_URL = "redis://localhost:6379"
+redis = Redis.from_url(REDIS_URL)
+# listener function for messages published by start and end reservation jobs
+def _redis_listener():
+    pubsub = redis.pubsub(ignore_subscribe_messages=True)
+    pubsub.subscribe("reservation_events")
+    print("Subscribed to reservation_events channel")
+    for message in pubsub.listen():
+        try:
+            data = json.loads(message['data'])
+        except Exception as e:
+            print("Bad message from redis:", e, message)
+            continue
+
+        # dispatch to room (es. 'user:2')
+        user_room = f"user:{data.get('user_id')}"
+        print("Redis -> emit to", user_room, data)
+        # emit reservation event to the client in the connected user room
+        socketio.emit("reservation_event", data, room=user_room)
+
 socketio.init_app(app, cors_allowed_origins="http://localhost:5173")
+import backend.orchestrator.orchestrator_ws_server                          # necessary to import socket handler after socketio initialization
+eventlet.spawn(_redis_listener)
+
 # to create a new queue with a specific name use: Queue(name='high', connection=Redis())
 queue = Queue(connection=Redis())
 
