@@ -9,3 +9,4 @@ redis~=6.4.0
 rq~=2.6.0
 flask-socketio~=5.5.1
 eventlet~=0.40.3
+requests~=2.31.0

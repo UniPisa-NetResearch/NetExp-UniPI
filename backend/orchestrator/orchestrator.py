@@ -3,7 +3,7 @@ eventlet.monkey_patch()
 from flask import jsonify, request
 from backend.orchestrator.socketio_instance import socketio
 from backend.orchestrator.orchestrator_jobs import reservation_start_job, reservation_end_job
-from ..database.db import db, Reservation, ReservationDevice
+from ..database.db import db, User, Reservation, ReservationDevice
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from sqlalchemy import tuple_, and_, text
@@ -13,19 +13,117 @@ import pynetbox
 from redis import Redis
 from rq import Queue
 import json
+import requests
 from ..app import app
 
 NETBOX_URL = os.getenv("NETBOX_URL", "http://localhost:8080")
 NETBOX_TOKEN = os.getenv("NETBOX_TOKEN", "6152fbb91529522c72307b194a690c4ca5253e93")
 
 MAX_HOURS = 72
-TEST = False
+TEST = True
 EXPERIMENT_DURATION = 2        #expressed in minutes
 
 nb = pynetbox.api(NETBOX_URL, token=NETBOX_TOKEN)
 
 REDIS_URL = "redis://localhost:6379"
 redis = Redis.from_url(REDIS_URL)
+
+#function to send reservation data to the controller
+def send_to_controller(msg_type, user_id, reservation_id):
+    with app.app_context():
+        try:
+            # fetch username and ssh_key
+            user = db.session.get(User, user_id)
+            if not user:
+                print(f"User id {user_id} not found in DB; skipping controller call.")
+                return
+            username = getattr(user, "username", None)
+            ssh_key = getattr(user, "ssh_key", None)
+
+            if msg_type == "granted":
+                # read reservation devices
+                try:
+                    res_devs = ReservationDevice.query.filter_by(reservation_id=reservation_id).all()
+                    asset_tags = [rd.asset_tag for rd in res_devs]
+                except Exception as e:
+                    print(f"Error reading ReservationDevice for reservation {reservation_id}: {e}")
+                    asset_tags = []
+
+                # build list of { "id_device": <asset_tag>, "ip_device": <ip>, "role": <role> }
+                devices_list = []
+                for at in asset_tags:
+                    ip_addr = None
+                    role = None
+                    try:
+                        # try to fetch device by asset_tag first
+                        dev = nb.dcim.devices.get(site="testbed", asset_tag=at)
+                        if not dev:
+                            # fallback: try by name
+                            devs = nb.dcim.devices.filter(site="testbed", name=at)
+                            dev = devs[0] if devs else None
+
+                        if dev:
+                            # primary_ip can be object-like or dict depending on pynetbox version
+                            primary_ip = getattr(dev, "primary_ip", None)
+                            if primary_ip:
+                                ip = getattr(primary_ip, "address", None) or (
+                                    primary_ip.get("address") if isinstance(primary_ip, dict) else None)
+                                if ip:
+                                    ip_addr = str(ip).split("/")[0]
+
+                            role_obj = getattr(dev, "role", None)
+                            # when it is an object with attributes
+                            role = getattr(role_obj, "slug", None) or getattr(role_obj, "name", None)
+
+                            role = role.lower() if role else None
+                    except Exception as e:
+                        print(f"NetBox lookup error for asset_tag {at}: {e}")
+
+                    devices_list.append({
+                        "id_device": at,
+                        "ip_device": ip_addr,
+                        "role": role
+                    })
+
+                # prepare payload for controller
+                grant_payload = {
+                    "ssh_key": ssh_key,
+                    "user_id": user_id,
+                    "username": username,
+                    "reservation_id": reservation_id,
+                    "devices": devices_list
+                }
+
+                # send to controller
+                try:
+                    resp = requests.post("http://localhost:5002/api/controller/grantAccess", json=grant_payload, timeout=10)
+                    if resp.status_code == 200:
+                        print(f"grantAccess successful for user {user_id} reservation {reservation_id}: {resp.status_code}")
+                    else:
+                        print(f"grantAccess returned {resp.status_code} for user {user_id} reservation {reservation_id}: {resp.text}")
+                except Exception as e:
+                    print(f"Error calling grantAccess for reservation {reservation_id}: {e}")
+
+            elif msg_type == "revoked":
+                revoke_payload = {
+                    "ssh_key": ssh_key,
+                    "user_id": user_id,
+                    "username": username,
+                    "reservation_id": reservation_id
+                }
+                try:
+                    resp = requests.post("http://localhost:5002/api/controller/revokeAccess", json=revoke_payload, timeout=10)
+                    if resp.status_code == 200:
+                        print(f"revokeAccess successful for user {user_id} reservation {reservation_id}: {resp.status_code}")
+                    else:
+                        print(
+                            f"revokeAccess returned {resp.status_code} for user {user_id} reservation {reservation_id}: {resp.text}")
+                except Exception as e:
+                    print(f"Error calling revokeAccess for reservation {reservation_id}: {e}")
+        except Exception as e:
+            print("Unexpected error processing reservation event:", e)
+            return
+
 # listener function for messages published by start and end reservation jobs
 def _redis_listener():
     pubsub = redis.pubsub(ignore_subscribe_messages=True)
@@ -38,11 +136,32 @@ def _redis_listener():
             print("Bad message from redis:", e, message)
             continue
 
+        # message validation
+        msg_type = data.get("type")
+        reservation_id = data.get("reservation_id")
+        user_id = data.get("user_id")
+        # ignore messages that are not referred to grant or revoke reservation
+        if msg_type not in ("granted", "revoked"):
+            print("Ignored message with unknown type:", msg_type, data)
+            continue
+        # ignore messages that do not contain user id and reservation id
+        if reservation_id is None or user_id is None:
+            print("Ignored message missing reservation_id or user_id:", data)
+            continue
+        # validation for type granted
+        if msg_type == "granted":
+            # required fields: token, expires_at
+            if data.get("token") is None or data.get("expires_at") is None:
+                print("Ignored 'granted' message missing token/expires_at:", data)
+                continue
+
         # dispatch to room (es. 'user:2')
         user_room = f"user:{data.get('user_id')}"
         print("Redis -> emit to", user_room, data)
         # emit reservation event to the client in the connected user room
         socketio.emit("reservation_event", data, room=user_room)
+        # send data to controller
+        send_to_controller(msg_type, user_id, reservation_id)
 
 socketio.init_app(app, cors_allowed_origins="http://localhost:5173")
 import backend.orchestrator.orchestrator_ws_server                          # necessary to import socket handler after socketio initialization
@@ -50,20 +169,6 @@ eventlet.spawn(_redis_listener)
 
 # to create a new queue with a specific name use: Queue(name='high', connection=Redis())
 queue = Queue(connection=Redis())
-
-def _find_site(site_identifier):
-
-    if not site_identifier:
-        return None
-    # try slug
-    site = nb.dcim.sites.get(slug=site_identifier)
-    if site:
-        return site
-    # try name
-    sites = nb.dcim.sites.filter(name=site_identifier)
-    if sites:
-        return sites[0]
-    return None
 
 def serialize_reservation(reservation):
 
@@ -88,15 +193,10 @@ def serialize_reservation(reservation):
 def show_devices():
 
     #Return JSON array of devices for testbed site
-    site_q = "testbed"
     try:
-        site = _find_site(site_q)
-        if not site:
-            # if the site is not found, return empty array
-            return jsonify([]), 200
 
-        # retrieve devices
-        devices = nb.dcim.devices.filter(site=site.slug)
+        # retrieve devices from testbed site
+        devices = nb.dcim.devices.filter(site="testbed")
 
         out = []
         for d in devices:
@@ -310,7 +410,7 @@ def delete_reservation():
         return jsonify({"message": "Missing reservationId"}), 400
 
     try:
-        reservation_to_delete = Reservation.query.get(reservation_id)
+        reservation_to_delete = db.session.get(Reservation, reservation_id)
 
         if not reservation_to_delete:
             return jsonify({"message": "Reservation not found"}), 404
