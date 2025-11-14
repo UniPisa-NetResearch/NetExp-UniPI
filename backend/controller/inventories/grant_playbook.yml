@@ -1,0 +1,57 @@
+- name: Grant SSH access to reservation users
+  hosts: all
+  gather_facts: no
+  become: yes
+  tasks:
+    - name: Create user account {{ username }}
+      ansible.builtin.user:
+        name: "{{ username }}"
+        state: present
+        create_home: yes
+        home: "/home/{{ username }}"
+        shell: /bin/bash
+        password_lock: yes
+        system: no
+
+    - name: Ensure .ssh directory exists
+      ansible.builtin.file:
+        path: "/home/{{ username }}/.ssh"
+        state: directory
+        owner: "{{ username }}"
+        group: "{{ username }}"
+        mode: '0700'
+
+    - name: Add public key to authorized_keys
+      ansible.builtin.authorized_key:
+        user: "{{ username }}"
+        key: "{{ ssh_key }}"
+        state: present
+        path: "/home/{{ username }}/.ssh/authorized_keys"
+
+    - name: Ensure authorized_keys has correct permissions
+      ansible.builtin.file:
+        path: "/home/{{ username }}/.ssh/authorized_keys"
+        owner: "{{ username }}"
+        group: "{{ username }}"
+        mode: '0600'
+
+    - name: Add per user SSHd Match block to disable password auth for this user
+      ansible.builtin.blockinfile:
+        path: /etc/ssh/sshd_config
+        marker: "# {mark} ANSIBLE-RES-{{ username }}"
+        block: |
+          Match User {{ username }}
+              PasswordAuthentication no
+      notify: restart sshd
+
+  handlers:
+    - name: restart sshd
+      # try systemd first, fallback to service command
+      ansible.builtin.shell: |
+        if command -v systemctl >/dev/null 2>&1; then
+          systemctl restart sshd || systemctl restart ssh || true
+        else
+          service ssh restart || service sshd restart || true
+        fi
+      become: yes
+      changed_when: false

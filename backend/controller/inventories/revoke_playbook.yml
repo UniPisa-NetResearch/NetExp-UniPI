@@ -1,0 +1,62 @@
+- name: Revoke SSH access and remove user
+  hosts: all
+  gather_facts: no
+  become: yes
+  tasks:
+    - name: Ensure operate on correct username variable
+      ansible.builtin.set_fact:
+        target_user: "{{ username }}"
+
+    - name: Attempt to kill all processes belonging to the user
+      ansible.builtin.shell: |
+        if command -v loginctl >/dev/null 2>&1; then
+          loginctl terminate-user {{ target_user }} || true
+        fi
+        pkill -TERM -u {{ target_user }} || true
+      ignore_errors: yes
+
+    - name: Force kill any remaining processes of the user
+      ansible.builtin.shell: |
+        pkill -9 -u {{ target_user }} || true
+      ignore_errors: yes
+
+    - name: Remove public key from authorized_keys
+      ansible.builtin.authorized_key:
+        user: "{{ username }}"
+        key: "{{ ssh_key }}"
+        state: absent
+        path: "/home/{{ username }}/.ssh/authorized_keys"
+      ignore_errors: yes
+
+    - name: Remove per-user SSHd Match block (restore password auth default)
+      ansible.builtin.blockinfile:
+        path: /etc/ssh/sshd_config
+        marker: "# {mark} ANSIBLE-RES-{{ username }}"
+        block: ""
+        state: absent
+      notify: restart sshd
+
+    - name: Try to remove user using ansible user module inside a block
+      block:
+        - name: Remove user account {{ target_user }} (and home)
+          ansible.builtin.user:
+            name: "{{ username }}"
+            state: absent
+            remove: yes
+
+      rescue:
+        - name: Fallback - try forced removal with userdel -r -f
+          ansible.builtin.shell: |
+             userdel -r -f {{ target_user }} || true
+          ignore_errors: yes
+
+  handlers:
+    - name: restart sshd
+      ansible.builtin.shell: |
+        if command -v systemctl >/dev/null 2>&1; then
+          systemctl restart sshd || systemctl restart ssh || true
+        else
+          service ssh restart || service sshd restart || true
+        fi
+      become: yes
+      changed_when: false
