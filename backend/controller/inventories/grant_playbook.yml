@@ -1,8 +1,44 @@
 - name: Grant SSH access to reservation users
   hosts: all
-  gather_facts: no
+  gather_facts: yes
   become: yes
+  vars:
+    res_group: resusers
+    # list of binaries we potentially allow; they will be filtered based on actual presence
+    candidate_cmds:
+      - ip
+      - ping
+      - traceroute
+      - tc
+      - vtysh
+      - iperf3
+      - netperf
+      - nping
+      - scapy
+      - tcpreplay
+      - tcpdump
+      - tshark
+
+    cmd_pkg_map:
+      ip: iproute2
+      ping: iputils-ping
+      traceroute: traceroute
+      tc: iproute2
+      vtysh: null
+      iperf3: iperf3
+      netperf: netperf
+      nping: nmap
+      scapy: python3-scapy
+      tcpreplay: tcpreplay
+      tcpdump: tcpdump
+      tshark: tshark
+
   tasks:
+    - name: Create group for reservation users
+      ansible.builtin.group:
+        name: "{{ res_group }}"
+        state: present
+
     - name: Create user account {{ username }}
       ansible.builtin.user:
         name: "{{ username }}"
@@ -12,6 +48,8 @@
         shell: /bin/bash
         password_lock: yes
         system: no
+        groups: "{{ res_group }}"
+        append: yes
 
     - name: Ensure .ssh directory exists
       ansible.builtin.file:
@@ -44,7 +82,135 @@
               PasswordAuthentication no
       notify: restart sshd
 
+    # Detect real paths for candidate commands using `command -v`
+    # We collect the stdout which will be empty when the command is not found.
+    - name: Run command -v for each candidate command (initial detection)
+      ansible.builtin.shell: "command -v {{ item }} || true"
+      loop: "{{ candidate_cmds }}"
+      register: which_results
+      changed_when: false
+      check_mode: no
+
+    - name: Build initial mapping command -> path (only found entries)
+      ansible.builtin.set_fact:
+        found_cmd_paths: >-
+          {{
+            dict(
+              which_results.results
+              | map(attribute='stdout')
+              | zip(candidate_cmds)
+              | map('reverse')
+              | selectattr('0','!=','')
+              | list
+            )
+          }}
+
+      # - which_results.results[*].stdout contains the path or empty string.
+      # - zip with candidate_cmds produces pairs (cmd, path) but we reverse to (cmd,path).
+      # - selectattr ensures we only keep entries where stdout != ''.
+
+    - name: show found command paths (initial)
+      ansible.builtin.debug:
+        msg:
+          found_cmd_paths: "{{ found_cmd_paths }}"
+
+    # Compute which commands are missing and which packages to install
+    - name: Compute missing commands
+      ansible.builtin.set_fact:
+        missing_cmds: "{{ candidate_cmds | difference(found_cmd_paths.keys() | list) }}"
+
+    - name: Compute pkgs_to_install from missing_cmds (only those with mapping)
+      ansible.builtin.set_fact:
+        pkgs_to_install: >-
+          {{
+            missing_cmds
+            | map('extract', cmd_pkg_map)
+            | select('defined')
+            | reject('equalto', None)
+            | list
+          }}
+
+    - name: show computed missing commands and pkgs to install
+      ansible.builtin.debug:
+        msg:
+          missing_cmds: "{{ missing_cmds }}"
+          pkgs_to_install: "{{ pkgs_to_install }}"
+
+    # Install needed packages (only if apt is the package manager and there are pkgs)
+    # We perform a grouped apt install for speed
+    - name: Install required packages (APT) only when needed
+      ansible.builtin.apt:
+        name: "{{ pkgs_to_install }}"
+        state: present
+        update_cache: yes
+      when:
+        - ansible_facts.pkg_mgr == 'apt'
+        - pkgs_to_install | length > 0
+      register: apt_result
+
+ # Re-detect command paths after installs (final detection)
+    # -----------------------
+    - name: Re-run command -v to refresh found_cmd_paths after installs
+      ansible.builtin.shell: "command -v {{ item }} || true"
+      loop: "{{ candidate_cmds }}"
+      register: which_results_after
+      changed_when: false
+      check_mode: no
+
+    - name: Build final mapping command -> path (after installs)
+      ansible.builtin.set_fact:
+        found_cmd_paths: >-
+          {{
+            dict(
+              which_results_after.results
+              | map(attribute='stdout')
+              | zip(candidate_cmds)
+              | map('reverse')
+              | selectattr('0','!=','')
+              | list
+            )
+          }}
+
+    - name: Build allowed_bins list from found command paths (absolute paths)
+      ansible.builtin.set_fact:
+        allowed_bins: "{{ found_cmd_paths.values() | list }}"
+
+    - name: final allowed binaries (absolute paths)
+      ansible.builtin.debug:
+        var: allowed_bins
+
+    # Compose categorized command lists for sudoers (groups/aliases)
+    # We use select('search', pattern) to group based on typical tool types.
+    - name: Compose sudo alias lists (RES_NET, RES_CONFIG, RES_TEST)
+      ansible.builtin.set_fact:
+        res_net_cmds: "{{ allowed_bins | select('search','/bin/ip$|/sbin/ip$|/usr/bin/ip$|/usr/sbin/ip$|/bin/ping$|/usr/bin/ping$|/usr/bin/traceroute$|/usr/bin/traceroute$|/sbin/traceroute$|/usr/sbin/tc$|/sbin/tc$') | list }}"
+        res_config_cmds: "{{ allowed_bins | select('search','vtysh$') | list }}"
+        res_test_cmds: "{{ allowed_bins | select('search','iperf3$|netperf$|nping$|scapy$|tcpreplay$|tcpdump$|tshark$') | list }}"
+
+    - name: show categorized command groups for sudoers
+      ansible.builtin.debug:
+        msg:
+          res_net_cmds: "{{ res_net_cmds }}"
+          res_config_cmds: "{{ res_config_cmds }}"
+          res_test_cmds: "{{ res_test_cmds }}"
+
+    # Deploy sudoers file with only the present absolute paths
+    - name: Install limited sudoers for reservation user (only for present commands)
+      ansible.builtin.template:
+        src: sudoers_res.j2
+        dest: "/etc/sudoers.d/{{ username }}"
+        owner: root
+        group: root
+        mode: '0440'
+      notify: validate sudoers
+
   handlers:
+    - name: validate sudoers
+      ansible.builtin.command:
+        cmd: visudo -cf /etc/sudoers.d/{{ username }}
+      register: visudo_check
+      failed_when: visudo_check.rc != 0
+
     - name: restart sshd
       # try systemd first, fallback to service command
       ansible.builtin.shell: |

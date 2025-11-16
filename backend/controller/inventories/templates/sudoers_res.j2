@@ -1,0 +1,14 @@
+# Auto-generated sudoers for reservation user {{ username }}
+{% if res_net_cmds %}
+Cmnd_Alias RES_NET = {{ res_net_cmds | join(', ') }}
+{% endif %}
+{% if res_config_cmds %}
+Cmnd_Alias RES_CONFIG = {{ res_config_cmds | join(', ') }}
+{% endif %}
+{% if res_test_cmds %}
+Cmnd_Alias RES_TEST = {{ res_test_cmds | join(', ') }}
+{% endif %}
+
+{{ username }} ALL=(root) NOPASSWD: {{ [ 'RES_NET' if (res_net_cmds|default([])|length)>0 else None,
+                                       'RES_CONFIG' if (res_config_cmds|default([])|length)>0 else None,
+                                       'RES_TEST' if (res_test_cmds|default([])|length)>0 else None ] | reject('equalto', None) | join(', ') }}

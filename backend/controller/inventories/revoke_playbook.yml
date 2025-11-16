@@ -28,6 +28,14 @@
         path: "/home/{{ username }}/.ssh/authorized_keys"
       ignore_errors: yes
 
+    - name: Remove sudoers file for the reservation user
+      ansible.builtin.file:
+        path: "/etc/sudoers.d/{{ item }}"
+        state: absent
+      loop:
+        - "{{ username }}"
+      ignore_errors: yes
+
     - name: Remove per-user SSHd Match block (restore password auth default)
       ansible.builtin.blockinfile:
         path: /etc/ssh/sshd_config
