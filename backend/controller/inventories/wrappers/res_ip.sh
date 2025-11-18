@@ -3,6 +3,7 @@
 LOG=/var/log/res_ip.log
 ARGS="$*"
 SUDO_USER="${SUDO_USER:-$USER}"
+
 # Read mgmt iface
 MGMT_IFACE="$(cat /etc/res_mgmt_iface 2>/dev/null || echo '')"
 MGMT_IFACE="$(echo "$MGMT_IFACE" | tr 'A-Z' 'a-z' | xargs)"
