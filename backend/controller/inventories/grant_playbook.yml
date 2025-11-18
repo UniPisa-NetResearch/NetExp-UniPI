@@ -21,9 +21,9 @@
 
   tasks:
     # detect type of device -----------------------------------------------------------
-    - name: Detect if device looks like SONiC (presence of /usr/bin/config or vtysh)
+    - name: Detect if device looks like SONiC (presence of config or vtysh)
       ansible.builtin.stat:
-        path: /usr/bin/config
+        path: /usr/local/bin/config
       register: stat_config
       changed_when: false
 
@@ -36,7 +36,7 @@
     - name: Set device type facts and default management interface
       ansible.builtin.set_fact:
         is_sonic: "{{ (stat_config.stat.exists or stat_vtysh.stat.exists) | bool }}"
-        mgmt_iface: "{{ 'eth0' if (stat_config.stat.exists or stat_vtysh.stat.exists) else 'enp2s0' }}"
+        mgmt_iface: "{{ 'eth1' if (stat_config.stat.exists or stat_vtysh.stat.exists) else 'enp1s0' }}"
 
     - name: Ensure /etc/res_mgmt_iface contains the management interface name
       ansible.builtin.copy:
@@ -72,10 +72,10 @@
         mode: '0755'
       when: is_sonic and stat_vtysh.stat.exists
 
-    - name: Deploy res_config_sonic wrapper (only on SONiC if config present)
+    - name: Deploy res_config wrapper (only on SONiC if config present)
       ansible.builtin.copy:
-        src: "wrappers/res_config_sonic.sh"
-        dest: /usr/local/sbin/res_config_sonic
+        src: "wrappers/res_config.sh"
+        dest: /usr/local/sbin/res_config
         owner: root
         group: root
         mode: '0755'
@@ -88,7 +88,7 @@
         - /usr/local/sbin/res_ip
         - /usr/local/sbin/res_tc
         - /usr/local/sbin/res_vtysh
-        - /usr/local/sbin/res_config_sonic
+        - /usr/local/sbin/res_config
       register: stat_wrappers
       changed_when: false
 
@@ -97,7 +97,7 @@
         wrapper_exists: >-
           {{
             dict(
-              ['res_ip','res_tc','res_vtysh','res_config_sonic']
+              ['res_ip','res_tc','res_vtysh','res_config']
               | zip( stat_wrappers.results | map(attribute='stat.exists') )
             )
           }}
@@ -155,7 +155,7 @@
                 ( {'vtysh': '/usr/local/sbin/res_vtysh'} if (is_sonic and wrapper_exists.res_vtysh and (found_cmd_paths.get('vtysh','') != '')) else {} )
               )
             | combine(
-                ( {'config': '/usr/local/sbin/res_config_sonic'} if (is_sonic and wrapper_exists.res_config_sonic and (found_cmd_paths.get('config','') != '')) else {} )
+                ( {'config': '/usr/local/sbin/res_config'} if (is_sonic and wrapper_exists.res_config and (found_cmd_paths.get('config','') != '')) else {} )
               )
           }}
 
@@ -181,7 +181,7 @@
     - name: Compose sudo alias lists (RES_NET, RES_CONFIG, RES_TEST)
       ansible.builtin.set_fact:
         res_net_cmds: "{{ allowed_bins | select('search','/usr/local/sbin/res_ip$|/bin/ip$|/sbin/ip$|/usr/bin/ip$|/usr/sbin/ip$|/bin/ping$|/usr/bin/ping$|/usr/bin/traceroute$|/sbin/traceroute$|/usr/sbin/tc$|/sbin/tc$|/usr/local/sbin/res_tc$') | list }}"
-        res_config_cmds: "{{ allowed_bins | select('search','/usr/local/sbin/res_config_sonic$|/usr/bin/config$|config$|/usr/local/sbin/res_vtysh$|vtysh$') | list }}"
+        res_config_cmds: "{{ allowed_bins | select('search','/usr/local/sbin/res_config$|/usr/bin/config$|config$|/usr/local/sbin/res_vtysh$|vtysh$') | list }}"
         res_test_cmds: "{{ allowed_bins | select('search','iperf3$|netperf$|nping$|scapy$|tcpreplay$|tcpdump$|tshark$') | list }}"
 
     - name: show categorized command groups for sudoers

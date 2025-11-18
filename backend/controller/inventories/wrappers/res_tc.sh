@@ -3,26 +3,27 @@
 LOG=/var/log/res_tc.log
 ARGS="$*"
 SUDO_USER="${SUDO_USER:-$USER}"
-MMGMT_IFACE="$(cat /etc/res_mgmt_iface 2>/dev/null || echo '')"
+MGMT_IFACE="$(cat /etc/res_mgmt_iface 2>/dev/null || echo '')"
 MGMT_IFACE="$(echo "$MGMT_IFACE" | tr 'A-Z' 'a-z' | xargs)"
 ARGS="$*"
 
 # detect dev <iface>
 IFACE=""
-if echo "$ARGS" | grep -Eq 'dev[[:space:]]+[^[:space:]]+'; then
-  IFACE="$(echo "$ARGS" | sed -n 's/.*dev[[:space:]]\+\([^[:space:]]\+\).*/\1/p')"
+if echo "$ARGS" | grep -Eq '(^|[[:space:]])dev[[:space:]]+[^[:space:]]+'; then
+  IFACE="$(echo "$ARGS" | sed -n 's/.*\(^\|[[:space:]]\)dev[[:space:]]\+\([^[:space:]]\+\).*/\2/p')"
 else
-  # fallback token scan
+  # fallback token scan (case-insensitive)
   for tok in $ARGS; do
     lower="$(echo "$tok" | tr 'A-Z' 'a-z')"
     case "$lower" in
-      eth*|enp*|ens*|swp*|ethernet*|mgmt*|br-*|bond*) IFACE="$tok"; break;;
+      eth*|enp*|ens*|swp*|ethernet*|mgmt*|br-*|bond*|lan*) IFACE="$tok"; break;;
     esac
   done
 fi
 
-# modifying detection
-if echo "$ARGS" | grep -Eqi '\b(add|change|replace|del|delete|replace|replace|replace)\b'; then
+# modifying detection (più verbi inclusi, case-insensitive)
+if echo "$ARGS" | grep -Eqi '\b(add|change|replace|del|delete|filter|qdisc|class|ingress|egress|replace|delete|set)\b'; then
+  # Se è un'operazione di modifica, verifichiamo l'interfaccia
   if [ -n "$IFACE" ]; then
     IFACE_LOWER="$(echo "$IFACE" | tr 'A-Z' 'a-z')"
     if [ -n "$MGMT_IFACE" ] && [ "$IFACE_LOWER" = "$MGMT_IFACE" ]; then

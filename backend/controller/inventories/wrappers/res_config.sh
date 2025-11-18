@@ -34,6 +34,6 @@ if echo "$ARGS_LOWER" | grep -Eqi '\b(add|del|set|change|create|delete|vlan|dhcp
 fi
 
 echo "$(date -Iseconds) ALLOW user=$SUDO_USER config args=\"$ARGS\"" >> "$LOG"
-/usr/bin/config "$@"
+/usr/local/bin/config "$@"
 exit $?
 

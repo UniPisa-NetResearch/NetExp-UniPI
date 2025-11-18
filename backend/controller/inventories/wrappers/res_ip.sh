@@ -7,6 +7,30 @@ SUDO_USER="${SUDO_USER:-$USER}"
 MGMT_IFACE="$(cat /etc/res_mgmt_iface 2>/dev/null || echo '')"
 MGMT_IFACE="$(echo "$MGMT_IFACE" | tr 'A-Z' 'a-z' | xargs)"
 
+is_exec() {
+  [ -x "$1" ] 2>/dev/null
+}
+
+# Decide ip binary based on MGMT_IFACE heuristics
+IP_BIN=""
+
+if [ -n "$MGMT_IFACE" ]; then
+  case "$MGMT_IFACE" in
+    eth[0-9]*|ethernet*)
+      # prefer SONiC location
+      if is_exec /usr/bin/ip; then
+        IP_BIN="/usr/bin/ip"
+      fi
+      ;;
+    enp*|ens*|enx*|en[0-9]*)
+      # prefer sbin location for some miniPCs
+      if is_exec /sbin/ip; then
+        IP_BIN="/sbin/ip"
+      fi
+      ;;
+  esac
+fi
+
 # modifying verbs heuristics (case-insensitive)
 if echo "$ARGS" | grep -Eqi '\b(add|del|replace|set|change|delete|flush|restore|create|route|neighbor|replace|link|addr|netns)\b'; then
   # try 'dev <iface>'
@@ -43,6 +67,6 @@ fi
 
 # ALLOW
 echo "$(date -Iseconds) ALLOW user=$SUDO_USER ip args=\"$ARGS\"" >> "$LOG"
-/usr/bin/ip "$@"
+"$IP_BIN" "$@"
 exit $?
 
