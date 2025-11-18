@@ -1,0 +1,8 @@
+# Auto-generated sudoers (wrappers) for reservation user {{ username }}
+{% set cmds = sudo_allowed_cmds_final | default([]) %}
+{% if cmds | length == 0 %}
+{{ username }} ALL=(root) NOPASSWD: /bin/false
+{% else %}
+Cmnd_Alias RES_CMDS = {{ cmds | join(', ') }}
+{{ username }} ALL=(root) NOPASSWD: RES_CMDS
+{% endif %}
