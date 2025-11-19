@@ -3,12 +3,15 @@
   gather_facts: yes
   become: yes
   vars:
+    # group used to collect reservation users
     res_group: resusers
+    # candidate commands we want to expose to reservation users
     candidate_cmds:
       - ip
       - ping
       - traceroute
       - tc
+      - config
       - vtysh
       - iperf3
       - netperf
@@ -19,11 +22,106 @@
       - tshark
 
   tasks:
+    # detect type of device -----------------------------------------------------------
+
+    # check if SONiC config binary exists
+    - name: Detect if device looks like SONiC (presence of config or vtysh)
+      ansible.builtin.stat:
+        path: /usr/local/bin/config
+      register: stat_config
+      changed_when: false
+
+     # check if vtysh config binary exists
+    - name: Detect vtysh presence (SONiC)
+      ansible.builtin.stat:
+        path: /usr/bin/vtysh
+      register: stat_vtysh
+      changed_when: false
+
+    # set if the device is SONiC switch or minipc Qotom and set the correct interface
+    - name: Set device type facts and default management interface
+      ansible.builtin.set_fact:
+        is_sonic: "{{ (stat_config.stat.exists or stat_vtysh.stat.exists) | bool }}"
+        mgmt_iface: "{{ 'eth1' if (stat_config.stat.exists or stat_vtysh.stat.exists) else 'enp1s0' }}"
+
+    # write detected mgmt iface to a file used by wrapper scripts
+    - name: Ensure /etc/res_mgmt_iface contains the management interface name
+      ansible.builtin.copy:
+        dest: /etc/res_mgmt_iface
+        content: "{{ mgmt_iface }}\n"
+        owner: root
+        group: root
+        mode: '0644'
+
+    # install all the wrappers on the devices ----------------------------------------------
+    - name: Deploy res_ip wrapper (always)
+      ansible.builtin.copy:
+        src: "wrappers/res_ip.sh"
+        dest: /usr/local/sbin/res_ip
+        owner: root
+        group: root
+        mode: '0755'
+        force: no       # do not overwrite existing file
+
+    - name: Deploy res_tc wrapper (always)
+      ansible.builtin.copy:
+        src: "wrappers/res_tc.sh"
+        dest: /usr/local/sbin/res_tc
+        owner: root
+        group: root
+        mode: '0755'
+        force: no       # do not overwrite existing file
+
+    - name: Deploy res_vtysh wrapper (only on SONiC if vtysh present)
+      ansible.builtin.copy:
+        src: "wrappers/res_vtysh.sh"
+        dest: /usr/local/sbin/res_vtysh
+        owner: root
+        group: root
+        mode: '0755'
+        force: no       # do not overwrite existing file
+      when: is_sonic and stat_vtysh.stat.exists
+
+    - name: Deploy res_config wrapper (only on SONiC if config present)
+      ansible.builtin.copy:
+        src: "wrappers/res_config.sh"
+        dest: /usr/local/sbin/res_config
+        owner: root
+        group: root
+        mode: '0755'
+        force: no       # do not overwrite existing file
+      when: is_sonic and stat_config.stat.exists
+    #------------------------------------------------------------------------------------------------------
+    # verify which wrappers exist on the target, used to build a convenience map
+    - name: Check presence of installed wrappers on remote
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /usr/local/sbin/res_ip
+        - /usr/local/sbin/res_tc
+        - /usr/local/sbin/res_vtysh
+        - /usr/local/sbin/res_config
+      register: stat_wrappers
+      changed_when: false
+
+    # create a dict like { res_ip: true, res_tc: true, ... } to simplify later conditionals
+    - name: Build a dict of wrapper existence for convenience
+      ansible.builtin.set_fact:
+        wrapper_exists: >-
+          {{
+            dict(
+              ['res_ip','res_tc','res_vtysh','res_config']
+              | zip( stat_wrappers.results | map(attribute='stat.exists') )
+            )
+          }}
+
+    # ensure the group exists for later user creation
     - name: Create group for reservation users
       ansible.builtin.group:
         name: "{{ res_group }}"
         state: present
 
+    # create the reservation user, it cannot log in with password (ssh key only)
     - name: Create user account {{ username }}
       ansible.builtin.user:
         name: "{{ username }}"
@@ -36,7 +134,7 @@
         groups: "{{ res_group }}"
         append: yes
 
-    # Detect real paths for candidate commands using `command -v`
+    # detect real paths for candidate commands using `command -v`
     - name: Run command -v for each candidate command (detection only)
       ansible.builtin.shell: "command -v {{ item }} || true"
       loop: "{{ candidate_cmds }}"
@@ -44,6 +142,8 @@
       changed_when: false
       check_mode: no
 
+    # create a dictionary mapping, example result: { "ip": "/usr/bin/ip", "tc": "/sbin/tc", ... }
+    # only for non-empty output
     - name: Build mapping command -> path (only found entries)
       ansible.builtin.set_fact:
         found_cmd_paths: >-
@@ -56,26 +156,53 @@
             )
           }}
 
+    # override commands to use wrappers if installed
+    - name: Conditionally override found_cmd_paths for commands that must use wrappers
+      ansible.builtin.set_fact:
+        found_cmd_paths_overridden: >-
+          {{
+            found_cmd_paths
+            | combine(
+                ( {'ip': '/usr/local/sbin/res_ip'} if (wrapper_exists.res_ip and (found_cmd_paths.get('ip','') != '')) else {} )
+              )
+            | combine(
+                ( {'tc': '/usr/local/sbin/res_tc'} if (wrapper_exists.res_tc and (found_cmd_paths.get('tc','') != '')) else {} )
+              )
+            | combine(
+                ( {'vtysh': '/usr/local/sbin/res_vtysh'} if (is_sonic and wrapper_exists.res_vtysh and (found_cmd_paths.get('vtysh','') != '')) else {} )
+              )
+            | combine(
+                ( {'config': '/usr/local/sbin/res_config'} if (is_sonic and wrapper_exists.res_config and (found_cmd_paths.get('config','') != '')) else {} )
+              )
+          }}
+
+    # log the mapping of found commands
     - name: show found command paths
       ansible.builtin.debug:
         msg:
           found_cmd_paths: "{{ found_cmd_paths }}"
 
+    # collect absolute paths (values of the mapping) into a list for sudoers
     - name: Build allowed_bins list from found command paths (absolute paths)
       ansible.builtin.set_fact:
-        allowed_bins: "{{ found_cmd_paths.values() | select('!=', '') | list }}"
+        allowed_bins: >-
+          {{
+            (found_cmd_paths_overridden | default(found_cmd_paths)).values() | select('!=', '') | list
+          }}
 
+    # print the final list of binaries that will be allowed in sudoers
     - name: final allowed binaries (absolute paths)
       ansible.builtin.debug:
         var: allowed_bins
 
-    # Compose categorized command lists for sudoers (RES_NET, RES_CONFIG, RES_TEST)
+    # compose categorized command lists for sudoers (RES_NET, RES_CONFIG, RES_TEST)
     - name: Compose sudo alias lists (RES_NET, RES_CONFIG, RES_TEST)
       ansible.builtin.set_fact:
-        res_net_cmds: "{{ allowed_bins | select('search','/bin/ip$|/sbin/ip$|/usr/bin/ip$|/usr/sbin/ip$|/bin/ping$|/usr/bin/ping$|/usr/bin/traceroute$|/sbin/traceroute$|/usr/sbin/tc$|/sbin/tc$') | list }}"
-        res_config_cmds: "{{ allowed_bins | select('search','vtysh$') | list }}"
+        res_net_cmds: "{{ allowed_bins | select('search','/usr/local/sbin/res_ip$|/bin/ip$|/sbin/ip$|/usr/bin/ip$|/usr/sbin/ip$|/bin/ping$|/usr/bin/ping$|/usr/bin/traceroute$|/sbin/traceroute$|/usr/sbin/tc$|/sbin/tc$|/usr/local/sbin/res_tc$') | list }}"
+        res_config_cmds: "{{ allowed_bins | select('search','/usr/local/sbin/res_config$|/usr/bin/config$|config$|/usr/local/sbin/res_vtysh$|vtysh$') | list }}"
         res_test_cmds: "{{ allowed_bins | select('search','iperf3$|netperf$|nping$|scapy$|tcpreplay$|tcpdump$|tshark$') | list }}"
 
+    # log the categorized lists
     - name: show categorized command groups for sudoers
       ansible.builtin.debug:
         msg:
@@ -83,7 +210,7 @@
           res_config_cmds: "{{ res_config_cmds }}"
           res_test_cmds: "{{ res_test_cmds }}"
 
-    # Deploy sudoers file with only the present absolute paths
+    # deploy sudoers file (using a template) with only the present absolute paths
     - name: Install limited sudoers for reservation user (only for present commands)
       ansible.builtin.template:
         src: sudoers_res.j2
@@ -92,7 +219,9 @@
         group: root
         mode: '0440'
       notify: validate sudoers
-      # ssh key assignment is the last operation to avoid user access while device is not ready
+
+    # ssh key assignment is the last operation to avoid user access while device is not ready
+    # create .ssh directory for the user
     - name: Ensure .ssh directory exists
       ansible.builtin.file:
         path: "/home/{{ username }}/.ssh"
@@ -100,7 +229,7 @@
         owner: "{{ username }}"
         group: "{{ username }}"
         mode: '0700'
-
+    # add user public key to authorized_keys
     - name: Add public key to authorized_keys
       ansible.builtin.authorized_key:
         user: "{{ username }}"
@@ -108,6 +237,7 @@
         state: present
         path: "/home/{{ username }}/.ssh/authorized_keys"
 
+    # ensure authorized_keys is readable only by the user
     - name: Ensure authorized_keys has correct permissions
       ansible.builtin.file:
         path: "/home/{{ username }}/.ssh/authorized_keys"
@@ -115,6 +245,7 @@
         group: "{{ username }}"
         mode: '0600'
 
+    # adds a Match block so user cannot authenticate with a password
     - name: Add per user SSHd Match block to disable password auth for this user
       ansible.builtin.blockinfile:
         path: /etc/ssh/sshd_config
@@ -125,12 +256,14 @@
       notify: restart sshd
 
   handlers:
+    # validate the generated sudoers fragment to avoid locking out sudo
     - name: validate sudoers
       ansible.builtin.command:
         cmd: visudo -cf /etc/sudoers.d/{{ username }}
       register: visudo_check
       failed_when: visudo_check.rc != 0
 
+    # attempt a safe restart of the SSH
     - name: restart sshd
       ansible.builtin.shell: |
         if command -v systemctl >/dev/null 2>&1; then
