@@ -1,125 +1,121 @@
 #!/bin/bash
-# res_vtysh - wrapper semplice: blocca modifiche alla mgmt iface (ethN / ethernetN)
-set -o pipefail
-
-LOG=/var/log/res_vtysh_safe.log
+# res_vtysh - wrapper for vtysh to allow only non-interactive usage and
+#             to prevent modification of the management interface.
+LOG="/var/log/res_vtysh.log"
 SUDO_USER="${SUDO_USER:-$USER}"
-MGMT_IFACE_RAW="$(cat /etc/res_mgmt_iface 2>/dev/null || echo '')"
-MGMT_IFACE="$(echo "$MGMT_IFACE_RAW" | tr 'A-Z' 'a-z' | xargs)"
+MGMT_IFACE="$(cat /etc/res_mgmt_iface 2>/dev/null || echo '')"
+MGMT_IFACE="$(echo "$MGMT_IFACE" | tr 'A-Z' 'a-z' | xargs)"   # normalize
 
-# raccogli -c multipli e altri args
-ARGS=()
-C_COMMANDS=()
-while (($#)); do
+log() {
+  echo "$(date -Iseconds) $1" >> "$LOG"
+}
+
+# Collect -c/--command arguments into arrays suitable to pass to vtysh and to analyse.
+VTY_ARGS=()      # full args to forward to vtysh, e.g. (-c "configure terminal" -c "interface eth2" ...)
+CMD_PARTS=()     # just the command strings (without -c) for parsing/inspection
+
+while [ "$#" -gt 0 ]; do
   case "$1" in
-    -c)
+    -c|--command)
       shift
-      C_COMMANDS+=("$1")
-      ARGS+=("-c" "$1")
+      # If -c provided but no following arg, treat as empty (will be denied)
+      ARG="${1:-}"
+      VTY_ARGS+=(-c "$ARG")
+      CMD_PARTS+=("$ARG")
+      shift || true
       ;;
     --)
       shift
-      ARGS+=("$@")
+      # ignore remaining positional args (vtysh supports only -c typically)
       break
       ;;
     *)
-      ARGS+=("$1")
+      # ignore other args: we only honor -c/--command for safety
+      shift
       ;;
   esac
-  shift
 done
 
-# leggi stdin se presente
-STDIN_CONTENT=""
-if [ ! -t 0 ]; then
-  STDIN_CONTENT="$(cat || true)"
-fi
-
-# funzione per espandere sequenze \n presenti negli argomenti (es. echo "\n")
-_expand_escapes() { printf '%b' "$1"; }
-
-# normalizza input (unisce -c e stdin, con newline reali)
-NORMALIZED=""
-if [ "${#C_COMMANDS[@]}" -gt 0 ]; then
-  for c in "${C_COMMANDS[@]}"; do
-    NORMALIZED+="$(_expand_escapes "$c")"$'\n'
-  done
-fi
-if [ -n "$STDIN_CONTENT" ]; then
-  NORMALIZED+="$(_expand_escapes "$STDIN_CONTENT")"
-fi
-
-# tutto in minuscolo per matching
-FULL_LOWER="$(echo -e "$NORMALIZED" | tr 'A-Z' 'a-z')"
-
-# genera alias per mgmt iface (ethN <-> ethernetN)
-ALIASES=()
-if [ -n "$MGMT_IFACE" ]; then
-  ALIASES+=("$MGMT_IFACE")
-  if echo "$MGMT_IFACE" | grep -Eq '^eth([0-9]+)$'; then
-    n="$(echo "$MGMT_IFACE" | sed -E 's/^eth([0-9]+)$/\1/')"
-    ALIASES+=("ethernet${n}")
-  fi
-  if echo "$MGMT_IFACE" | grep -Eq '^ethernet([0-9]+)$'; then
-    n="$(echo "$MGMT_IFACE" | sed -E 's/^ethernet([0-9]+)$/\1/')"
-    ALIASES+=("eth${n}")
-  fi
-fi
-
-# dedup
-if [ "${#ALIASES[@]}" -gt 0 ]; then
-  mapfile -t UNIQ_AL < <(printf "%s\n" "${ALIASES[@]}" | awk '!seen[$0]++')
-else
-  UNIQ_AL=()
-fi
-
-# verbi di modifica (lista semplice); "show" è considerato query e NON modifica
-MODIFY_REGEX='\b(configure|interface|ip[[:space:]]+address|no[[:space:]]+shutdown|shutdown|vlan|vrf|dhcp|set|del|delete|add|route|neighbor|ip|address|qdisc|tc)\b'
-SHOW_REGEX='\bshow\b'
-
-# se NON abbiamo input (-c o stdin) allora interactive -> deny
-if [ "${#C_COMMANDS[@]}" -eq 0 ] && [ -t 0 ]; then
-  echo "$(date -Iseconds) DENY interactive user=$SUDO_USER vtysh (interactive sessions not allowed)" >> "$LOG"
-  echo "Interactive vtysh sessions are not permitted. Use -c or pipe commands." >&2
+# 1) Deny interactive use: require at least one -c argument.
+if [ "${#VTY_ARGS[@]}" -eq 0 ]; then
+  # If user piped commands via stdin, still deny: we only accept explicit -c inline usage.
+  log "DENY user=$SUDO_USER vtysh reason=\"interactive or no -c provided\""
+  echo "Interactive use of vtysh is disallowed. Please run non-interactive commands, e.g.:"
+  echo "  sudo res_vtysh -c \"show interface <iface>\""
+  echo "  sudo res_vtysh -c 'configure terminal' -c 'interface eth2' -c 'ip address 10.0.0.1/24' -c 'no shutdown'"
   exit 1
 fi
 
-# controllo principale: per ogni alias, se appare e c'è un verbo di MODIFICA e non appare 'show', allora deny.
-if [ -n "$FULL_LOWER" ] && [ "${#UNIQ_AL[@]}" -gt 0 ]; then
-  for alias in "${UNIQ_AL[@]}"; do
-    # usa pattern di word-boundary (semplice)
-    if echo "$FULL_LOWER" | grep -Eiq "(^|[^a-z0-9_-])${alias}([^a-z0-9_-]|$)"; then
-      # se è una show -> allow
-      if echo "$FULL_LOWER" | grep -Eiq "$SHOW_REGEX"; then
-        # allow (query)
-        echo "$(date -Iseconds) ALLOW user=$SUDO_USER vtysh matched_alias='$alias' (show detected) stdin_present=$( [ -n "$STDIN_CONTENT" ] && echo yes || echo no )" >> "$LOG"
-        # non return here: continue scanning other aliases, but show should normally mean query
-        continue
-      fi
+# Build a single joined command string for easier searching (lowercased for comparisons)
+JOINED_CMD="$(printf '%s; ' "${CMD_PARTS[@]}" | sed 's/; $//')"
+CMD_LOWER="$(printf '%s' "$JOINED_CMD" | tr 'A-Z' 'a-z' | xargs)"
 
-      # se trovi verbo di modifica -> deny
-      if echo "$FULL_LOWER" | grep -Eiq "$MODIFY_REGEX"; then
-        echo "$(date -Iseconds) DENY user=$SUDO_USER vtysh matched_alias='$alias' (modifying verb detected)" >> "$LOG"
-        echo "Operation that modifies management interface '$MGMT_IFACE_RAW' is not permitted." >&2
-        exit 1
-      fi
-    fi
-  done
-fi
+# Helper predicates
+is_show_cmd() {
+  # return 0 if any part contains a 'show' command word
+  echo "$CMD_LOWER" | grep -Eiq '\bshow\b' && return 0 || return 1
+}
 
-# se arriviamo qui -> allow: esegui vtysh con stdin/args. log di allow
-echo "$(date -Iseconds) ALLOW user=$SUDO_USER vtysh args='${ARGS[*]}' stdin_present=$( [ -n "$STDIN_CONTENT" ] && echo yes || echo no )" >> "$LOG"
+references_mgmt_iface() {
+  [ -n "$MGMT_IFACE" ] && echo "$CMD_LOWER" | grep -wq "$MGMT_IFACE"
+  return $?
+}
 
-# esecuzione: se STDIN present -> usare script per pty se disponibile
-if [ -n "$NORMALIZED" ]; then
-  if command -v script >/dev/null 2>&1; then
-    printf '%s' "$NORMALIZED" | script -q -c "/usr/bin/vtysh ${ARGS[*]}" /dev/null
-    exit $?
-  else
-    printf '%s' "$NORMALIZED" | /usr/bin/vtysh "${ARGS[@]}"
-    exit $?
+# detect configure-like sequences (words that typically indicate modifying intent)
+has_configure() {
+  echo "$CMD_LOWER" | grep -Eiq '\bconfigure\b' && return 0 || return 1
+}
+
+# Extract first interface token after the word 'interface' in the joined commands.
+# Returns lowercase interface token or empty string.
+extract_interface_from_joined() {
+  # Match: ... interface <token> ...
+  echo "$JOINED_CMD" | sed -n 's/.*[[:space:];]interface[[:space:]]\+\([^[:space:];]\+\).*/\1/p' \
+    | tr 'A-Z' 'a-z' | xargs
+}
+
+# Main decision flow:
+
+# If the joined command references the management interface:
+if references_mgmt_iface; then
+  # Allow any read-only 'show' command referencing mgmt iface
+  if is_show_cmd; then
+    log "ALLOW user=$SUDO_USER vtysh args=\"$JOINED_CMD\" reason=\"show on mgmt iface\""
+    exec /usr/bin/vtysh "${VTY_ARGS[@]}"
   fi
-else
-  /usr/bin/vtysh "${ARGS[@]}"
-  exit $?
+
+  # If it's not a show (i.e. a modifying operation referencing mgmt) -> deny
+  log "DENY user=$SUDO_USER vtysh args=\"$JOINED_CMD\" iface=\"$MGMT_IFACE\" reason=\"modifying mgmt iface or non-show referencing mgmt\""
+  echo "Operation not permitted on management interface $MGMT_IFACE"
+  exit 1
 fi
+
+# At this point mgmt iface is NOT referenced.
+
+# If the sequence includes a configure request, require an explicit interface target.
+if has_configure; then
+  TARGET_IF="$(extract_interface_from_joined)"
+  if [ -z "$TARGET_IF" ]; then
+    # configure present but no explicit interface -> deny to avoid interactive config mode
+    log "DENY user=$SUDO_USER vtysh args=\"$JOINED_CMD\" reason=\"configure with no explicit interface (would open config mode)\""
+    echo "Entering configuration mode is disallowed. Please run specific non-interactive commands that include the target interface, e.g.:"
+    echo "  sudo res_vtysh -c 'configure terminal' -c 'interface eth2' -c 'ip address 10.0.0.1/24' -c 'no shutdown'"
+    exit 1
+  fi
+
+  # If extracted interface is equal to mgmt (shouldn't happen because references_mgmt_iface earlier returned false),
+  # reject to be safe.
+  if [ -n "$MGMT_IFACE" ] && [ "$TARGET_IF" = "$MGMT_IFACE" ]; then
+    log "DENY user=$SUDO_USER vtysh args=\"$JOINED_CMD\" iface=\"$TARGET_IF\" reason=\"attempt to configure mgmt iface (safety)\""
+    echo "Operation not permitted on management interface $MGMT_IFACE"
+    exit 1
+  fi
+
+  # Otherwise allow the non-interactive configure sequence that targets a concrete non-mgmt interface
+  log "ALLOW user=$SUDO_USER vtysh args=\"$JOINED_CMD\" reason=\"configure on non-mgmt iface $TARGET_IF\""
+  exec /usr/bin/vtysh "${VTY_ARGS[@]}"
+fi
+
+# Default: no mgmt referenced and not a riskful configure sequence -> allow (covers show and other read-only commands)
+log "ALLOW user=$SUDO_USER vtysh args=\"$JOINED_CMD\" reason=\"no mgmt iface referenced and not configure without target\""
+exec /usr/bin/vtysh "${VTY_ARGS[@]}"
