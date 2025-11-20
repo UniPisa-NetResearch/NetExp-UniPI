@@ -3,8 +3,8 @@
   gather_facts: yes
   become: yes
   vars:
-    # group used to collect reservation users
-    res_group: resusers
+    test: false                # if false the management interfaces are the real one, otherwise are eth1 and enp1s0
+    res_group: resusers        # group used to collect reservation users
     # candidate commands we want to expose to reservation users
     candidate_cmds:
       - ip
@@ -42,7 +42,21 @@
     - name: Set device type facts and default management interface
       ansible.builtin.set_fact:
         is_sonic: "{{ (which_config.stdout != '' or which_vtysh.stdout != '') | bool }}"
-        mgmt_iface: "{{ 'eth1' if (which_config.stdout != '' or which_vtysh.stdout != '') else 'enp1s0' }}"
+        mgmt_iface: >-
+          {{
+            (
+              ( 'eth1' if (which_config.stdout != '' or which_vtysh.stdout != '') else 'enp1s0' )
+            )
+            if ( test | default(False) | bool )
+            else
+            (
+              (
+                hostvars[inventory_hostname].get('res_iface')
+                if ( hostvars[inventory_hostname].get('res_iface') is defined and hostvars[inventory_hostname].get('res_iface') not in [None, ''] )
+                else ( 'eth0' if (which_config.stdout != '' or which_vtysh.stdout != '') else 'enp2s0' )
+              )
+            )
+          }}
 
     # write detected mgmt iface to a file used by wrapper scripts
     - name: Ensure /etc/res_mgmt_iface contains the management interface name

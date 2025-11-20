@@ -21,7 +21,7 @@ NETBOX_TOKEN = os.getenv("NETBOX_TOKEN", "6152fbb91529522c72307b194a690c4ca5253e
 
 MAX_HOURS = 72
 TEST = True
-EXPERIMENT_DURATION = 7        #expressed in minutes
+EXPERIMENT_DURATION = 65        #expressed in minutes
 
 nb = pynetbox.api(NETBOX_URL, token=NETBOX_TOKEN)
 
@@ -54,6 +54,7 @@ def send_to_controller(msg_type, user_id, reservation_id):
                 for at in asset_tags:
                     ip_addr = None
                     role = None
+                    interface = None
                     try:
                         # try to fetch device by asset_tag first
                         dev = nb.dcim.devices.get(site="testbed", asset_tag=at)
@@ -76,13 +77,41 @@ def send_to_controller(msg_type, user_id, reservation_id):
                             role = getattr(role_obj, "slug", None) or getattr(role_obj, "name", None)
 
                             role = role.lower() if role else None
+
+                        if ip_addr:
+                            try:
+                                ip_objs = None
+
+                                if ip:
+                                    ip_objs = nb.ipam.ip_addresses.filter(address=ip)
+                                # normalize ip_obj extraction
+                                ip_obj = None
+                                if ip_objs:
+                                    if hasattr(ip_objs, "first"):
+                                        ip_obj = ip_objs.first()
+                                    else:
+                                        ip_list = list(ip_objs)
+                                        ip_obj = ip_list[0] if ip_list else None
+
+                                if ip_obj:
+                                    assigned = getattr(ip_obj, "assigned_object", None) or (
+                                        ip_obj.get("assigned_object") if isinstance(ip_obj, dict) else None)
+                                    if assigned:
+                                        if isinstance(assigned, dict):
+                                            interface = assigned.get("name") or assigned.get("display")
+                                        else:
+                                            interface = getattr(assigned, "name", None) or getattr(assigned, "display",
+                                                                                                   None)
+                            except Exception as e:
+                                print(f"NetBox ip lookup error for ip {ip_addr}: {e}")
                     except Exception as e:
                         print(f"NetBox lookup error for asset_tag {at}: {e}")
 
                     devices_list.append({
                         "id_device": at,
                         "ip_device": ip_addr,
-                        "role": role
+                        "role": role,
+                        "interface": interface
                     })
 
                 # prepare payload for controller
@@ -164,7 +193,7 @@ def _redis_listener():
         send_to_controller(msg_type, user_id, reservation_id)
 
 socketio.init_app(app, cors_allowed_origins="http://localhost:5173")
-import backend.orchestrator.orchestrator_ws_server                          # necessary to import socket handler after socketio initialization
+import backend.orchestrator.orchestrator_ws_server                   # necessary to import socket handler after socketio initialization
 eventlet.spawn(_redis_listener)
 
 # to create a new queue with a specific name use: Queue(name='high', connection=Redis())

@@ -62,6 +62,7 @@ def write_inventory(reservation_id: int, devices: list):
             asset = d.get("id_device")
             role = (d.get("role") or "").lower()
             ip = d.get("ip_device")
+            interface = d.get("interface")
             if not ip:
                 print("Skipping device without IP:", asset)
                 continue
@@ -85,7 +86,8 @@ def write_inventory(reservation_id: int, devices: list):
                 f"ansible_python_interpreter=/usr/bin/python3 "
                 f"ansible_become=yes "
                 f"ansible_become_pass={ansible_ssh_pass} "
-                f"asset_tag={asset} role={role}\n"
+                f"asset_tag={asset} role={role} "
+                f"res_iface={interface}\n"
             )
 
             fh.write(line)
