@@ -22,11 +22,14 @@
   gap: 8px;
   margin: 10px 0;
   flex-wrap: wrap;
+  font-weight: 500;
+  color: var(--text-dark);
 }
 
 .label-inline {
   min-width: 160px;
   font-size: 14px;
+
 }
 
 .selected-file-name {
@@ -38,20 +41,52 @@
   font-size: 13px;
   padding-left: 8px;
 }
-.file-button, .load-button, .snapshot-button, .action-button {
+
+.configuration-button {
   padding: 6px 10px;
   border-radius: 6px;
-  border: 1px solid #ccc;
-  background: #fff;
+  border: 1px solid;
   cursor: pointer;
 }
 
-.file-button:hover, .load-button:hover, .snapshot-button:hover, .action-button:hover {
-  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+.playbook-button {
+  background-color: #ea5a5f;
+  color: white;
 }
 
-.load-button {
-  margin-left: 8px;
+.template-button {
+  background-color: #24ed8b;
+  color: white;
+}
+
+.send-button {
+  background-color: #007bff;
+  color: white;
+}
+.rollback-button {
+  background-color: #eccb47;
+  color: white;
+}
+
+.playbook-button:hover {
+  background-color: #da4c52;
+}
+
+.template-button:hover {
+   background-color: #1be375;
+}
+
+.send-button:hover {
+  background-color: #056fe1;
+}
+
+.rollback-button:hover {
+  background-color: #dfb813;
+  color: white;
+}
+
+.output-row {
+  margin-bottom: 50px;
 }
 
 .output-field {
@@ -64,10 +99,11 @@
 }
 
 .text-input {
-  flex: 1 1 300px;
+
   padding: 6px 8px;
   border-radius: 6px;
   border: 1px solid #ddd;
+  width: 500px;
 }
 
 .snapshot-actions {
@@ -83,6 +119,8 @@
   border: 1px solid #eee;
   border-radius: 6px;
   background: #fafafa;
+  font-weight: 200;
+  font-size: 14px;
 }
 
 .select-field {
@@ -96,6 +134,7 @@
   color: #222;
   font-size: 13px;
   margin-top: 6px;
+  margin-bottom: 50px;
 }
 
 .action-button.delete[disabled], .action-button.delete:disabled {

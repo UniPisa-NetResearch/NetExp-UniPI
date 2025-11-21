@@ -125,16 +125,16 @@ export default function Configuration({ username, showWait = true }) {
         {/* Row for files and load */}
         <div className="config-row">
           <label className="label-inline">Load Ansible playbook:</label>
-          <button type="button" className="file-button" onClick={handleChoosePlaybook}>Choose playbook</button>
+          <button type="button" className="playbook-button configuration-button" onClick={handleChoosePlaybook}>Choose playbook</button>
           <div className="selected-file-name">{playbookFile ? playbookFile.name : ''}</div>
           <input ref={playbookRef} type="file" style={{display: 'none'}} onChange={onPlaybookChange}/>
 
           <label className="label-inline">Load Jinja template:</label>
-          <button type="button" className="file-button" onClick={handleChooseTemplate}>Choose template</button>
+          <button type="button" className="template-button configuration-button" onClick={handleChooseTemplate}>Choose template</button>
           <div className="selected-file-name">{templateFile ? templateFile.name : ''}</div>
           <input ref={templateRef} type="file" style={{display: 'none'}} onChange={onTemplateChange}/>
 
-          <button type="button" className="load-button" onClick={handleLoadFiles}>Load files</button>
+          <button type="button" className="send-button configuration-button" onClick={handleLoadFiles}>Load files</button>
         </div>
 
         {/* Output line */}
@@ -154,7 +154,7 @@ export default function Configuration({ username, showWait = true }) {
             placeholder="Snapshot description"
             maxLength={MAX_CHARS}
           />
-          <button type="button" className="snapshot-button" onClick={handleTakeSnapshot}>Take snapshot</button>
+          <button type="button" className="send-button configuration-button" onClick={handleTakeSnapshot}>Take snapshot</button>
         </div>
 
         {/* Snapshot creation result line */}
@@ -179,10 +179,10 @@ export default function Configuration({ username, showWait = true }) {
           <div className="snapshot-desc">{selectedSnapshotDescription()}</div>
 
           <div className="snapshot-actions">
-            <button type="button" className="action-button" onClick={handleRollback}>Rollback</button>
+            <button type="button" className="rollback-button configuration-button" onClick={handleRollback}>Rollback</button>
             <button
               type="button"
-              className="action-button delete"
+              className="delete-button delete configuration-button"
               onClick={handleDeleteSnapshot}
               disabled={!selectedSnapshot || selectedSnapshot === 'snapshot0'}
             >

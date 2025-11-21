@@ -93,7 +93,7 @@ const NavbarLayout = ({ children, onLogout, showLogoutButton = true,   isReserva
                         <Link
                             key={item.name}
                             to={item.path}
-                            onClick={(e) => handleNavClick(e, item)}
+                            //onClick={(e) => handleNavClick(e, item)}
                             className={`nav-link ${isLinkActive(item.path, location.pathname) ? 'active' : ''}`}
                         >
                             {item.name}
