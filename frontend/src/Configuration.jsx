@@ -12,6 +12,7 @@ export default function Configuration({ username, showWait = true }) {
 
   // output for Load files
   const [loadOutput, setLoadOutput] = useState('');
+  const [loadOutputType, setLoadOutputType] = useState('info'); // 'success' |'error'
 
   // snapshot management
   const [snapshotList, setSnapshotList] = useState([
@@ -20,10 +21,22 @@ export default function Configuration({ username, showWait = true }) {
   const [selectedSnapshot, setSelectedSnapshot] = useState('snapshot0');
   const [snapshotDescriptionInput, setSnapshotDescriptionInput] = useState('');
   const [snapshotResult, setSnapshotResult] = useState('');
+  const [snapshotResultType, setSnapshotResultType] = useState('info'); // 'success' | 'error'
   const [snapshotCounter, setSnapshotCounter] = useState(1); // next index for snapshot
 
   // result for rollback/delete
   const [actionResult, setActionResult] = useState('');
+  const [actionResultType, setActionResultType] = useState('info'); // 'success' | 'error'
+
+  const getNextSnapshotIndex = (currentList) => {
+  // extract numerical index
+  const indices = currentList.map(s => {
+    const match = s.name.match(/snapshot(\d+)/);
+    return match ? parseInt(match[1], 10) : 0;
+  });
+  // find max and add 1
+  return Math.max(...indices) + 1;
+};
 
   // helpers
   const handleChoosePlaybook = () => playbookRef.current && playbookRef.current.click();
@@ -41,7 +54,8 @@ export default function Configuration({ username, showWait = true }) {
   const handleLoadFiles = () => {
     // Simulate sending files. If none selected, inform user.
     if (!playbookFile && !templateFile) {
-      setLoadOutput('No files selected.');
+      setLoadOutput('No files selected');
+      setLoadOutputType('error');
       return;
     }
 
@@ -51,10 +65,14 @@ export default function Configuration({ username, showWait = true }) {
 
     const time = new Date().toLocaleString();
     setLoadOutput(`Files uploaded (${time}) — ${names.join(' | ')}`);
+    setLoadOutputType('success');
+    setActionResult("");
+    setSnapshotResult("");
+    setSnapshotDescriptionInput("");
   };
 
   // character limit for description
-  const MAX_CHARS = 50;
+  const MAX_CHARS = 80;
 
   // onChange for description: enforce max chars (maxLength on input also used)
   const handleDescriptionChange = (e) => {
@@ -71,40 +89,52 @@ export default function Configuration({ username, showWait = true }) {
 
     const text = snapshotDescriptionInput.trim();
     if (text.length === 0) {
-      setSnapshotResult('Description is empty — please add up to 50 words.');
+      setSnapshotResult('Description is empty, please add up to 80 chars');
+      setSnapshotResultType('error');
       return;
     }
     if (text.length > MAX_CHARS) {
-      setSnapshotResult(`Description too long (max ${MAX_CHARS} chars).`);
+      setSnapshotResult(`Description too long (max ${MAX_CHARS} chars)`);
+      setSnapshotResultType('error');
       return;
     }
 
-    const name = `snapshot${snapshotCounter}`;
+    let nextIndex = getNextSnapshotIndex(snapshotList);
+    const name = `snapshot${nextIndex}`;
     const newSnapshot = { name, description: text};
     setSnapshotList((s) => [...s, newSnapshot]);
     setSelectedSnapshot(name);
-    setSnapshotCounter((c) => c + 1);
-    setSnapshotResult(`Snapshot ${name} created.`);
+    setSnapshotResult(`Snapshot ${name} created`);
+    setSnapshotResultType('success');
+    setActionResult("");
   };
 
   const handleRollback = () => {
     if (!selectedSnapshot) {
-      setActionResult('No snapshot selected.');
+      setActionResult('No snapshot selected');
+      setActionResultType('error');
       return;
     }
     setActionResult(`Rollback to ${selectedSnapshot} started... (simulated)`);
+    setActionResultType('success');
+    setSnapshotResult("");
+    setSnapshotDescriptionInput("");
   };
 
   const handleDeleteSnapshot = () => {
     if (!selectedSnapshot || selectedSnapshot === 'snapshot0') {
-      setActionResult('Cannot delete this snapshot.');
+      setActionResult('Cannot delete this snapshot');
+      setActionResultType('error');
       return;
     }
     setSnapshotList((list) => list.filter((s) => s.name !== selectedSnapshot));
 
     // choose a new selected snapshot (fallback to snapshot0)
     setSelectedSnapshot('snapshot0');
-    setActionResult(`${selectedSnapshot} deleted.`);
+    setActionResult(`${selectedSnapshot} deleted`);
+    setActionResultType('success');
+    setSnapshotResult("");
+    setSnapshotDescriptionInput("");
   };
 
   const selectedSnapshotDescription = () => {
@@ -120,71 +150,87 @@ export default function Configuration({ username, showWait = true }) {
       )}
 
       <div className="card configuration-card">
-        <h2 className="title">Configure devices</h2>
+        <h2 className="title">⚙️ Configure devices</h2>
 
         {/* Row for files and load */}
-        <div className="config-row">
-          <label className="label-inline">Load Ansible playbook:</label>
-          <button type="button" className="playbook-button configuration-button" onClick={handleChoosePlaybook}>Choose playbook</button>
-          <div className="selected-file-name">{playbookFile ? playbookFile.name : ''}</div>
-          <input ref={playbookRef} type="file" style={{display: 'none'}} onChange={onPlaybookChange}/>
-
-          <label className="label-inline">Load Jinja template:</label>
-          <button type="button" className="template-button configuration-button" onClick={handleChooseTemplate}>Choose template</button>
-          <div className="selected-file-name">{templateFile ? templateFile.name : ''}</div>
-          <input ref={templateRef} type="file" style={{display: 'none'}} onChange={onTemplateChange}/>
-
-          <button type="button" className="send-button configuration-button" onClick={handleLoadFiles}>Load files</button>
+        <div className="config-row main-actions-row">
+          <div className="aligned-group">
+            <label className="label-inline">Load Ansible playbook:</label>
+            <button type="button" className="playbook-button configuration-button"
+                    onClick={handleChoosePlaybook}>Choose
+              playbook
+            </button>
+            <div className="selected-file-name">{playbookFile ? playbookFile.name : ''}</div>
+            <input ref={playbookRef} type="file" style={{display: 'none'}} onChange={onPlaybookChange}/>
+            <label className="label-inline">Load Jinja template:</label>
+            <button type="button" className="template-button configuration-button" onClick={handleChooseTemplate}>Choose
+              template
+            </button>
+            <div className="selected-file-name">{templateFile ? templateFile.name : ''}</div>
+            <input ref={templateRef} type="file" style={{display: 'none'}} onChange={onTemplateChange}/>
+            <button type="button" className="send-button configuration-button" onClick={handleLoadFiles}>Load files
+            </button>
+          </div>
         </div>
 
         {/* Output line */}
-        <div className="config-row output-row">
-        <label className="label-inline">Output:</label>
-          <textarea readOnly className="output-field" value={loadOutput} placeholder="Output will appear here after loading files" />
+        <div className="output-row">
+          <div className="aligned-group">
+            <label className="label-inline label-output">Output:</label>
+            <textarea readOnly className={`output-field ${loadOutputType}`} value={loadOutput}
+                      placeholder="Output will appear here after loading files"/>
+          </div>
         </div>
 
         {/* Snapshot creation row */}
-        <div className="config-row snapshot-row">
-          <label className="label-inline">Insert description (max 50 words):</label>
+        <div className="config-row main-actions-row">
+          <label className="label-inline">Insert description (max 80 chars):</label>
           <input
-            type="text"
-            className="text-input"
-            value={snapshotDescriptionInput}
-            onChange={handleDescriptionChange}
-            placeholder="Snapshot description"
-            maxLength={MAX_CHARS}
+              type="text"
+              className="text-input"
+              value={snapshotDescriptionInput}
+              onChange={handleDescriptionChange}
+              placeholder="Snapshot description"
+              maxLength={MAX_CHARS}
           />
-          <button type="button" className="send-button configuration-button" onClick={handleTakeSnapshot}>Take snapshot</button>
+          <button type="button" className="send-button configuration-button" onClick={handleTakeSnapshot}>Take
+            snapshot
+          </button>
         </div>
 
         {/* Snapshot creation result line */}
-        <div className="config-row small-result">
+        <div className={`config-row small-result ${snapshotResultType}`}>
           {snapshotResult}
         </div>
 
         {/* Snapshot selection and actions */}
-        <div className="config-row snapshot-manage-row">
-          <label className="label-inline">Select snapshot:</label>
-          <select
-            className="select-field"
-            value={selectedSnapshot}
-            onChange={(e) => setSelectedSnapshot(e.target.value)}
-          >
-            {snapshotList.map((s) => (
-              <option key={s.name} value={s.name}>{s.name}</option>
-            ))}
-          </select>
+        <div className="config-row main-actions-row">
+          <div className="aligned-group">
+            <label className="label-inline">Select snapshot:</label>
+            <select
+                className="select-field"
+                value={selectedSnapshot}
+                onChange={(e) => setSelectedSnapshot(e.target.value)}
+            >
+              {snapshotList.map((s) => (
+                  <option key={s.name} value={s.name}>{s.name}</option>
+              ))}
+            </select>
+          </div>
 
-          <label className="label-inline">Description:</label>
-          <div className="snapshot-desc">{selectedSnapshotDescription()}</div>
+          <div className="aligned-group description-display-group">
+            <label className="label-inline">Description:</label>
+            <div className="snapshot-desc">{selectedSnapshotDescription()}</div>
+          </div>
 
           <div className="snapshot-actions">
-            <button type="button" className="rollback-button configuration-button" onClick={handleRollback}>Rollback</button>
+            <button type="button" className="rollback-button configuration-button" onClick={handleRollback}>Rollback
+            </button>
             <button
-              type="button"
-              className="delete-button delete configuration-button"
-              onClick={handleDeleteSnapshot}
-              disabled={!selectedSnapshot || selectedSnapshot === 'snapshot0'}
+                type="button"
+                className="delete-button delete configuration-button"
+                onClick={handleDeleteSnapshot}
+                disabled={!selectedSnapshot || selectedSnapshot === 'snapshot0'}
             >
               Delete snapshot
             </button>
@@ -192,10 +238,9 @@ export default function Configuration({ username, showWait = true }) {
         </div>
 
         {/* Action result line */}
-        <div className="config-row small-result">
+        <div className={`config-row small-result ${actionResultType}`}>
           {actionResult}
         </div>
-
       </div>
     </div>
   );
