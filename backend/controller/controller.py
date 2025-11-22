@@ -14,7 +14,8 @@ SONIC_USER = "admin"
 SONIC_PASS = "YourPaSsWoRd"
 MINIPC_USER = "oem"
 MINIPC_PASS = "oem123"
-TEST = True             # if true uses wsl on windows (/mnt), otherwise normal paths
+active_reservations = {}    # dictionary that contains active and usable (after key insertion) reservation
+TEST = True                 # if true uses wsl on windows (/mnt), otherwise normal paths
 
 def safe_filename(name: str) -> str:
     # sanitize a string for use as filename
@@ -168,6 +169,10 @@ def grant_access():
     print("Ansible stderr:", err)
 
     if rc == 0:
+        # user account creation completed
+        if username and reservation_id is not None:
+            active_reservations[username] = reservation_id
+            print(f"User {username} granted access and added to active_reservations")
         return jsonify({"ok": True, "message": "Grant executed", "inventory": inv_path, "stdout": out, "stderr": err}), 200
     else:
         return jsonify({"ok": False, "message": "Ansible failed", "rc": rc, "stdout": out, "stderr": err}), 500
@@ -221,10 +226,32 @@ def revoke_access():
         print("Error deleting inventory file:", e)
 
     if rc == 0:
+        # revoked user account
+        if username in active_reservations:
+            del active_reservations[username]
+            print(f"User {username} removed from active_reservations")
         return jsonify({"ok": True, "message": "Revoke executed", "stdout": out, "stderr": err}), 200
     else:
         return jsonify({"ok": False, "message": "Ansible revoke failed", "rc": rc, "stdout": out, "stderr": err}), 500
 
+
+@app.route('/api/controller/checkAvailability', methods=['GET'])
+def check_availability():
+    # check if the user has an active reservation, in this case the configuration can start, otherwise wait
+    username = request.args.get("username")
+
+    if not username:
+        return jsonify({"ok": False, "command": "error", "message": "Missing username parameter"}), 400
+
+    print(f"Checking availability for user: {username}")
+
+    if username in active_reservations:
+        reservation_id = active_reservations[username]
+        print(f"User {username} found with reservation ID: {reservation_id}")
+        return jsonify({"ok": True, "command": "start_configuration", "reservation_id": reservation_id}), 200
+    else:
+        print(f"User {username} not found in active reservations.")
+        return jsonify({"ok": True, "command": "wait_configuration"}), 200
 
 if __name__ == '__main__':
 

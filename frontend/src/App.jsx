@@ -12,7 +12,6 @@ const ConfigurationGuard = ({ isReservationPermitted, children }) => {
 
   useEffect(() => {
     if (!isReservationPermitted) {
-       alert('Access denied: you do not have an active reservation token');
       // go back in the chronology
       // if chronology miss, go back to home
       if (window.history.length > 1) {
@@ -209,8 +208,8 @@ function App() {
                 {/* Home Page */}
                 <Route path="/" element={<NavbarWrapper><Home username={currentUser} /></NavbarWrapper>} />
                 <Route path="/reservation" element={<NavbarWrapper><Reservation username={currentUser} isReservationActive={isReservationActive} /> </NavbarWrapper>} />
-                {/*<Route path="/configuration" element={<NavbarWrapper><ConfigurationGuard isReservationPermitted={isReservationActive}><Configuration username={currentUser} /> </ConfigurationGuard></NavbarWrapper>} />*/}
-                <Route path="/configuration" element={<NavbarWrapper><Configuration username={currentUser} /></NavbarWrapper>} />
+                <Route path="/configuration" element={<NavbarWrapper><ConfigurationGuard isReservationPermitted={isReservationActive}><Configuration username={currentUser} /> </ConfigurationGuard></NavbarWrapper>} />
+                {/*<Route path="/configuration" element={<NavbarWrapper><Configuration username={currentUser} /></NavbarWrapper>} />*/}
                 {/* Nuove Pagine (usano lo stesso layout) */}
                 {/* <Route path="/configuration" element={<NavbarWrapper>{/* <ConfigurationPage /> *//*}</NavbarWrapper>} />*/}
                 {/* ... (ecc.) */}

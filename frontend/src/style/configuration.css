@@ -53,6 +53,14 @@
   margin-right:7px;
 }
 
+.selected-file-name.file-status-valid {
+    color: #1e7e34;
+}
+
+.selected-file-name.file-status-invalid {
+    color: #dc3545;
+}
+
 .configuration-button {
   padding: 6px 10px;
   border-radius: 6px;
