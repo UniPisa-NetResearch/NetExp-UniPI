@@ -15,8 +15,10 @@ const fetchAvailabilityStatus = async (username) => {
         const data = await response.json();
 
         if (data.command === 'start_configuration') {
+            console.log("start configuration!");
             return 'start_configuration';
         } else if (data.command === 'wait_configuration') {
+            console.log("wait configuration!");
             return 'wait_configuration';
         } else {
             console.error('Unexpected API response:', data);
@@ -56,7 +58,6 @@ export default function Configuration({username}) {
   const [actionResultType, setActionResultType] = useState(''); // 'success' | 'error'
   // unlock functionalities when account creation is completed
   const [isAccessGranted, setIsAccessGranted] = useState(false);
-  const [pollIntervalId, setPollIntervalId] = useState(null);
 
   const getNextSnapshotIndex = (currentList) => {
   // extract numerical index
@@ -71,34 +72,39 @@ export default function Configuration({username}) {
   useEffect(() => {
     const POLL_INTERVAL = 10000; // 10 seconds
 
+    let intervalId = null;
+    let mounted = true;
+
     const checkStatus = async () => {
         const command = await fetchAvailabilityStatus(username);
 
+        if (!mounted) return;
+
         if (command === 'start_configuration') {
             setIsAccessGranted(true);
-
-            if (pollIntervalId) {
-                if (typeof pollIntervalId === 'number' && pollIntervalId > 0) {
-                    clearInterval(pollIntervalId);
-                    setPollIntervalId(null);
-                } else if (pollIntervalId) {
-                    clearInterval(pollIntervalId);
-                    setPollIntervalId(null);
-                }
+             if (intervalId) {
+              clearInterval(intervalId);
+              intervalId = null;
             }
-
         } else if (command === 'wait_configuration') {
             setIsAccessGranted(false);
-
-            if (!pollIntervalId) {
-                const id = setInterval(checkStatus, POLL_INTERVAL);
-                setPollIntervalId(id);
+            if (!intervalId) {
+              intervalId = setInterval(checkStatus, POLL_INTERVAL);
             }
         } else if (command === 'error') {
-            console.error("Error orAPI response not valid. Continue polling");
+            console.error("Error or API response not valid. Continue polling");
         }
     };
-}, [username, pollIntervalId]);
+    checkStatus();
+
+    return () => {
+        mounted = false;
+        if (intervalId) {
+          clearInterval(intervalId);
+          intervalId = null;
+        }
+    };
+}, [username]);
 
   // helpers
   const handleChoosePlaybook = () => playbookRef.current && playbookRef.current.click();

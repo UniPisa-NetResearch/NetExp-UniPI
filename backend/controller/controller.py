@@ -7,6 +7,9 @@ from ..app import app
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 INVENTORY_DIR = os.path.join(BASE_DIR, "inventories")
+CONTROLLER_PLAYBOOKS_DIR = os.path.join(BASE_DIR, "controllerPlaybooks")
+TEMPLATES_DIR = os.path.join(CONTROLLER_PLAYBOOKS_DIR, "templates")
+WRAPPERS_DIR = os.path.join(CONTROLLER_PLAYBOOKS_DIR, "wrappers")
 
 ANSIBLE_EXTRA_ARGS = ""            #  extra args (ex. -c paramiko)
 # default credentials per role
@@ -30,8 +33,8 @@ def ensure_inventory_dir():
 def get_playbook_template_path(kind: str):
     """
     Return the path of playbook template for 'grant' or 'revoke' in the folder INVENTORY_DIR, None otherwise.
-      - grant  -> <INVENTORY_DIR>/grant_playbook.yml
-      - revoke -> <INVENTORY_DIR>/revoke_playbook.yml
+      - grant  -> <CONTROLLER_PLAYBOOKS_DIR>/grant_playbook.yml
+      - revoke -> <CONTROLLER_PLAYBOOKS_DIR>/revoke_playbook.yml
     """
     kind = (kind or "").lower()
     if kind == "grant":
@@ -41,7 +44,7 @@ def get_playbook_template_path(kind: str):
     else:
         return None
 
-    path = os.path.join(INVENTORY_DIR, filename)
+    path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, filename)
     return path if os.path.exists(path) else None
 
 def write_inventory(reservation_id: int, devices: list):
