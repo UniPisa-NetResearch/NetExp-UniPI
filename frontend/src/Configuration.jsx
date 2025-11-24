@@ -15,10 +15,8 @@ const fetchAvailabilityStatus = async (username) => {
         const data = await response.json();
 
         if (data.command === 'start_configuration') {
-            console.log("start configuration!");
             return 'start_configuration';
         } else if (data.command === 'wait_configuration') {
-            console.log("wait configuration!");
             return 'wait_configuration';
         } else {
             console.error('Unexpected API response:', data);
@@ -31,18 +29,77 @@ const fetchAvailabilityStatus = async (username) => {
     }
 };
 
+function useFileInput(allowedExt = []) {
+  const ref = useRef(null);
+  const [file, setFile] = useState(null);
+  const [fileType, setFileType] = useState(''); // '' | 'valid' | 'invalid'
+
+  const choose = () => ref.current && ref.current.click();
+
+  const onChange = (e) => {
+    const f = e.target.files[0] || null;
+    setFile(f);
+    if (!f) {
+      setFileType('');
+      return;
+    }
+    const nameLower = f.name.toLowerCase();
+    const isValid = allowedExt.some(ext => nameLower.endsWith(ext));
+    setFileType(isValid ? 'valid' : 'invalid');
+  };
+
+  return { ref, file, fileType, choose, onChange, fileName: file ? file.name : '' };
+}
+
+function handleUpload({ descriptors, setOutput, setOutputType, requireAny = true }) {
+  const errors = [];
+
+  descriptors.forEach((d) => {
+    if (d.fileType === 'invalid') {
+      errors.push(`${d.label} has wrong format.`);
+    }
+  });
+
+  if (errors.length > 0) {
+    let errorMessage = 'File format error: ';
+    errorMessage += errors.length === 2 ? 'Both files have the wrong format.' : errors[0];
+    setOutput(errorMessage);
+    setOutputType('error');
+    return;
+  }
+
+  const anySelected = descriptors.some(d => d.file);
+  if (requireAny && !anySelected) {
+    setOutput('No files selected');
+    setOutputType('error');
+    return;
+  }
+
+  const names = descriptors.reduce((acc, d) => {
+    if (d.file) acc.push(`${d.label}: ${d.file.name}`);
+    return acc;
+  }, []);
+
+  const time = new Date().toLocaleString();
+  setOutput(`Files uploaded (${time}) — ${names.join(' | ')}`);
+  setOutputType('success');
+}
+
 export default function Configuration({username}) {
-  // files
-  const playbookRef = useRef(null);
-  const templateRef = useRef(null);
-  const [playbookFile, setPlaybookFile] = useState(null);
-  const [templateFile, setTemplateFile] = useState(null);
-  const [playbookFileType, setPlaybookFileType] = useState(''); // 'valid' | 'invalid'
-  const [templateFileType, setTemplateFileType] = useState(''); // 'valid' | 'invalid'
+  // files: config files and test files
+  const playbook = useFileInput(['.yml', '.yaml']);
+  const template = useFileInput(['.j2']);
+
+  const testPlaybook = useFileInput(['.yml', '.yaml']);
+  const testScript = useFileInput(['.sh', '.py']);
 
   // output for Load files
   const [loadOutput, setLoadOutput] = useState('');
   const [loadOutputType, setLoadOutputType] = useState(''); // 'success' |'error'
+
+  // test execution output
+  const [testOutput, setTestOutput] = useState('');
+  const [testOutputType, setTestOutputType] = useState(''); // 'success' | 'error'
 
   // snapshot management
   const [snapshotList, setSnapshotList] = useState([
@@ -105,73 +162,6 @@ export default function Configuration({username}) {
         }
     };
 }, [username]);
-
-  // helpers
-  const handleChoosePlaybook = () => playbookRef.current && playbookRef.current.click();
-  const handleChooseTemplate = () => templateRef.current && templateRef.current.click();
-
-  const onPlaybookChange = (e) => {
-    const f = e.target.files[0] || null;
-    setPlaybookFile(f);
-    if (f) {
-      const isValid = f.name.toLowerCase().endsWith('.yml') || f.name.toLowerCase().endsWith('.yaml');
-      setPlaybookFileType(isValid ? 'valid' : 'invalid');
-    } else {
-      setPlaybookFileType('');
-    }
-  };
-  const onTemplateChange = (e) => {
-      const f = e.target.files[0] || null;
-      setTemplateFile(f);
-      if (f) {
-        const isValid = f.name.toLowerCase().endsWith('.j2');
-        setTemplateFileType(isValid ? 'valid' : 'invalid');
-      } else {
-        setTemplateFileType('');
-      }
-  };
-
-  const handleLoadFiles = () => {
-    const errors = [];
-    if (playbookFileType === 'invalid') {
-        errors.push("Playbook must be a .yml or .yaml file.");
-    }
-    if (templateFileType === 'invalid') {
-        errors.push("Template must be a .j2 file.");
-    }
-
-    if (errors.length > 0) {
-        let errorMessage = "File format error: ";
-
-        if (errors.length === 2) {
-            errorMessage += "Both files have the wrong format.";
-        } else {
-            errorMessage += errors[0];
-        }
-
-        setLoadOutput(errorMessage);
-        setLoadOutputType('error');
-        return;
-    }
-
-    // Simulate sending files. If none selected, inform user.
-    if (!playbookFile && !templateFile) {
-      setLoadOutput('No files selected');
-      setLoadOutputType('error');
-      return;
-    }
-
-    const names = [];
-    if (playbookFile) names.push(`Playbook: ${playbookFile.name}`);
-    if (templateFile) names.push(`Template: ${templateFile.name}`);
-
-    const time = new Date().toLocaleString();
-    setLoadOutput(`Files uploaded (${time}) — ${names.join(' | ')}`);
-    setLoadOutputType('success');
-    setActionResult("");
-    setSnapshotResult("");
-    setSnapshotDescriptionInput("");
-  };
 
   // character limit for description
   const MAX_CHARS = 80;
@@ -244,6 +234,37 @@ export default function Configuration({username}) {
     return s ? s.description : '';
   };
 
+   // wrappers that call the generic handler
+  const handleLoadFiles = () => {
+    handleUpload({
+      descriptors: [
+        { file: playbook.file, fileType: playbook.fileType, label: 'Playbook' },
+        { file: template.file, fileType: template.fileType, label: 'Template' }
+      ],
+      setOutput: setLoadOutput,
+      setOutputType: setLoadOutputType,
+      requireAny: true
+    });
+    setActionResult('');
+    setSnapshotResult('');
+    setSnapshotDescriptionInput('');
+  };
+
+  const handleLoadTestFiles = () => {
+    handleUpload({
+      descriptors: [
+        { file: testPlaybook.file, fileType: testPlaybook.fileType, label: 'Playbook' },
+        { file: testScript.file, fileType: testScript.fileType, label: 'Script' }
+      ],
+      setOutput: setTestOutput,
+      setOutputType: setTestOutputType,
+      requireAny: true
+    });
+    setActionResult('');
+    setSnapshotResult('');
+    setSnapshotDescriptionInput('');
+  };
+
   return (
     <div className="home-content-wrapper configuration-wrapper">
       {/* Conditional message: can be hidden by passing showWait={false} */}
@@ -259,17 +280,17 @@ export default function Configuration({username}) {
           <div className="aligned-group">
             <label className="label-inline">Load Ansible playbook:</label>
             <button type="button" className="playbook-button configuration-button"
-                    onClick={handleChoosePlaybook} disabled={!isAccessGranted}>Choose
+                    onClick={playbook.choose} disabled={!isAccessGranted}>Choose
               playbook
             </button>
-            <div className={`selected-file-name file-status-${playbookFileType}`}>{playbookFile ? playbookFile.name : ''}</div>
-            <input ref={playbookRef} type="file" style={{display: 'none'}} onChange={onPlaybookChange} disabled={!isAccessGranted}/>
+            <div className={`selected-file-name file-status-${playbook.fileType}`}>{playbook.fileName}</div>
+            <input ref={playbook.ref} type="file" style={{display: 'none'}} onChange={playbook.onChange} disabled={!isAccessGranted}/>
             <label className="label-inline">Load Jinja template:</label>
-            <button type="button" className="template-button configuration-button" onClick={handleChooseTemplate} disabled={!isAccessGranted}>Choose
+            <button type="button" className="template-button configuration-button" onClick={template.choose} disabled={!isAccessGranted}>Choose
               template
             </button>
-            <div className={`selected-file-name file-status-${templateFileType}`}>{templateFile ? templateFile.name : ''}</div>
-            <input ref={templateRef} type="file" style={{display: 'none'}} onChange={onTemplateChange} disabled={!isAccessGranted}/>
+            <div className={`selected-file-name file-status-${template.fileType}`}>{template.fileName}</div>
+            <input ref={template.ref} type="file" style={{display: 'none'}} onChange={template.onChange} disabled={!isAccessGranted}/>
             <button type="button" className="send-button configuration-button" onClick={handleLoadFiles} disabled={!isAccessGranted}>Load files
             </button>
           </div>
@@ -281,6 +302,37 @@ export default function Configuration({username}) {
             <label className="label-inline label-output">Output:</label>
             <textarea readOnly className={`output-field ${loadOutputType}`} value={loadOutput}
                       placeholder="Output will appear here after loading files"/>
+          </div>
+        </div>
+
+        {/* line for test file loading */}
+        <div className="config-row main-actions-row">
+          <div className="aligned-group">
+            <label className="label-inline">Load Ansible playbook:</label>
+            <button type="button" className="playbook-button configuration-button"
+                    onClick={testPlaybook.choose} disabled={!isAccessGranted}>Choose
+              playbook
+            </button>
+            <div className={`selected-file-name file-status-${testPlaybook.fileType}`}>{testPlaybook.fileName}</div>
+            <input ref={testPlaybook.ref} type="file" style={{display: 'none'}} onChange={testPlaybook.onChange} disabled={!isAccessGranted}/>
+
+            <label className="label-inline">Load test script:</label>
+            <button type="button" className="template-button configuration-button" onClick={testScript.choose} disabled={!isAccessGranted}>Choose test
+              script
+            </button>
+            <div className={`selected-file-name file-status-${testScript.fileType} test-file-name`}>{testScript.fileName}</div>
+            <input ref={testScript.ref} type="file" style={{display: 'none'}} onChange={testScript.onChange} disabled={!isAccessGranted}/>
+
+            <button type="button" className="send-button configuration-button" onClick={handleLoadTestFiles} disabled={!isAccessGranted}>Run test</button>
+          </div>
+        </div>
+
+        {/* Output line for Test */}
+        <div className="output-row">
+          <div className="aligned-group">
+            <label className="label-inline label-output">Output:</label>
+            <textarea readOnly className={`output-field ${testOutputType}`} value={testOutput}
+                      placeholder="Output of the test"/>
           </div>
         </div>
 

@@ -38,7 +38,10 @@
     align-items: center;
     gap: 15px;
 }
+.selected-file-name.test-file-name {
+  margin-right: 28px; /* regola il valore a piacere (es. 24px, 32px, 48px) */
 
+}
 .label-inline {
   font-size: 14px;
 }

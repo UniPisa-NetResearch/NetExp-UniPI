@@ -48,7 +48,7 @@ const AuthForm = ({ onAuthSuccess }) => {
             }
         } catch (error) {
             console.error('Fetch error:', error);
-            setMessage('Connection error to Flask server');
+            setMessage('Error: connection problem to Flask server');
         }
     };
     const handleToggle = (isLoginMode) => {
