@@ -3,6 +3,39 @@ import React, {useState, useRef, useEffect} from 'react';
 import './style/style.css';
 import './style/configuration.css';
 
+// apiClient.js (esempi)
+export async function submitPlaybook({ username, reservation_id, playbookFile, templateFile=null}) {
+  const url = `/api/validator/submitPlaybook`;
+  const fd = new FormData();
+  fd.append("username", username);
+  if (reservation_id) fd.append("reservation_id", reservation_id);
+  fd.append("playbook", playbookFile); // required
+  if (templateFile) fd.append("template", templateFile);
+
+  const resp = await fetch(url, {
+    method: "POST",
+    body: fd
+  });
+
+  if (resp.status === 202) {
+    const data = await resp.json();
+    return { ok: true, job_id: data.job_id, message: data.message };
+  } else {
+    const err = await resp.json();
+    return { ok: false, message: err.message || "Upload failed" };
+  }
+}
+
+export async function getJobStatus(jobId) {
+  const resp = await fetch(`/api/validator/jobStatus?job_id=${encodeURIComponent(jobId)}`);
+  if (!resp.ok) {
+    return { ok: false, message: `HTTP ${resp.status}` };
+  }
+
+  return await resp.json(); // contains status and possibly result
+}
+
+
 const fetchAvailabilityStatus = async (username) => {
     try {
         const response = await fetch(`/api/controller/checkAvailability?username=${username}`);
@@ -65,14 +98,14 @@ function handleUpload({ descriptors, setOutput, setOutputType, requireAny = true
     errorMessage += errors.length === 2 ? 'Both files have the wrong format.' : errors[0];
     setOutput(errorMessage);
     setOutputType('error');
-    return;
+    return false;
   }
 
   const anySelected = descriptors.some(d => d.file);
   if (requireAny && !anySelected) {
     setOutput('No files selected');
     setOutputType('error');
-    return;
+    return false;
   }
 
   const names = descriptors.reduce((acc, d) => {
@@ -83,9 +116,10 @@ function handleUpload({ descriptors, setOutput, setOutputType, requireAny = true
   const time = new Date().toLocaleString();
   setOutput(`Files uploaded (${time}) — ${names.join(' | ')}`);
   setOutputType('success');
+  return true;
 }
 
-export default function Configuration({username}) {
+export default function Configuration({username, reservation_id}) {
   // files: config files and test files
   const playbook = useFileInput(['.yml', '.yaml']);
   const template = useFileInput(['.j2']);
@@ -102,9 +136,7 @@ export default function Configuration({username}) {
   const [testOutputType, setTestOutputType] = useState(''); // 'success' | 'error'
 
   // snapshot management
-  const [snapshotList, setSnapshotList] = useState([
-    { name: 'snapshot0', description: 'Original network state, no configurations applied' },
-  ]);
+  const [snapshotList, setSnapshotList] = useState([{ name: 'snapshot0', description: 'Original network state, no configurations applied' },]);
   const [selectedSnapshot, setSelectedSnapshot] = useState('snapshot0');
   const [snapshotDescriptionInput, setSnapshotDescriptionInput] = useState('');
   const [snapshotResult, setSnapshotResult] = useState('');
@@ -116,7 +148,59 @@ export default function Configuration({username}) {
   // unlock functionalities when account creation is completed
   const [isAccessGranted, setIsAccessGranted] = useState(false);
 
-  const getNextSnapshotIndex = (currentList) => {
+const [jobId, setJobId] = useState(null);
+const [polling, setPolling] = useState(false);
+
+const submitConfiguration = async () => {
+
+  setLoadOutput("Job queued, waiting for worker...");
+  setLoadOutputType(""); // neutral or 'info'
+  const resp = await submitPlaybook({
+    username,
+    reservation_id: reservation_id,
+    playbookFile: playbook.file,
+    templateFile: template.file
+  });
+  if (!resp.ok) {
+    setLoadOutput(`Error: ${resp.message}`);
+    setLoadOutputType('error');
+    return;
+  }
+  setJobId(resp.job_id);
+  // start polling
+  startPollingJob(resp.job_id, setLoadOutput, setLoadOutputType, setPolling);
+};
+
+// funzione di polling semplice
+function startPollingJob(jobId, setOutput, setOutputType, setPolling) {
+  if (!jobId) return;
+  setPolling(true);
+  const interval = 3000; // 3s
+  const pid = setInterval(async () => {
+    try {
+      const res = await getJobStatus(jobId);
+      if (res.status === 'finished' && res.result) {
+        const r = res.result;
+        setOutput(`Return code: ${r.rc}\n\nSTDOUT:\n${r.stdout}\n\nSTDERR:\n${r.stderr}`);
+        setOutputType(r.rc === 0 ? 'success' : 'error');
+        clearInterval(pid);
+        setPolling(false);
+      } else if (res.status === 'failed') {
+        setOutput(`Job failed!`);
+        setOutputType('error');
+        clearInterval(pid);
+        setPolling(false);
+      }
+    } catch (e) {
+      setOutput(`Error retrieving job status: ${e.message}`);
+      setOutputType('error');
+      clearInterval(pid);
+      setPolling(false);
+    }
+  }, interval);
+}
+
+const getNextSnapshotIndex = (currentList) => {
   // extract numerical index
   const indices = currentList.map(s => {
     const match = s.name.match(/snapshot(\d+)/);
@@ -126,9 +210,8 @@ export default function Configuration({username}) {
   return Math.max(...indices) + 1;
 };
 
-  useEffect(() => {
+useEffect(() => {
     const POLL_INTERVAL = 10000; // 10 seconds
-
     let intervalId = null;
     let mounted = true;
 
@@ -163,8 +246,9 @@ export default function Configuration({username}) {
     };
 }, [username]);
 
-  // character limit for description
-  const MAX_CHARS = 80;
+// character limit for description
+
+const MAX_CHARS = 80;
 
   // onChange for description: enforce max chars (maxLength on input also used)
   const handleDescriptionChange = (e) => {
@@ -235,11 +319,11 @@ export default function Configuration({username}) {
   };
 
    // wrappers that call the generic handler
-  const handleLoadFiles = () => {
-    handleUpload({
+  const handleLoadFiles = async () => {
+    const ok = handleUpload({
       descriptors: [
-        { file: playbook.file, fileType: playbook.fileType, label: 'Playbook' },
-        { file: template.file, fileType: template.fileType, label: 'Template' }
+        {file: playbook.file, fileType: playbook.fileType, label: 'Playbook'},
+        {file: template.file, fileType: template.fileType, label: 'Template'}
       ],
       setOutput: setLoadOutput,
       setOutputType: setLoadOutputType,
@@ -248,6 +332,17 @@ export default function Configuration({username}) {
     setActionResult('');
     setSnapshotResult('');
     setSnapshotDescriptionInput('');
+
+    if (!ok) {
+      // handleUpload has set the error
+      return;
+    }
+
+    setLoadOutput('Job queued, waiting for worker...');
+    setLoadOutputType('');
+
+    await submitConfiguration({username, reservation_id, playbookFile: playbook.file, templateFile: template.file || null});
+
   };
 
   const handleLoadTestFiles = () => {

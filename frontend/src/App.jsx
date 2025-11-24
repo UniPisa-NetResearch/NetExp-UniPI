@@ -43,6 +43,7 @@ function App() {
     const [isAuthenticated, setIsAuthenticated] = useState(false);
     const [currentUser, setCurrentUser] = useState(null);
     const [currentUserId, setCurrentUserId] = useState(null);
+    const [reservationId, setReservationId] = useState(null);
 
     // tracks if a reservation is active (token granted) to show the timer
     const [isReservationActive, setIsReservationActive] = useState(false);
@@ -121,6 +122,7 @@ function App() {
             // event granted: start timer and permit access
             setIsReservationActive(true);
             setActiveReservationExpiration(payload.expires_at);
+            setReservationId(payload.reservation_id)
         } else if (payload.type === "revoked") {
             // event revoked: stop timer and block access
             setIsReservationActive(false);
@@ -208,8 +210,8 @@ function App() {
                 {/* Home Page */}
                 <Route path="/" element={<NavbarWrapper><Home username={currentUser} /></NavbarWrapper>} />
                 <Route path="/reservation" element={<NavbarWrapper><Reservation username={currentUser} isReservationActive={isReservationActive} /> </NavbarWrapper>} />
-                <Route path="/configuration" element={<NavbarWrapper><ConfigurationGuard isReservationPermitted={isReservationActive}><Configuration username={currentUser} /> </ConfigurationGuard></NavbarWrapper>} />
-                {/*<Route path="/configuration" element={<NavbarWrapper><Configuration username={currentUser} /></NavbarWrapper>} />*/}
+                <Route path="/configuration" element={<NavbarWrapper><ConfigurationGuard isReservationPermitted={isReservationActive}><Configuration username={currentUser} reservation_id={reservationId}/> </ConfigurationGuard></NavbarWrapper>} />
+                {/*<Route path="/configuration" element={<NavbarWrapper><Configuration username={currentUser} reservation_id={reservationId}/></NavbarWrapper>} />*/}
                 {/* Nuove Pagine (usano lo stesso layout) */}
                 {/* <Route path="/configuration" element={<NavbarWrapper>{/* <ConfigurationPage /> *//*}</NavbarWrapper>} />*/}
                 {/* ... (ecc.) */}

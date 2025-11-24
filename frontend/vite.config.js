@@ -20,6 +20,11 @@ export default defineConfig({
         target: 'http://localhost:5002',
         changeOrigin: true,
         secure: false,
+      },
+      '/api/validator': {
+        target: 'http://localhost:5003',
+        changeOrigin: true,
+        secure: false,
       }
     },
   },
