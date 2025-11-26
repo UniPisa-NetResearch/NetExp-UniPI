@@ -137,11 +137,12 @@ def grant_access():
     ssh_key = data.get("ssh_key")
     user_id = data.get("user_id")
     username = data.get("username")
+    full_user =data.get("full_user")
     reservation_id = data.get("reservation_id")
     devices = data.get("devices")
 
 
-    if ssh_key is None or user_id is None or username is None or reservation_id is None or devices is None:
+    if ssh_key is None or user_id is None or username is None or reservation_id is None or devices is None or full_user is None:
         print("grantAccess: missing required fields")
         return jsonify({"ok": False, "message": "Missing required fields (ssh_key, user_id, username, devices)"}), 400
 
@@ -165,7 +166,7 @@ def grant_access():
     print("Using playbook:", pb_path)
 
     # run ansible-playbook
-    extra_vars = {"username": username, "ssh_key": ssh_key}
+    extra_vars = {"username": username, "ssh_key": ssh_key, "full_user": bool(full_user)}
     rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars)
     print("Ansible rc:", rc)
     print("Ansible stdout:", out)

@@ -5,6 +5,7 @@
   vars:
     test: false                # if false the management interfaces are the real one, otherwise are eth1 and enp1s0
     res_group: resusers        # group used to collect reservation users
+    full_user: false           # if true, user does not have restricted access by wrappers (false default)
     # candidate commands we want to expose to reservation users
     candidate_cmds:
       - ip
@@ -68,39 +69,42 @@
         mode: '0644'
 
     # install all the wrappers on the devices ----------------------------------------------
-    - name: Deploy res_ip wrapper (always)
-      ansible.builtin.copy:
-        src: "wrappers/res_ip.sh"
-        dest: /usr/local/sbin/res_ip
-        owner: root
-        group: root
-        mode: '0755'
+    - block:
+      - name: Deploy res_ip wrapper (always)
+        ansible.builtin.copy:
+          src: "wrappers/res_ip.sh"
+          dest: /usr/local/sbin/res_ip
+          owner: root
+          group: root
+          mode: '0755'
 
-    - name: Deploy res_tc wrapper (always)
-      ansible.builtin.copy:
-        src: "wrappers/res_tc.sh"
-        dest: /usr/local/sbin/res_tc
-        owner: root
-        group: root
-        mode: '0755'
+      - name: Deploy res_tc wrapper (always)
+        ansible.builtin.copy:
+          src: "wrappers/res_tc.sh"
+          dest: /usr/local/sbin/res_tc
+          owner: root
+          group: root
+          mode: '0755'
 
-    - name: Deploy res_vtysh wrapper (only on SONiC if vtysh present)
-      ansible.builtin.copy:
-        src: "wrappers/res_vtysh.sh"
-        dest: /usr/local/sbin/res_vtysh
-        owner: root
-        group: root
-        mode: '0755'
-      when: is_sonic and (which_vtysh.stdout != '')
+      - name: Deploy res_vtysh wrapper (only on SONiC if vtysh present)
+        ansible.builtin.copy:
+          src: "wrappers/res_vtysh.sh"
+          dest: /usr/local/sbin/res_vtysh
+          owner: root
+          group: root
+          mode: '0755'
+        when: is_sonic and (which_vtysh.stdout != '')
 
-    - name: Deploy res_config wrapper (only on SONiC if config present)
-      ansible.builtin.copy:
-        src: "wrappers/res_config.sh"
-        dest: /usr/local/sbin/res_config
-        owner: root
-        group: root
-        mode: '0755'
-      when: is_sonic and (which_config.stdout != '')
+      - name: Deploy res_config wrapper (only on SONiC if config present)
+        ansible.builtin.copy:
+          src: "wrappers/res_config.sh"
+          dest: /usr/local/sbin/res_config
+          owner: root
+          group: root
+          mode: '0755'
+        when: is_sonic and (which_config.stdout != '')
+
+      when: not full_user | bool
     #------------------------------------------------------------------------------------------------------
     # verify which wrappers exist on the target, used to build a convenience map
     - name: Check presence of installed wrappers on remote
@@ -113,6 +117,7 @@
         - /usr/local/sbin/res_config
       register: stat_wrappers
       changed_when: false
+      when: not full_user | bool
 
     # create a dict like { res_ip: true, res_tc: true, ... } to simplify later conditionals
     - name: Build a dict of wrapper existence for convenience
@@ -124,6 +129,7 @@
               | zip( stat_wrappers.results | map(attribute='stat.exists') )
             )
           }}
+      when: not full_user | bool
 
     # ensure the group exists for later user creation
     - name: Create group for reservation users
@@ -231,6 +237,12 @@
                 ( {'config': '/usr/local/sbin/res_config'} if (is_sonic and wrapper_exists.res_config and (found_cmd_paths.get('config','') != '')) else {} )
               )
           }}
+      when: not full_user | bool
+
+    - name: Skip overrides when full_user and keep original found_cmd_paths
+      ansible.builtin.set_fact:
+        found_cmd_paths_overridden: "{{ found_cmd_paths | default({}) }}"
+      when: full_user | bool
 
     # log the mapping of found commands
     - name: show found command paths

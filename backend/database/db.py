@@ -9,6 +9,7 @@ class User(db.Model):
     username = db.Column(db.String(80), unique=True, nullable=False)
     password = db.Column(db.String(255), nullable=False)
     ssh_key = db.Column(db.Text, nullable=False)        # text preferred for long keys
+    full_user = db.Column(db.Boolean, default=False, nullable=False)
 
     def set_password(self, plain_password):
         self.password = generate_password_hash(plain_password)

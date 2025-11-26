@@ -39,6 +39,7 @@ def send_to_controller(msg_type, user_id, reservation_id):
                 return
             username = getattr(user, "username", None)
             ssh_key = getattr(user, "ssh_key", None)
+            full_user = getattr(user, "full_user", None)
 
             if msg_type == "granted":
                 # read reservation devices
@@ -119,6 +120,7 @@ def send_to_controller(msg_type, user_id, reservation_id):
                     "ssh_key": ssh_key,
                     "user_id": user_id,
                     "username": username,
+                    "full_user": full_user,
                     "reservation_id": reservation_id,
                     "devices": devices_list
                 }
