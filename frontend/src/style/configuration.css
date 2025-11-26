@@ -21,7 +21,6 @@
 .config-row {
   display: flex;
   align-items: center;
-  gap: 90px;
   margin: 14px 0;
   font-weight: 500;
   color: #343a40;
@@ -29,7 +28,8 @@
 
 .main-actions-row {
     flex-wrap: wrap;
-    justify-content: flex-start;
+    /*justify-content: flex-start;*/
+    justify-content: space-between;
     gap: 16px;
 }
 
@@ -37,11 +37,21 @@
     display: flex;
     align-items: center;
     gap: 15px;
+    flex-grow: 1;
+    justify-content: space-between;
 }
+
+.aligned-group-snapshot {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
 .selected-file-name.test-file-name {
   margin-right: 28px; /* regola il valore a piacere (es. 24px, 32px, 48px) */
 
 }
+
 .label-inline {
   font-size: 14px;
 }
@@ -91,6 +101,10 @@
 .rollback-button {
   background-color: #eccb47;
   color: white;
+}
+
+.choose-button{
+    width:125px;
 }
 
 .playbook-button:hover {

@@ -35,7 +35,6 @@ export async function getJobStatus(jobId) {
   return await resp.json(); // contains status and possibly result
 }
 
-
 const fetchAvailabilityStatus = async (username) => {
     try {
         const response = await fetch(`/api/controller/checkAvailability?username=${username}`);
@@ -86,16 +85,20 @@ function useFileInput(allowedExt = []) {
 
 function handleUpload({ descriptors, setOutput, setOutputType, requireAny = true }) {
   const errors = [];
+  let errorMessage
 
   descriptors.forEach((d) => {
     if (d.fileType === 'invalid') {
       errors.push(`${d.label} has wrong format.`);
+       if(d.label === "Playbook"){
+         errorMessage = errors + " File must be in 'yml' or 'yaml' format"
+       }else{
+          errorMessage = errors + " File must be in 'zip' format"
+       }
     }
   });
 
   if (errors.length > 0) {
-    let errorMessage = 'File format error: ';
-    errorMessage += errors.length === 2 ? 'Both files have the wrong format.' : errors[0];
     setOutput(errorMessage);
     setOutputType('error');
     return false;
@@ -114,23 +117,21 @@ function handleUpload({ descriptors, setOutput, setOutputType, requireAny = true
   }, []);
 
   const time = new Date().toLocaleString();
-  setOutput(`Files uploaded (${time}) — ${names.join(' | ')}`);
+  setOutput(`File uploaded (${time}) — ${names.join(' | ')}`);
   setOutputType('success');
   return true;
 }
 
 export default function Configuration({username, reservation_id}) {
-  // files: config files and test files
+  // files: playbook, template and test files
+  const template = useFileInput(['.zip']);
   const playbook = useFileInput(['.yml', '.yaml']);
-  const template = useFileInput(['.j2']);
-
-  const testPlaybook = useFileInput(['.yml', '.yaml']);
-  const testScript = useFileInput(['.sh', '.py']);
-
-  // output for Load files
-  const [loadOutput, setLoadOutput] = useState('');
-  const [loadOutputType, setLoadOutputType] = useState(''); // 'success' |'error'
-
+  // template output
+  const [templateOutput, setTemplateOutput] = useState('');
+  const [templateOutputType, setTemplateOutputType] = useState(''); // 'success' |'error'
+  // playbook output
+  const [playbookOutput, setPlaybookOutput] = useState('');
+  const [playbookOutputType, setPlaybookOutputType] = useState(''); // 'success' |'error'
   // test execution output
   const [testOutput, setTestOutput] = useState('');
   const [testOutputType, setTestOutputType] = useState(''); // 'success' | 'error'
@@ -151,24 +152,85 @@ export default function Configuration({username, reservation_id}) {
 const [jobId, setJobId] = useState(null);
 const [polling, setPolling] = useState(false);
 
+const downloadFile= async (file_type) =>{
+  console.log("file type: ", file_type);
+
+  if (file_type === "playbook") {
+    try {
+      const payload = { reservation_id: reservation_id };
+
+      const resp = await fetch("/api/validator/downloadPlaybook", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (!resp.ok) {
+        let errMsg;
+        const j = await resp.json();
+        errMsg = j.message || JSON.stringify(j);
+
+        setPlaybookOutput(errMsg);
+        setPlaybookOutputType("error");
+        return;
+      }
+      // read file as ArrayBuffer, create Blob and start download
+      const arrayBuffer = await resp.arrayBuffer();
+      const blob = new Blob([arrayBuffer], { type: "text/yaml" });
+
+      // retrieve filename from header Content-Disposition if exists
+      let filename = `res_${reservation_id}_playbook_template.yml`;
+      const cd = resp.headers.get("Content-Disposition");
+      if (cd) {
+        const m = cd.match(/filename\*=UTF-8''(.+)$|filename="?([^";]+)"?/);
+        if (m) filename = decodeURI(m[1] || m[2]);
+      }
+
+      // create object URL and start download without adding permanent link
+      const url = window.URL.createObjectURL(blob);
+
+      // create <a>, set href and click
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      // some browsers need to add the element to the body, after download we remove
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      console.log("after download");
+      // remove URL to free memory
+      window.URL.revokeObjectURL(url);
+      setPlaybookOutput(`Downloaded playbook: ${filename}`);
+      setPlaybookOutputType("success");
+    } catch (e) {
+      setPlaybookOutput(`Error: ${e}`);
+      setPlaybookOutputType("error");
+    }
+  }
+}
+
+const runTest = () =>{
+   console.log("run test");
+}
 const submitConfiguration = async () => {
 
-  setLoadOutput("Job queued, waiting for worker...");
-  setLoadOutputType(""); // neutral or 'info'
+  setPlaybookOutput("Job queued, waiting for worker...");
+  setPlaybookOutputType(""); // neutral or 'info'
   const resp = await submitPlaybook({
     username,
     reservation_id: reservation_id,
     playbookFile: playbook.file,
-    templateFile: template.file
   });
   if (!resp.ok) {
-    setLoadOutput(`Error: ${resp.message}`);
-    setLoadOutputType('error');
+    setPlaybookOutput(`Error: ${resp.message}`);
+    setPlaybookOutputType('error');
     return;
   }
   setJobId(resp.job_id);
   // start polling
-  startPollingJob(resp.job_id, setLoadOutput, setLoadOutputType, setPolling);
+  startPollingJob(resp.job_id, setPlaybookOutput, setPlaybookOutputType, setPolling);
 };
 
 // funzione di polling semplice
@@ -318,15 +380,14 @@ const MAX_CHARS = 80;
     return s ? s.description : '';
   };
 
-   // wrappers that call the generic handler
-  const handleLoadFiles = async () => {
+  // wrappers that call the generic handler
+  const handleTemplateFile = async () => {
     const ok = handleUpload({
       descriptors: [
-        {file: playbook.file, fileType: playbook.fileType, label: 'Playbook'},
         {file: template.file, fileType: template.fileType, label: 'Template'}
       ],
-      setOutput: setLoadOutput,
-      setOutputType: setLoadOutputType,
+      setOutput: setTemplateOutput,
+      setOutputType: setTemplateOutputType,
       requireAny: true
     });
     setActionResult('');
@@ -338,21 +399,20 @@ const MAX_CHARS = 80;
       return;
     }
 
-    setLoadOutput('Job queued, waiting for worker...');
-    setLoadOutputType('');
+    setTemplateOutputType('Job queued, waiting for worker...');
+    setTemplateOutput('');
 
-    await submitConfiguration({username, reservation_id, playbookFile: playbook.file, templateFile: template.file || null});
+    await submitConfiguration({username, reservation_id, templateFile: template.file || null});
 
   };
 
-  const handleLoadTestFiles = () => {
+  const handlePlaybookFile = () => {
     handleUpload({
       descriptors: [
-        { file: testPlaybook.file, fileType: testPlaybook.fileType, label: 'Playbook' },
-        { file: testScript.file, fileType: testScript.fileType, label: 'Script' }
+        { file: playbook.file, fileType: playbook.fileType, label: 'Playbook' },
       ],
-      setOutput: setTestOutput,
-      setOutputType: setTestOutputType,
+      setOutput: setPlaybookOutput,
+      setOutputType: setPlaybookOutputType,
       requireAny: true
     });
     setActionResult('');
@@ -370,23 +430,18 @@ const MAX_CHARS = 80;
       <div className="card configuration-card">
         <h2 className="title">⚙️ Configure devices</h2>
 
-        {/* Row for files and load */}
+        {/* Row for running-config download and load */}
         <div className="config-row main-actions-row">
           <div className="aligned-group">
-            <label className="label-inline">Load Ansible playbook:</label>
-            <button type="button" className="playbook-button configuration-button"
-                    onClick={playbook.choose} disabled={!isAccessGranted}>Choose
-              playbook
-            </button>
-            <div className={`selected-file-name file-status-${playbook.fileType}`}>{playbook.fileName}</div>
-            <input ref={playbook.ref} type="file" style={{display: 'none'}} onChange={playbook.onChange} disabled={!isAccessGranted}/>
-            <label className="label-inline">Load Jinja template:</label>
-            <button type="button" className="template-button configuration-button" onClick={template.choose} disabled={!isAccessGranted}>Choose
-              template
+            <label className="label-inline">Download running-config zip:</label>
+            <button type="button" className="template-button configuration-button"
+                    onClick={() => downloadFile("template")} disabled={!isAccessGranted}>Download</button>
+            <label className="label-inline">Load running-config zip:</label>
+            <button type="button" className="template-button configuration-button choose-button" onClick={template.choose} disabled={!isAccessGranted}>Choose zip
             </button>
             <div className={`selected-file-name file-status-${template.fileType}`}>{template.fileName}</div>
             <input ref={template.ref} type="file" style={{display: 'none'}} onChange={template.onChange} disabled={!isAccessGranted}/>
-            <button type="button" className="send-button configuration-button" onClick={handleLoadFiles} disabled={!isAccessGranted}>Load files
+            <button type="button" className="send-button configuration-button" onClick={handleTemplateFile} disabled={!isAccessGranted}>Load file
             </button>
           </div>
         </div>
@@ -395,30 +450,42 @@ const MAX_CHARS = 80;
         <div className="output-row">
           <div className="aligned-group">
             <label className="label-inline label-output">Output:</label>
-            <textarea readOnly className={`output-field ${loadOutputType}`} value={loadOutput}
-                      placeholder="Output will appear here after loading files"/>
+            <textarea readOnly className={`output-field ${templateOutputType}`} value={templateOutput}
+                      placeholder="Output will appear here after file loading"/>
           </div>
         </div>
 
-        {/* line for test file loading */}
+        {/* Row for playbook download and load */}
         <div className="config-row main-actions-row">
           <div className="aligned-group">
-            <label className="label-inline">Load Ansible playbook:</label>
+            <label className="label-inline">Download playbook template:</label>
             <button type="button" className="playbook-button configuration-button"
-                    onClick={testPlaybook.choose} disabled={!isAccessGranted}>Choose
+                    onClick={() => downloadFile("playbook")} disabled={!isAccessGranted}>Download</button>
+            <label className="label-inline">Load Ansible playbook:</label>
+            <button type="button" className="playbook-button configuration-button choose-button" onClick={playbook.choose} disabled={!isAccessGranted}>Choose
               playbook
             </button>
-            <div className={`selected-file-name file-status-${testPlaybook.fileType}`}>{testPlaybook.fileName}</div>
-            <input ref={testPlaybook.ref} type="file" style={{display: 'none'}} onChange={testPlaybook.onChange} disabled={!isAccessGranted}/>
-
-            <label className="label-inline">Load test script:</label>
-            <button type="button" className="template-button configuration-button" onClick={testScript.choose} disabled={!isAccessGranted}>Choose test
-              script
+            <div className={`selected-file-name file-status-${playbook.fileType}`}>{playbook.fileName}</div>
+            <input ref={playbook.ref} type="file" style={{display: 'none'}} onChange={playbook.onChange} disabled={!isAccessGranted}/>
+            <button type="button" className="send-button configuration-button" onClick={handlePlaybookFile} disabled={!isAccessGranted}>Run playbook
             </button>
-            <div className={`selected-file-name file-status-${testScript.fileType} test-file-name`}>{testScript.fileName}</div>
-            <input ref={testScript.ref} type="file" style={{display: 'none'}} onChange={testScript.onChange} disabled={!isAccessGranted}/>
+          </div>
+        </div>
 
-            <button type="button" className="send-button configuration-button" onClick={handleLoadTestFiles} disabled={!isAccessGranted}>Run test</button>
+        {/* Output line */}
+        <div className="output-row">
+          <div className="aligned-group">
+            <label className="label-inline label-output">Output:</label>
+            <textarea readOnly className={`output-field ${playbookOutputType}`} value={playbookOutput}
+                      placeholder="Output will appear here after playbook execution"/>
+          </div>
+        </div>
+
+        {/* line for test */}
+        <div className="config-row main-actions-row">
+          <div className="aligned-group">
+            <label className="label-inline">Run ping all test:</label>
+            <button type="button" className="send-button configuration-button" onClick={runTest} disabled={!isAccessGranted}>Run test</button>
           </div>
         </div>
 
@@ -455,7 +522,7 @@ const MAX_CHARS = 80;
 
         {/* Snapshot selection and actions */}
         <div className="config-row main-actions-row">
-          <div className="aligned-group">
+          <div className="aligned-group-snapshot">
             <label className="label-inline">Select snapshot:</label>
             <select
                 className="select-field"
@@ -469,7 +536,7 @@ const MAX_CHARS = 80;
             </select>
           </div>
 
-          <div className="aligned-group description-display-group">
+          <div className="aligned-group-snapshot description-display-group">
             <label className="label-inline">Description:</label>
             <div className="snapshot-desc">{selectedSnapshotDescription()}</div>
           </div>

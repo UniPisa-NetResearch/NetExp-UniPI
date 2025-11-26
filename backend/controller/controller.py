@@ -206,6 +206,11 @@ def revoke_access():
     if not os.path.exists(inv_path):
        print("Inventory not found:", inv_path, " still attempting graceful removal (playbook will run against nothing).")
 
+    safe_res_template = safe_filename(f"res_{reservation_id}_playbook_template")
+    playbook_template_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, f"{safe_res_template}.yml")
+    if not os.path.exists(playbook_template_path):
+       print("Playbook template not found:", playbook_template_path, " still attempting graceful removal (playbook will run against nothing).")
+
     # write revoke playbook
     pb_path = get_playbook_template_path("revoke")
     if not pb_path:
@@ -229,6 +234,15 @@ def revoke_access():
     except Exception as e:
         print("Error deleting inventory file:", e)
 
+    try:
+        # remove playbook template file
+        if os.path.exists(playbook_template_path):
+            os.remove(playbook_template_path)
+
+        print("Deleted generated playbook template file for reservation", reservation_id)
+    except Exception as e:
+        print("Error deleting playbook template file:", e)
+
     if rc == 0:
         # revoked user account
         if username in active_reservations:
@@ -243,12 +257,9 @@ def revoke_access():
 def check_availability():
     # check if the user has an active reservation, in this case the configuration can start, otherwise wait
     username = request.args.get("username")
-
     if not username:
         return jsonify({"ok": False, "command": "error", "message": "Missing username parameter"}), 400
-
     print(f"Checking availability for user: {username}")
-
     if username in active_reservations:
         reservation_id = active_reservations[username]
         print(f"User {username} found with reservation ID: {reservation_id}")

@@ -5,8 +5,10 @@ import uuid
 from rq import Queue
 from rq.job import Job
 from redis import Redis
-from flask import jsonify, request
+from flask import jsonify, request, send_file, make_response
 import yaml
+import io
+import re
 from jinja2 import Environment
 from ..app import app
 
@@ -24,6 +26,27 @@ q = Queue("playbooks", connection=redis_conn)
 # directory for loaded user playbooks
 USER_PLAYBOOKS_DIR = os.path.join(BASE_DIR, "userPlaybooks")
 os.makedirs(USER_PLAYBOOKS_DIR, exist_ok=True)
+# directory of controller playbooks
+CONTROLLER_PLAYBOOKS_DIRNAME = "controllerPlaybooks"
+# suffix of playbook template for the reservation
+OUTPUT_TEMPLATE_SUFFIX = "playbook_template.yml"
+# playbook template schema
+INPUT_TEMPLATE_CONTENT = """- name: Apply per-host commands
+  hosts: all
+  gather_facts: no
+  vars:
+    commands_map:
+      # insert a list of commands after each device
+
+  tasks:
+    - name: Run commands from commands_map
+      vars:
+        cmds: "{{ commands_map[inventory_hostname] | default([]) }}"
+      ansible.builtin.shell: |
+        {% for c in cmds %}
+        {{ c }}
+        {% endfor %}
+"""
 
 # save new files (if the name is the same, add a number to the name)
 def save_file_with_increment(target_dir: str, filename: str, file_stream) -> tuple[str, str]:
@@ -276,6 +299,104 @@ def job_status():
         return jsonify({"ok": True, "status": "failed", "exc_info": job.latest_result()}), 200
 
     return jsonify({"ok": True, "status": "pending"}), 200
+
+@app.route('/api/validator/downloadPlaybook', methods=['POST'])
+def download_playbook():
+    # create controllerPlaybooks/res_<reservation_id>_playbook_template.yml based on the playbook template content and return the file
+
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"ok": False, "message": "Missing JSON body"}), 400
+
+    reservation_id = data.get("reservation_id")
+    if reservation_id is None:
+        return jsonify({"ok": False, "message": "Missing reservation_id"}), 400
+    # inventory path
+    inv_dir = ensure_inventory_dir()
+    safe_res = safe_filename(f"res-{reservation_id}-inventory")
+    inv_path = os.path.join(inv_dir, f"{safe_res}.ini")
+
+    if not os.path.exists(inv_path):
+        return jsonify({"ok": False, "message": f"Inventory not found: {inv_path}"}), 404
+
+    # parse hosts from inventory
+    hosts = []
+    with open(inv_path, "r", encoding="utf-8") as fh:
+        for raw_line in fh:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or line.startswith("["):
+                continue
+            parts = line.split()
+            host_key = parts[0]
+            res_iface = None
+            for token in parts[1:]:
+                m = re.match(r"role=(\S+)", token)
+                if m:
+                    role = m.group(1)
+                    # if device is a host, assign a non-management host interface, otherwise a non-management switch interface
+                    if role == "host":
+                        res_iface = "enp1s0"
+                    else:
+                        res_iface = "eth1"
+            hosts.append({"host": host_key, "iface": res_iface})
+
+    # ensure controllerPlaybooks dir exists (folder next to BASE_DIR)
+    controller_playbooks_dir = os.path.join(BASE_DIR, CONTROLLER_PLAYBOOKS_DIRNAME)
+    os.makedirs(controller_playbooks_dir, exist_ok=True)
+
+    # output filename: res_<reservation_id>_playbook_template.yml
+    safe_out_name = safe_filename(f"res_{reservation_id}_playbook_template")
+    out_filename = f"{safe_out_name}.yml"
+    out_path = os.path.join(controller_playbooks_dir, out_filename)
+    # build the commented entries to insert into the template
+    entries = []
+    for h in hosts:
+        host = h.get("host")
+        ip = "192.168.1.10"
+        iface = h.get("iface")
+        entries.append((host, ip, iface))
+
+    indent = None
+
+    m = re.search(r'^(\s*)#\s*insert a list of commands after each device\s*$', INPUT_TEMPLATE_CONTENT, flags=re.MULTILINE)
+    if m:
+        indent = m.group(1)  # leading whitespace of the comment line
+
+    else:
+        # fallback: if placeholder not found, try to insert after 'commands_map:' line
+        m = re.search(r'^(?P<indent>\s*)commands_map:\s*\n', INPUT_TEMPLATE_CONTENT, flags=re.MULTILINE)
+        if m:
+            indent = m.group("indent") + "  "  # place entries under commands_map with extra indent
+
+    entries_lines = []
+    for (host, ip, iface) in entries:
+        # same indent as comment for first line
+        entries_lines.append(f"{indent}#{host}:")
+        # same indent + two spaces for the command comment
+        entries_lines.append(f"{indent}  #- ip addr add {ip}/24 dev {iface}")
+    generated_block = "\n".join(entries_lines) if entries_lines else f"{indent}# (no hosts found in inventory)"
+
+    # insert generated_block immediately after the placeholder comment line,
+    # but keep the placeholder comment in the file
+    insert_pos = m.end()  # end of the matched comment line
+    final_content = INPUT_TEMPLATE_CONTENT[:insert_pos] + "\n" + generated_block + INPUT_TEMPLATE_CONTENT[insert_pos:]
+
+    # write file to controllerPlaybooks
+    try:
+        with open(out_path, "w", encoding="utf-8") as fh:
+            fh.write(final_content)
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Failed to write file: {e}"}), 500
+    # return the file as attachment for download
+    try:
+        b = final_content.encode("utf-8")
+        buf = io.BytesIO(b)
+        buf.seek(0)
+        response = make_response(send_file(buf, as_attachment=True, download_name=out_filename, mimetype="text/yaml"))
+        response.headers["Content-Length"] = str(len(b))
+        return response
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Failed to send file: {e}"}), 500
 
 if __name__ == '__main__':
 
