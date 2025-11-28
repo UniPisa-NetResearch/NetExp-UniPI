@@ -1,5 +1,6 @@
 import os
 import json
+import shutil
 import time
 import uuid
 from rq import Queue
@@ -10,12 +11,20 @@ import yaml
 import io
 import re
 from jinja2 import Environment
+import zipfile
+
+from tensorflow_probability.python.internal.backend.jax import truediv
+
 from ..app import app
 
 from .controller import (
-    ensure_inventory_dir, safe_filename, run_ansible_playbook, BASE_DIR
+    ensure_inventory_dir, safe_filename, run_ansible_playbook,
+    CONTROLLER_PLAYBOOKS_DIR,
+    CONTROLLER_CONFIGS_DIR,
+    USER_PLAYBOOKS_DIR
 )
-
+# true if development mode is active
+TEST = True
 # Redis connection
 REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.environ.get("REDIS_PORT", 6379))
@@ -23,11 +32,6 @@ redis_conn = Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True
 
 q = Queue("playbooks", connection=redis_conn)
 
-# directory for loaded user playbooks
-USER_PLAYBOOKS_DIR = os.path.join(BASE_DIR, "userPlaybooks")
-os.makedirs(USER_PLAYBOOKS_DIR, exist_ok=True)
-# directory of controller playbooks
-CONTROLLER_PLAYBOOKS_DIRNAME = "controllerPlaybooks"
 # suffix of playbook template for the reservation
 OUTPUT_TEMPLATE_SUFFIX = "playbook_template.yml"
 # playbook template schema
@@ -210,6 +214,16 @@ def worker_run_playbook(inventory_path, playbook_path, extra_vars=None, job_id=N
 
     return result
 
+def windows_to_wsl_path(p: str) -> str:
+
+    m = re.match(r"^([A-Za-z]):[\\/](.*)$", p)
+    if m:
+        drive = m.group(1).lower()
+        rest = m.group(2).replace("\\", "/")
+        return f"/mnt/{drive}/{rest}"
+    # fallback
+    return p.replace("\\", "/")
+
 # Endpoint: upload files and submit job (config or test)
 @app.route("/api/validator/submitPlaybook", methods=["POST"])
 def submit_playbook():
@@ -300,24 +314,7 @@ def job_status():
 
     return jsonify({"ok": True, "status": "pending"}), 200
 
-@app.route('/api/validator/downloadPlaybook', methods=['POST'])
-def download_playbook():
-    # create controllerPlaybooks/res_<reservation_id>_playbook_template.yml based on the playbook template content and return the file
-
-    data = request.get_json(silent=True)
-    if not data:
-        return jsonify({"ok": False, "message": "Missing JSON body"}), 400
-
-    reservation_id = data.get("reservation_id")
-    if reservation_id is None:
-        return jsonify({"ok": False, "message": "Missing reservation_id"}), 400
-    # inventory path
-    inv_dir = ensure_inventory_dir()
-    safe_res = safe_filename(f"res-{reservation_id}-inventory")
-    inv_path = os.path.join(inv_dir, f"{safe_res}.ini")
-
-    if not os.path.exists(inv_path):
-        return jsonify({"ok": False, "message": f"Inventory not found: {inv_path}"}), 404
+def download_helper(data, file_type, inv_path):
 
     # parse hosts from inventory
     hosts = []
@@ -338,16 +335,43 @@ def download_playbook():
                         res_iface = "enp1s0"
                     else:
                         res_iface = "eth1"
-            hosts.append({"host": host_key, "iface": res_iface})
+
+            if file_type == "playbook":
+                hosts.append({"host": host_key, "iface": res_iface})
+            elif file_type == "template" and role != "host":
+                hosts.append(host_key)
+
+    return hosts
+
+@app.route('/api/validator/downloadPlaybook', methods=['POST'])
+def download_playbook():
+    # create controllerPlaybooks/res_<reservation_id>_playbook_template.yml based on the playbook template content and return the file
+
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"ok": False, "message": "Missing JSON body"}), 400
+
+    reservation_id = data.get("reservation_id")
+    if reservation_id is None:
+        return jsonify({"ok": False, "message": "Missing reservation_id"}), 400
+
+    # inventory path
+    inv_dir = ensure_inventory_dir()
+    safe_res = safe_filename(f"res-{reservation_id}-inventory")
+    inv_path = os.path.join(inv_dir, f"{safe_res}.ini")
+
+    if not os.path.exists(inv_path):
+        return jsonify({"ok": False, "message": f"Inventory not found: {inv_path}"}), 404
+
+    hosts = download_helper(data, "playbook", inv_path)
 
     # ensure controllerPlaybooks dir exists (folder next to BASE_DIR)
-    controller_playbooks_dir = os.path.join(BASE_DIR, CONTROLLER_PLAYBOOKS_DIRNAME)
-    os.makedirs(controller_playbooks_dir, exist_ok=True)
+    os.makedirs(CONTROLLER_PLAYBOOKS_DIR, exist_ok=True)
 
     # output filename: res_<reservation_id>_playbook_template.yml
     safe_out_name = safe_filename(f"res_{reservation_id}_playbook_template")
     out_filename = f"{safe_out_name}.yml"
-    out_path = os.path.join(controller_playbooks_dir, out_filename)
+    out_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, out_filename)
     # build the commented entries to insert into the template
     entries = []
     for h in hosts:
@@ -397,6 +421,105 @@ def download_playbook():
         return response
     except Exception as e:
         return jsonify({"ok": False, "message": f"Failed to send file: {e}"}), 500
+
+@app.route("/api/validator/downloadTemplate", methods=["POST"])
+def download_template():
+    # save <hostname>_config_db.json from non-host devices and create res_<reservation_id>running_configs.zip
+
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"ok": False, "message": "Missing JSON body"}), 400
+
+    reservation_id = data.get("reservation_id")
+    if reservation_id is None:
+        return jsonify({"ok": False, "message": "Missing reservation_id"}), 400
+
+    # inventory path
+    inv_dir = ensure_inventory_dir()
+    safe_res = safe_filename(f"res-{reservation_id}-inventory")
+    inv_path = os.path.join(inv_dir, f"{safe_res}.ini")
+
+    if not os.path.exists(inv_path):
+        return jsonify({"ok": False, "message": f"Inventory not found: {inv_path}"}), 404
+
+    target_hosts = download_helper(data, "template", inv_path)
+
+    if not target_hosts:
+        return jsonify({"ok": False, "message": "No non-host devices found in inventory to fetch configs from."}), 404
+
+    # ensure controllerConfigs dir exists
+    os.makedirs(CONTROLLER_CONFIGS_DIR, exist_ok=True)
+
+    if TEST:
+        controller_configs_dir_wsl = windows_to_wsl_path(CONTROLLER_CONFIGS_DIR)
+    else:
+        controller_configs_dir_wsl = CONTROLLER_CONFIGS_DIR
+
+    get_config_playbook_path = os.path.join(CONTROLLER_CONFIGS_DIR, "get_configs_playbook.yml")
+    get_config_playbook_path = os.path.normpath(get_config_playbook_path)
+
+    if not os.path.exists(get_config_playbook_path):
+        return jsonify({"ok": False, "message": f"Playbook not found: {get_config_playbook_path}"}), 500
+
+    # run the playbook synchronously using the existing inventory
+    extra_vars = {"controller_dest_dir": controller_configs_dir_wsl, "reservation_id": reservation_id}
+
+    try:
+        rc, out, err = run_ansible_playbook(inv_path, get_config_playbook_path, extra_vars=extra_vars, timeout=900)
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Failed to execute ansible playbook: {e}"}), 500
+
+    if rc != 0:
+        return jsonify({
+            "ok": False,
+            "message": "Ansible playbook failed while fetching configs.",
+            "rc": rc,
+            "stdout": out,
+            "stderr": err
+        }), 500
+
+    # expected directory where playbook saved files
+    playbook_output_dir = os.path.join(CONTROLLER_CONFIGS_DIR, f"res_{reservation_id}_running_configs")
+
+    # verify directory exists and collect files
+    if not os.path.isdir(playbook_output_dir):
+        return jsonify({"ok": False, "message": f"No output directory found from playbook: {playbook_output_dir}"}), 500
+
+    # collect fetched files and zip them
+    fetched_files = []
+    for entry in os.listdir(playbook_output_dir):
+        path = os.path.join(playbook_output_dir, entry)
+        if os.path.exists(path):
+            fetched_files.append(path)
+
+    if not fetched_files:
+        # cleanup empty dir
+        shutil.rmtree(playbook_output_dir)
+        return jsonify({"ok": False, "message": "Playbook completed but no config files were saved on controller."}), 500
+
+    zip_name = f"res_{reservation_id}_running_configs.zip"
+    zip_path = os.path.join(CONTROLLER_CONFIGS_DIR, zip_name)
+    try:
+        with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+            for fp in fetched_files:
+                config = os.path.basename(fp)
+                zf.write(fp, arcname=config)
+
+        # remove the original folder produced by the playbook
+        try:
+            shutil.rmtree(playbook_output_dir)
+        except Exception as e:
+            # log warning but don't fail the response
+            print(f"Warning: failed to remove playbook output dir {playbook_output_dir}: {e}")
+
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Failed to create zip archive: {e}"}), 500
+
+    # return the zip as attachment
+    try:
+        return send_file(zip_path, as_attachment=True, download_name=zip_name, mimetype="application/zip")
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Failed to send zip file: {e}"}), 500
 
 if __name__ == '__main__':
 

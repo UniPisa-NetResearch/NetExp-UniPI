@@ -122,6 +122,22 @@ function handleUpload({ descriptors, setOutput, setOutputType, requireAny = true
   return true;
 }
 
+function createDownload(blob, filename){
+  // create object URL and start download without adding permanent link
+      const url = window.URL.createObjectURL(blob);
+
+      // create <a>, set href and click
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      // some browsers need to add the element to the body, after download we remove
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      // remove URL to free memory
+      window.URL.revokeObjectURL(url);
+}
+
 export default function Configuration({username, reservation_id}) {
   // files: playbook, template and test files
   const template = useFileInput(['.zip']);
@@ -156,6 +172,8 @@ const downloadFile= async (file_type) =>{
   console.log("file type: ", file_type);
 
   if (file_type === "playbook") {
+    setPlaybookOutput("Downloading playbook template...");
+    setTemplateOutputType("");
     try {
       const payload = { reservation_id: reservation_id };
 
@@ -188,25 +206,75 @@ const downloadFile= async (file_type) =>{
         if (m) filename = decodeURI(m[1] || m[2]);
       }
 
-      // create object URL and start download without adding permanent link
-      const url = window.URL.createObjectURL(blob);
+      createDownload(blob, filename);
 
-      // create <a>, set href and click
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      // some browsers need to add the element to the body, after download we remove
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      console.log("after download");
-      // remove URL to free memory
-      window.URL.revokeObjectURL(url);
       setPlaybookOutput(`Downloaded playbook: ${filename}`);
       setPlaybookOutputType("success");
     } catch (e) {
       setPlaybookOutput(`Error: ${e}`);
       setPlaybookOutputType("error");
+    }
+  } else if (file_type === "template") {
+    setTemplateOutput("Downloading running configs zip...");
+    setTemplateOutputType("");
+    try {
+      const payload = { reservation_id: reservation_id };
+
+      const resp = await fetch("/api/validator/downloadTemplate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (!resp.ok) {
+        // try to parse JSON error body, fall back to text
+        let errMsg = `HTTP ${resp.status}`;
+        try {
+          const j = await resp.json();
+          errMsg = j.message || JSON.stringify(j);
+        } catch (parseErr) {
+          try {
+            errMsg = await resp.text();
+          } catch (_) { /* ignore */ }
+        }
+        setTemplateOutput(errMsg);
+        setTemplateOutputType("error");
+        return;
+      }
+
+      // read file as ArrayBuffer, create Blob and start download
+      const arrayBuffer = await resp.arrayBuffer();
+      const blob = new Blob([arrayBuffer], { type: "application/zip" });
+
+      // default filename
+      let filename = `res_${reservation_id}running_configs.zip`;
+      // retrieve filename from header Content-Disposition if exists
+      const cd = resp.headers.get("Content-Disposition");
+      if (cd) {
+        // common filename patterns
+        const encodedMatch = cd.match(/filename\*=UTF-8''([^;]+)/);
+        const plainMatch = cd.match(/filename="?([^";]+)"?/);
+        if (encodedMatch && encodedMatch[1]) {
+          try {
+            filename = decodeURIComponent(encodedMatch[1]);
+          } catch (_) {
+            filename = encodedMatch[1];
+          }
+        } else if (plainMatch && plainMatch[1]) {
+          filename = plainMatch[1];
+        }
+      }
+
+      // create object URL and start download
+       createDownload(blob, filename);
+
+      setTemplateOutput(`Downloaded template: ${filename}`);
+      setTemplateOutputType("success");
+    } catch (e) {
+      setTemplateOutput(`Error: ${e}`);
+      setTemplateOutputType("error");
     }
   }
 }

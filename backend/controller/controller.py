@@ -8,6 +8,8 @@ from ..app import app
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 INVENTORY_DIR = os.path.join(BASE_DIR, "inventories")
 CONTROLLER_PLAYBOOKS_DIR = os.path.join(BASE_DIR, "controllerPlaybooks")
+CONTROLLER_CONFIGS_DIR = os.path.join(BASE_DIR, "controllerConfigs")
+USER_PLAYBOOKS_DIR = os.path.join(BASE_DIR, "userPlaybooks")
 TEMPLATES_DIR = os.path.join(CONTROLLER_PLAYBOOKS_DIR, "templates")
 WRAPPERS_DIR = os.path.join(CONTROLLER_PLAYBOOKS_DIR, "wrappers")
 
@@ -206,10 +208,17 @@ def revoke_access():
     if not os.path.exists(inv_path):
        print("Inventory not found:", inv_path, " still attempting graceful removal (playbook will run against nothing).")
 
+    # template path
     safe_res_template = safe_filename(f"res_{reservation_id}_playbook_template")
     playbook_template_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, f"{safe_res_template}.yml")
     if not os.path.exists(playbook_template_path):
        print("Playbook template not found:", playbook_template_path, " still attempting graceful removal (playbook will run against nothing).")
+
+    # running configs zip folder
+    safe_res_config = safe_filename(f"res_{reservation_id}_running_configs")
+    running_config_path = os.path.join( CONTROLLER_CONFIGS_DIR, f"{safe_res_config}.zip")
+    if not os.path.exists(running_config_path):
+        print("Running configs zip not found:", running_config_path, " still attempting graceful removal (playbook will run against nothing).")
 
     # write revoke playbook
     pb_path = get_playbook_template_path("revoke")
@@ -243,6 +252,15 @@ def revoke_access():
     except Exception as e:
         print("Error deleting playbook template file:", e)
 
+    try:
+        # remove running config zip folder
+        if os.path.exists(running_config_path):
+            os.remove(running_config_path)
+
+        print("Deleted generated running config folder for reservation", reservation_id)
+    except Exception as e:
+        print("Error deleting running config folder:", e)
+
     if rc == 0:
         # revoked user account
         if username in active_reservations:
@@ -260,6 +278,7 @@ def check_availability():
     if not username:
         return jsonify({"ok": False, "command": "error", "message": "Missing username parameter"}), 400
     print(f"Checking availability for user: {username}")
+    #active_reservations[username] = 35
     if username in active_reservations:
         reservation_id = active_reservations[username]
         print(f"User {username} found with reservation ID: {reservation_id}")
