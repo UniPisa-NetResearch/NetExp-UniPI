@@ -3,6 +3,7 @@ import json
 import re
 import subprocess
 from flask import jsonify, request
+import shutil
 from ..app import app
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -12,6 +13,23 @@ CONTROLLER_CONFIGS_DIR = os.path.join(BASE_DIR, "controllerConfigs")
 USER_PLAYBOOKS_DIR = os.path.join(BASE_DIR, "userPlaybooks")
 TEMPLATES_DIR = os.path.join(CONTROLLER_PLAYBOOKS_DIR, "templates")
 WRAPPERS_DIR = os.path.join(CONTROLLER_PLAYBOOKS_DIR, "wrappers")
+# playbook template schema
+INPUT_TEMPLATE_CONTENT = """- name: Apply per-host commands
+  hosts: all
+  gather_facts: no
+  vars:
+    commands_map:
+      # insert a list of commands after each device
+
+  tasks:
+    - name: Run commands from commands_map
+      vars:
+        cmds: "{{ commands_map[inventory_hostname] | default([]) }}"
+      ansible.builtin.shell: |
+        {% for c in cmds %}
+        {{ c }}
+        {% endfor %}
+"""
 
 ANSIBLE_EXTRA_ARGS = ""            #  extra args (ex. -c paramiko)
 # default credentials per role
@@ -127,6 +145,74 @@ def run_ansible_playbook(inventory_path: str, playbook_path: str, extra_vars: di
     except Exception as e:
         return 1, "", str(e)
 
+def create_res_playbook_template(username, reservation_id, devices):
+    template_with_become = re.sub(
+        r'(^\s*- name:\s*Run commands from commands_map\s*\n)(\s*)(vars:)',
+        lambda val: (
+                val.group(1)
+                + val.group(2)
+                + "become: yes\n"
+                + val.group(2)
+                + f"become_user: {username}\n"
+                + val.group(2)
+                + "become_method: sudo\n"
+                + val.group(2)
+                + "vars:"
+        ),
+        INPUT_TEMPLATE_CONTENT,
+        flags=re.MULTILINE
+    )
+    # ensure controllerPlaybooks dir exists (folder next to BASE_DIR)
+    os.makedirs(CONTROLLER_PLAYBOOKS_DIR, exist_ok=True)
+
+    # output filename: res_<reservation_id>_playbook_template.yml
+    safe_out_name = safe_filename(f"res_{reservation_id}_playbook_template")
+    out_filename = f"{safe_out_name}.yml"
+    out_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, out_filename)
+
+    # build the commented entries to insert into the template
+    entries = []
+
+    for d in devices:
+        host  = d.get("id_device")
+        ip = "192.168.1.10"
+        if d.get("role") != "host":
+            iface = "eth1"
+        else:
+            iface = "enp1s0"
+        entries.append((host, ip, iface))
+    indent = None
+
+    m = re.search(r'^(\s*)#\s*insert a list of commands after each device\s*$', template_with_become,
+                  flags=re.MULTILINE)
+    if m:
+        indent = m.group(1)  # leading whitespace of the comment line
+
+    else:
+        # fallback: if placeholder not found, try to insert after 'commands_map:' line
+        m = re.search(r'^(?P<indent>\s*)commands_map:\s*\n', template_with_become, flags=re.MULTILINE)
+        if m:
+            indent = m.group("indent") + "  "  # place entries under commands_map with extra indent
+
+    entries_lines = []
+    for (host, ip, iface) in entries:
+        # same indent as comment for first line
+        entries_lines.append(f"{indent}#{host}:")
+        # same indent + two spaces for the command comment
+        entries_lines.append(f"{indent}  #- ip addr add {ip}/24 dev {iface}")
+    generated_block = "\n".join(entries_lines) if entries_lines else f"{indent}# (no hosts found in inventory)"
+
+    # insert generated_block immediately after the placeholder comment line,
+    # but keep the placeholder comment in the file
+    insert_pos = m.end()  # end of the matched comment line
+    final_content = template_with_become[:insert_pos] + "\n" + generated_block + template_with_become[insert_pos:]
+
+    # write file to controllerPlaybooks
+    try:
+        with open(out_path, "w", encoding="utf-8") as fh:
+            fh.write(final_content)
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Failed to write file: {e}"}), 500
 
 @app.route('/api/controller/grantAccess', methods=['POST'])
 def grant_access():
@@ -177,11 +263,32 @@ def grant_access():
     if rc == 0:
         # user account creation completed
         if username and reservation_id is not None:
+            create_res_playbook_template(username, reservation_id, devices)
+
             active_reservations[username] = reservation_id
             print(f"User {username} granted access and added to active_reservations")
+
         return jsonify({"ok": True, "message": "Grant executed", "inventory": inv_path, "stdout": out, "stderr": err}), 200
     else:
         return jsonify({"ok": False, "message": "Ansible failed", "rc": rc, "stdout": out, "stderr": err}), 500
+
+def remove_files(file_path, file_type):
+    if file_type == "file":
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+
+        except Exception as e:
+            print("Error deleting inventory file:", e)
+
+    elif file_type == "folder":
+        try:
+            if os.path.exists(file_path):
+                shutil.rmtree(file_path)
+
+        except Exception as e:
+            print("Error deleting user playbook directory:", e)
+
 
 @app.route('/api/controller/revokeAccess', methods=['POST'])
 def revoke_access():
@@ -220,6 +327,10 @@ def revoke_access():
     if not os.path.exists(running_config_path):
         print("Running configs zip not found:", running_config_path, " still attempting graceful removal (playbook will run against nothing).")
 
+    # res_<reservation_id> folder with user playbooks
+    safe_res_dir = safe_filename(f"res_{reservation_id}")
+    user_playbook_dir = os.path.join(USER_PLAYBOOKS_DIR, safe_res_dir)
+
     # write revoke playbook
     pb_path = get_playbook_template_path("revoke")
     if not pb_path:
@@ -234,32 +345,22 @@ def revoke_access():
     print("Ansible revoke stderr:", err)
 
     # delete inventory and playbook files
-    try:
-        # remove inventory file
-        if os.path.exists(inv_path):
-            os.remove(inv_path)
+    # remove inventory file
+    remove_files(inv_path, "file")
 
-        print("Deleted generated inventory file for reservation", reservation_id)
-    except Exception as e:
-        print("Error deleting inventory file:", e)
+    # remove playbook template file
+    remove_files(playbook_template_path, "file")
 
-    try:
-        # remove playbook template file
-        if os.path.exists(playbook_template_path):
-            os.remove(playbook_template_path)
+    # remove running config zip folder
+    remove_files(running_config_path, "file")
 
-        print("Deleted generated playbook template file for reservation", reservation_id)
-    except Exception as e:
-        print("Error deleting playbook template file:", e)
+    # remove recursively the folder and all the content
+    remove_files(user_playbook_dir, "folder")
 
-    try:
-        # remove running config zip folder
-        if os.path.exists(running_config_path):
-            os.remove(running_config_path)
-
-        print("Deleted generated running config folder for reservation", reservation_id)
-    except Exception as e:
-        print("Error deleting running config folder:", e)
+    print("Deleted generated files for reservation", reservation_id)
+    # remove active res file
+    if os.path.exists(f"res{reservation_id}"):
+        os.remove(f"res{reservation_id}")
 
     if rc == 0:
         # revoked user account
@@ -275,16 +376,20 @@ def revoke_access():
 def check_availability():
     # check if the user has an active reservation, in this case the configuration can start, otherwise wait
     username = request.args.get("username")
-    if not username:
-        return jsonify({"ok": False, "command": "error", "message": "Missing username parameter"}), 400
+    reservation_id = request.args.get("reservation_id")
+    if not username or not reservation_id:
+        return jsonify({"ok": False, "command": "error", "message": "Missing username or reservation_id parameter"}), 400
     print(f"Checking availability for user: {username}")
-    #active_reservations[username] = 35
-    if username in active_reservations:
-        reservation_id = active_reservations[username]
+
+    if username in active_reservations or os.path.exists(f"res{reservation_id}"):
+        # create file in case of controller restart, useful if the controller loses in memory active res information
+        with open(f"res{reservation_id}", 'w') as file:
+            file.write(f"{username}")
+
         print(f"User {username} found with reservation ID: {reservation_id}")
         return jsonify({"ok": True, "command": "start_configuration", "reservation_id": reservation_id}), 200
     else:
-        print(f"User {username} not found in active reservations.")
+        print(f"User {username} not found in active reservations, reservation id: {reservation_id}")
         return jsonify({"ok": True, "command": "wait_configuration"}), 200
 
 if __name__ == '__main__':

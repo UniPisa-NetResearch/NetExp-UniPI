@@ -7,18 +7,19 @@ from rq import Queue
 from rq.job import Job
 from redis import Redis
 from flask import jsonify, request, send_file, make_response
+from ..database.db import db, User
 import yaml
 import io
 import re
-from jinja2 import Environment
 import zipfile
+import jsonschema
+from jsonschema import ValidationError
 
-from tensorflow_probability.python.internal.backend.jax import truediv
 
 from ..app import app
 
 from .controller import (
-    ensure_inventory_dir, safe_filename, run_ansible_playbook,
+    ensure_inventory_dir, safe_filename, run_ansible_playbook, win_to_wsl_path,
     CONTROLLER_PLAYBOOKS_DIR,
     CONTROLLER_CONFIGS_DIR,
     USER_PLAYBOOKS_DIR
@@ -32,289 +33,7 @@ redis_conn = Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True
 
 q = Queue("playbooks", connection=redis_conn)
 
-# suffix of playbook template for the reservation
-OUTPUT_TEMPLATE_SUFFIX = "playbook_template.yml"
-# playbook template schema
-INPUT_TEMPLATE_CONTENT = """- name: Apply per-host commands
-  hosts: all
-  gather_facts: no
-  vars:
-    commands_map:
-      # insert a list of commands after each device
-
-  tasks:
-    - name: Run commands from commands_map
-      vars:
-        cmds: "{{ commands_map[inventory_hostname] | default([]) }}"
-      ansible.builtin.shell: |
-        {% for c in cmds %}
-        {{ c }}
-        {% endfor %}
-"""
-
-# save new files (if the name is the same, add a number to the name)
-def save_file_with_increment(target_dir: str, filename: str, file_stream) -> tuple[str, str]:
-    os.makedirs(target_dir, exist_ok=True)
-    base, ext = os.path.splitext(filename)  #base = file name, ext = extension
-    candidate = f"{base}{ext}"
-    i = 0
-    while os.path.exists(os.path.join(target_dir, candidate)):
-        i += 1
-        candidate = f"{base}{i}{ext}"
-    path = os.path.join(target_dir, candidate)
-    file_stream.save(path)
-
-    return path, candidate
-
-# Validazione playbook (heuristic)
-# Security policy: allow all configuration commands except those touching management interface or modifying files
-ALLOWED_MODULES = {
-"ansible.builtin.shell",
-"shell",
-"ansible.builtin.command",
-"command",
-"ansible.builtin.copy",
-"copy",
-"ansible.builtin.template",
-"template",
-"ansible.builtin.include_tasks",
-"include_tasks",
-}
-FORBIDDEN_KEYWORDS = ["management", "mgmt", "ansible_network_interfaces", "ansible_host"]
-FORBIDDEN_FILE_COMMANDS = ["touch", "rm", "mv", "cp", "mkdir"]
-
-def parse_inventory_for_hosts_and_res_iface(inventory_path: str) -> (dict, dict):
-    hosts_info = {}
-    res_iface_map = {}
-    if not inventory_path or not os.path.exists(inventory_path):
-        return hosts_info, res_iface_map
-
-    with open(inventory_path, "r", encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line or line.startswith("#") or line.startswith("["):
-                continue
-            parts = line.split()
-            if len(parts) == 0:
-                continue
-
-            hostname = parts[0]
-            kv = {}
-            for token in parts[1:]:
-                if "=" in token:
-                    k, v = token.split("=", 1)
-                    kv[k] = v
-
-            hosts_info[hostname] = kv
-
-            if "res_iface" in kv:
-                res_iface_map[hostname] = kv["res_iface"]
-
-    return hosts_info, res_iface_map
-
-def validate_playbook_file(playbook_path: str, reservation_inventory_path: str) -> (bool, str):
-    try:
-        with open(playbook_path, "r", encoding="utf-8") as fh:
-            data = yaml.safe_load(fh)
-    except Exception as e:
-        return False, f"YAML parse error: {e}"
-
-    # playbook could be list of plays or a single dict
-    plays = data if isinstance(data, list) else [data]
-    hosts_info, res_iface_map = parse_inventory_for_hosts_and_res_iface(reservation_inventory_path)
-    inv_hosts = set(hosts_info.keys())
-
-    for play in plays:
-        if not isinstance(play, dict):
-            return False, "Playbook must be a list of plays or a play dict."
-        hosts = play.get("hosts")
-        if not hosts:
-            return False, "Playbook must have 'hosts' key"
-        # hosts could be comma-separated or list
-        host_list = []
-        if isinstance(hosts, str):
-            host_list = [h.strip() for h in hosts.split(",") if h.strip()]
-        elif isinstance(hosts, list):
-            host_list = hosts
-        # check if hosts are present in inventory
-        if inv_hosts and not set(host_list).issubset(inv_hosts):
-            missing = set(host_list) - inv_hosts
-            return False, f"Host(s) referenced not present in inventory: {', '.join(missing)}"
-
-        tasks = play.get("tasks", [])
-        # tasks could also be under roles -> tasks; check top-level tasks
-        for t in tasks:
-            if not isinstance(t, dict):
-                continue
-            # detect modules (Ansible task keys other than 'name', 'when', etc.)
-            # Common pattern: task dict has a single key being module name (e.g. 'copy', 'command')
-            for k in t.keys():
-                if k in ("name", "when", "vars", "register", "become", "become_user", "with_items", "tags", "delegate_to") :
-                    continue
-                # if the key is a forbidden module
-                if k in ALLOWED_MODULES:
-                    return False, f"Task uses disallowed module/key '{k}'. Allowed modules: {', '.join(sorted(ALLOWED_MODULES))}"
-                # if command/args contain forbidden patterns
-                val = t.get(k)
-                # convert to string and check patterns
-                as_str = json.dumps(val) if val is not None else ""
-
-                for kw in FORBIDDEN_KEYWORDS:
-                    if kw in as_str:
-                        return False, f"Playbook references forbidden keyword '{kw}'."
-
-                for host in host_list:
-                    mgmt = res_iface_map.get(host)
-                    if mgmt and mgmt in as_str:
-                        return False, f"Playbook attempts to operate on management interface '{mgmt}' of host '{host}', which is forbidden."
-
-                for cmd in FORBIDDEN_FILE_COMMANDS:
-                    if cmd in as_str:
-                        return False, f"Playbook contains forbidden file operation '{cmd}'."
-
-    return True, "Valid playbook"
-
-# optional: validate Jinja2 template syntax
-def validate_template_syntax(template_path: str, reservation_inventory_path: str = None) -> (bool, str):
-    try:
-        with open(template_path, "r", encoding="utf-8") as fh:
-            src = fh.read()
-        env = Environment()
-        env.parse(src)  # raises exception if invalid
-        for kw in FORBIDDEN_KEYWORDS:
-            if kw in src:
-                return False, f"Template references forbidden keyword '{kw}'."
-
-        if reservation_inventory_path:
-            _, res_iface_map = parse_inventory_for_hosts_and_res_iface(reservation_inventory_path)
-            for host, mgmt in res_iface_map.items():
-                if mgmt and mgmt in src:
-                    return False, f"Template attempts to operate on management interface '{mgmt}' of host '{host}', which is forbidden."
-
-        for cmd in FORBIDDEN_FILE_COMMANDS:
-            if cmd in src:
-                return False, f"Template contains forbidden file operation '{cmd}'."
-
-        return True, "Valid template"
-
-    except Exception as e:
-        return False, f"Not valid template: {e}"
-
-# worker task: run ansible and store result in Redis under job_result:<job_id>
-def worker_run_playbook(inventory_path, playbook_path, extra_vars=None, job_id=None, timeout=600):
-    rc, out, err = run_ansible_playbook(inventory_path, playbook_path, extra_vars=extra_vars, timeout=timeout)
-    result = {
-        "rc": rc,
-        "stdout": out,
-        "stderr": err,
-        "completed_at": time.time()
-    }
-    # store result JSON
-    redis_conn.set(f"job_result:{job_id}", json.dumps(result))
-
-    return result
-
-def windows_to_wsl_path(p: str) -> str:
-
-    m = re.match(r"^([A-Za-z]):[\\/](.*)$", p)
-    if m:
-        drive = m.group(1).lower()
-        rest = m.group(2).replace("\\", "/")
-        return f"/mnt/{drive}/{rest}"
-    # fallback
-    return p.replace("\\", "/")
-
-# Endpoint: upload files and submit job (config or test)
-@app.route("/api/validator/submitPlaybook", methods=["POST"])
-def submit_playbook():
-
-    username = request.form.get("username")
-    reservation_id = request.form.get("reservation_id")
-
-    if not username:
-        return jsonify({"ok": False, "message": "Missing username"}), 400
-    if "playbook" not in request.files:
-        return jsonify({"ok": False, "message": "Missing playbook file"}), 400
-
-    playbook_file = request.files["playbook"]
-    template_file = request.files.get("template")
-
-    # prepare user dir
-    user_dir = os.path.join(USER_PLAYBOOKS_DIR, f"{safe_filename(username)}Playbooks")
-    templates_dir = os.path.join(user_dir, "templates")
-    os.makedirs(templates_dir, exist_ok=True)
-
-    # save playbook with incrementing name
-    playbook_path, playbook_saved_name = save_file_with_increment(user_dir, playbook_file.filename, playbook_file)
-
-    # save template if present
-    template_saved_name = None
-    template_path = None
-    if template_file:
-        template_path, template_saved_name = save_file_with_increment(templates_dir, template_file.filename, template_file)
-
-    # Determine inventory path: if reservation_id provided, we expect inventories/res-<reservation>-inventory.ini
-    inv_path = None
-    if reservation_id:
-        safe_res = safe_filename(f"res-{reservation_id}-inventory")
-        inv_path_candidate = os.path.join(ensure_inventory_dir(), f"{safe_res}.ini")
-        if os.path.exists(inv_path_candidate):
-            inv_path = inv_path_candidate
-
-    # validate playbook
-    valid, msg = validate_playbook_file(playbook_path, inv_path or "")
-    if not valid:
-        return jsonify({"ok": False, "message": f"Playbook validation failed: {msg}"}), 400
-
-    # optional: validate template syntax
-    if template_path:
-        template_valid, tmsg = validate_template_syntax(template_path, reservation_inventory_path=inv_path or None)
-        if not template_valid:
-            return jsonify({"ok": False, "message": f"Template validation failed: {tmsg}"}), 400
-
-    # enqueue worker task
-    job_id = str(uuid.uuid4())
-    extra_vars = {"username": username, "ansible_user": username, "ansible_become": True,
-                  "ansible_become_user": username}
-    # you can pass username/reservation to extra_vars if needed by playbook
-    if reservation_id:
-        extra_vars["reservation_id"] = reservation_id
-
-    # enqueue the worker_run_playbook job
-    q.enqueue(worker_run_playbook, inv_path, playbook_path, extra_vars, job_id, timeout=1800, job_id=job_id)
-
-    # return job id so client can do polling, to get the result
-    return jsonify({
-        "ok": True,
-        "message": "Playbook queued",
-        "job_id": job_id,
-        "playbook_saved": playbook_saved_name,
-        "template_saved": template_saved_name
-    }), 202
-
-@app.route("/api/validator/jobStatus", methods=["GET"])
-def job_status():
-    job_id = request.args.get("job_id")
-    if not job_id:
-        return jsonify({"ok": False, "message": "Missing job_id"}), 400
-
-    # check RQ job and check result key
-    job_result = redis_conn.get(f"job_result:{job_id}")
-    if job_result:
-        return jsonify({"ok": True, "status": "finished", "result": json.loads(job_result)}), 200
-
-    # else check if job exists and is queued/started
-    job = Job.fetch(job_id, connection=redis_conn)
-    if job.is_queued:
-        return jsonify({"ok": True, "status": "queued"}), 200
-    if job.is_started:
-        return jsonify({"ok": True, "status": "started"}), 200
-    if job.is_failed:
-        return jsonify({"ok": True, "status": "failed", "exc_info": job.latest_result()}), 200
-
-    return jsonify({"ok": True, "status": "pending"}), 200
-
-def download_helper(data, file_type, inv_path):
+def download_helper(inv_path):
 
     # parse hosts from inventory
     hosts = []
@@ -325,21 +44,8 @@ def download_helper(data, file_type, inv_path):
                 continue
             parts = line.split()
             host_key = parts[0]
-            res_iface = None
-            for token in parts[1:]:
-                m = re.match(r"role=(\S+)", token)
-                if m:
-                    role = m.group(1)
-                    # if device is a host, assign a non-management host interface, otherwise a non-management switch interface
-                    if role == "host":
-                        res_iface = "enp1s0"
-                    else:
-                        res_iface = "eth1"
 
-            if file_type == "playbook":
-                hosts.append({"host": host_key, "iface": res_iface})
-            elif file_type == "template" and role != "host":
-                hosts.append(host_key)
+            hosts.append(host_key)
 
     return hosts
 
@@ -355,16 +61,6 @@ def download_playbook():
     if reservation_id is None:
         return jsonify({"ok": False, "message": "Missing reservation_id"}), 400
 
-    # inventory path
-    inv_dir = ensure_inventory_dir()
-    safe_res = safe_filename(f"res-{reservation_id}-inventory")
-    inv_path = os.path.join(inv_dir, f"{safe_res}.ini")
-
-    if not os.path.exists(inv_path):
-        return jsonify({"ok": False, "message": f"Inventory not found: {inv_path}"}), 404
-
-    hosts = download_helper(data, "playbook", inv_path)
-
     # ensure controllerPlaybooks dir exists (folder next to BASE_DIR)
     os.makedirs(CONTROLLER_PLAYBOOKS_DIR, exist_ok=True)
 
@@ -372,52 +68,16 @@ def download_playbook():
     safe_out_name = safe_filename(f"res_{reservation_id}_playbook_template")
     out_filename = f"{safe_out_name}.yml"
     out_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, out_filename)
-    # build the commented entries to insert into the template
-    entries = []
-    for h in hosts:
-        host = h.get("host")
-        ip = "192.168.1.10"
-        iface = h.get("iface")
-        entries.append((host, ip, iface))
 
-    indent = None
-
-    m = re.search(r'^(\s*)#\s*insert a list of commands after each device\s*$', INPUT_TEMPLATE_CONTENT, flags=re.MULTILINE)
-    if m:
-        indent = m.group(1)  # leading whitespace of the comment line
-
-    else:
-        # fallback: if placeholder not found, try to insert after 'commands_map:' line
-        m = re.search(r'^(?P<indent>\s*)commands_map:\s*\n', INPUT_TEMPLATE_CONTENT, flags=re.MULTILINE)
-        if m:
-            indent = m.group("indent") + "  "  # place entries under commands_map with extra indent
-
-    entries_lines = []
-    for (host, ip, iface) in entries:
-        # same indent as comment for first line
-        entries_lines.append(f"{indent}#{host}:")
-        # same indent + two spaces for the command comment
-        entries_lines.append(f"{indent}  #- ip addr add {ip}/24 dev {iface}")
-    generated_block = "\n".join(entries_lines) if entries_lines else f"{indent}# (no hosts found in inventory)"
-
-    # insert generated_block immediately after the placeholder comment line,
-    # but keep the placeholder comment in the file
-    insert_pos = m.end()  # end of the matched comment line
-    final_content = INPUT_TEMPLATE_CONTENT[:insert_pos] + "\n" + generated_block + INPUT_TEMPLATE_CONTENT[insert_pos:]
-
-    # write file to controllerPlaybooks
-    try:
-        with open(out_path, "w", encoding="utf-8") as fh:
-            fh.write(final_content)
-    except Exception as e:
-        return jsonify({"ok": False, "message": f"Failed to write file: {e}"}), 500
     # return the file as attachment for download
     try:
-        b = final_content.encode("utf-8")
-        buf = io.BytesIO(b)
+        with open(out_path, 'rb') as f:
+            content = f.read()
+
+        buf = io.BytesIO(content)
         buf.seek(0)
         response = make_response(send_file(buf, as_attachment=True, download_name=out_filename, mimetype="text/yaml"))
-        response.headers["Content-Length"] = str(len(b))
+        response.headers["Content-Length"] = str(len(content))
         return response
     except Exception as e:
         return jsonify({"ok": False, "message": f"Failed to send file: {e}"}), 500
@@ -442,16 +102,16 @@ def download_template():
     if not os.path.exists(inv_path):
         return jsonify({"ok": False, "message": f"Inventory not found: {inv_path}"}), 404
 
-    target_hosts = download_helper(data, "template", inv_path)
+    target_hosts = download_helper(inv_path)
 
     if not target_hosts:
-        return jsonify({"ok": False, "message": "No non-host devices found in inventory to fetch configs from."}), 404
+        return jsonify({"ok": False, "message": "No devices found in inventory to fetch configs from."}), 404
 
     # ensure controllerConfigs dir exists
     os.makedirs(CONTROLLER_CONFIGS_DIR, exist_ok=True)
 
     if TEST:
-        controller_configs_dir_wsl = windows_to_wsl_path(CONTROLLER_CONFIGS_DIR)
+        controller_configs_dir_wsl = win_to_wsl_path(CONTROLLER_CONFIGS_DIR)
     else:
         controller_configs_dir_wsl = CONTROLLER_CONFIGS_DIR
 
@@ -520,6 +180,314 @@ def download_template():
         return send_file(zip_path, as_attachment=True, download_name=zip_name, mimetype="application/zip")
     except Exception as e:
         return jsonify({"ok": False, "message": f"Failed to send zip file: {e}"}), 500
+
+def schema_from_template(tpl):
+   # create json schema from res_<reservation_id>_playbook_template to validate the playbook received
+    if isinstance(tpl, dict):
+        props = {}
+        for k, v in tpl.items():
+            if k == "commands_map":
+                # commands_map must be object type, but its properties are free
+                props[k] = {"type": "object", "additionalProperties": True}
+            else:
+                props[k] = schema_from_template(v)
+        return {
+            "type": "object",
+            "properties": props,
+            "required": list(props.keys()),
+            "additionalProperties": False
+        }
+
+    # list -> impose same length and validate each element per index
+    if isinstance(tpl, list):
+        # if empty list, we ask an empty list
+        if len(tpl) == 0:
+            return {"type": "array", "minItems": 0, "maxItems": 0, "items": {"type": "array", "maxItems": 0}}
+        # if list with N elements: items = [schema(elem0), schema(elem1), ...] and min/maxItems = N
+        items_schema = schema_from_template(tpl[0])
+        return {
+            "type": "array",
+            "items": items_schema,
+            "minItems": len(tpl),
+            "maxItems": len(tpl)
+        }
+
+    if isinstance(tpl, bool):
+        return {"type": "boolean"}
+    if isinstance(tpl, int):
+        return {"type": "integer"}
+    if isinstance(tpl, float):
+        return {"type": "number"}
+    # default: string
+    return {"type": "string"}
+
+def extract_hosts_from_inventory(inv_path):
+    inventory_hosts = set()
+
+    with open(inv_path, "r", encoding="utf-8") as inv_fh:
+        for raw_line in inv_fh:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or line.startswith("["):
+                continue
+            parts = line.split()
+            if parts:
+                inventory_hosts.add(parts[0])
+
+    return inventory_hosts
+
+def get_commands_map_keys_from_playbook(playbook_obj):
+    # given the loaded playbook, find keys of commands_map section (they are the hostnames)
+
+    keys = set()
+    # playbook could be a list of plays
+    if isinstance(playbook_obj, list):
+
+        for play in playbook_obj:
+
+            if not isinstance(play, dict):
+                continue
+            vars_block = play.get('vars') or {}
+            cm = vars_block.get('commands_map')
+
+            if isinstance(cm, dict):
+                keys.update(cm.keys())
+
+    elif isinstance(playbook_obj, dict):
+        vars_block = playbook_obj.get('vars') or {}
+        cm = vars_block.get('commands_map')
+
+        if isinstance(cm, dict):
+            keys.update(cm.keys())
+
+    return keys
+
+def find_task_for_commands(playbook_obj):
+    # iterate plays/tasks to find a task whose name includes 'Run commands' and return that task dict (or None)
+
+    if isinstance(playbook_obj, list):
+        for play in playbook_obj:
+            tasks = play.get('tasks') if isinstance(play, dict) else None
+            if tasks and isinstance(tasks, list):
+                for t in tasks:
+                    name = t.get('name') if isinstance(t, dict) else None
+                    if name and 'Run commands' in name:
+                        return t
+    elif isinstance(playbook_obj, dict):
+        tasks = playbook_obj.get('tasks')
+        if tasks and isinstance(tasks, list):
+            for t in tasks:
+                name = t.get('name') if isinstance(t, dict) else None
+                if name and 'Run commands' in name:
+                    return t
+    return None
+
+def is_user_full(username):
+
+    user = db.session.query(User).filter_by(username=username).first()
+    full_user = getattr(user, "full_user", None)
+
+    if full_user is True:
+        return True
+    else:
+        return False
+
+@app.route("/api/validator/runPlaybook", methods=["POST"])
+def run_playbook():
+
+    # get form fields
+    if 'playbook' not in request.files:
+        return jsonify({"ok": False, "message": "Missing 'playbook' file in form-data"}), 400
+    f = request.files['playbook']
+    username = request.form.get('username')
+    reservation_id = request.form.get('reservation_id')
+
+    if not username:
+        return jsonify({"ok": False, "message": "Missing 'username' field"}), 400
+    if not reservation_id:
+        return jsonify({"ok": False, "message": "Missing 'reservation_id' field"}), 400
+
+    # locate controller template for this reservation
+    safe_template_name = safe_filename(f"res_{reservation_id}_playbook_template")
+    template_filename = f"{safe_template_name}.yml"
+    template_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, template_filename)
+
+    if not os.path.exists(template_path):
+        return jsonify({"ok": False, "message": f"Template file not found on controller: {template_path}"}), 404
+
+    try:
+        with open(template_path, "r", encoding="utf-8") as tf:
+            template_text = tf.read()
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Failed to read template file {f.filename}: {e}"}), 500
+
+    # read uploaded file bytes & parse YAML
+    try:
+        uploaded_bytes = f.read()
+        # ensure string for YAML
+        uploaded_text = uploaded_bytes.decode("utf-8")
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Failed to read uploaded file {f.filename}: {e}"}), 400
+
+    try:
+        playbook_obj = yaml.safe_load(uploaded_text)
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Failed to parse uploaded YAML {f.filename}: {e}"}), 400
+
+    try:
+        template_obj = yaml.safe_load(template_text)
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Failed to parse controller template YAML: {e}"}), 400
+
+    schema = schema_from_template(template_obj)
+
+    try:
+        jsonschema.validate(instance=playbook_obj, schema=schema)
+    except ValidationError as ve:
+        return jsonify({"ok": False, "message": f"Playbook structure mismatch for {f.filename}: {ve.message}"}), 400
+
+    # host check: read hosts from inventory and ensure uploaded hosts are subset
+    inv_dir = ensure_inventory_dir()
+    safe_inv = safe_filename(f"res-{reservation_id}-inventory")
+    inv_path = os.path.join(inv_dir, f"{safe_inv}.ini")
+
+    if not os.path.exists(inv_path):
+        return jsonify({"ok": False, "message": f"Inventory not found: {inv_path}"}), 404
+
+    # parse hosts from inventory file: take first token of non-empty/non-comment/non-group lines
+    inventory_hosts = extract_hosts_from_inventory(inv_path)
+
+    # find commands_map hosts declared under commands_map in the uploaded playbook
+    uploaded_hosts = get_commands_map_keys_from_playbook(playbook_obj)
+    uploaded_hosts_set = set(uploaded_hosts)
+
+    # allow uploaded hosts to be a subset of inventory hosts; if any host not in inventory -> error
+    invalid_hosts = sorted(list(uploaded_hosts_set - inventory_hosts))
+    if invalid_hosts:
+        return jsonify({
+            "ok": False,
+            "message": f"Playbook {f.filename} contains host(s) not present in the reservation inventory",
+            "invalid_hosts": invalid_hosts,
+            "inventory_hosts": sorted(list(inventory_hosts))
+        }), 400
+
+    # find the task that runs commands and validate become_user
+    task = find_task_for_commands(playbook_obj)
+    if not task:
+        return jsonify({"ok": False, "message": f"Could not find task that runs commands (name containing 'Run commands') in {f.filename}"}), 400
+
+    become_user = task.get('become_user')
+
+    # become_user must match the provided username
+    if become_user != username:
+        return jsonify({
+            "ok": False,
+            "message": f"become_user in playbook {f.filename} does not match provided username",
+            "expected_become_user": username,
+            "found_become_user": become_user
+        }), 400
+
+    # check user privilege: if user is full_user skip dangerous command checks
+    is_full = is_user_full(username)
+
+    dangerous_prefixes = ['ip', 'vtysh', 'config', 'tc']
+    bad_commands = []
+
+    if not is_full:
+        # collect command strings per host from commands_map and search for dangerous prefixes
+        commands_map = {}
+        if isinstance(playbook_obj, list):
+            for play in playbook_obj:
+                if isinstance(play, dict):
+                    vars_block = play.get('vars') or {}
+                    cm = vars_block.get('commands_map')
+                    if isinstance(cm, dict):
+                        commands_map.update(cm)
+        elif isinstance(playbook_obj, dict):
+            vars_block = playbook_obj.get('vars') or {}
+            cm = vars_block.get('commands_map')
+            if isinstance(cm, dict):
+                commands_map.update(cm)
+
+        # inspect each command string for disallowed prefixes
+        for host, cmds in commands_map.items():
+            # if user provided a single multiline string, split into lines
+            if isinstance(cmds, str):
+                cmd_list = [ln for ln in cmds.splitlines() if ln.strip()]
+            elif isinstance(cmds, list):
+                cmd_list = cmds
+            else:
+                # unknown format, skip
+                continue
+
+            for c in cmd_list:
+                if not isinstance(c, str):
+                    continue
+                s = c.strip().lower()
+                if not s:
+                    continue
+
+                # get tokens, skip leading 'sudo' if present
+                tokens = re.split(r'\s+', s)
+                primary = tokens[0] if tokens else ''
+                if primary == 'sudo' and len(tokens) > 1:
+                    primary = tokens[1]
+
+                # extract the leading word characters only
+                m = re.match(r'^([a-z0-9_+-]+)', primary)
+                if not m:
+                    continue
+                primary_word = m.group(1)
+
+                # exact-match check: only the keywords listed are forbidden
+                if primary_word in dangerous_prefixes:
+                    bad_commands.append({
+                        "host": host,
+                        "command": c,
+                        "found_prefix": primary_word
+                    })
+
+    if bad_commands:
+        # build message instructing replacement
+        replacements = {
+            "ip": "res_ip",
+            "vtysh": "res_vtysh",
+            "config": "res_config",
+            "tc": "res_tc"
+        }
+        hints = []
+        used = set()
+        for b in bad_commands:
+            used.add(b["found_prefix"])
+        for u in sorted(used):
+            hints.append(f"use '{replacements.get(u, 'res_'+u)}' instead of '{u}'")
+        return jsonify({
+            "ok": False,
+            "message": f"Playbook {f.filename} contains commands not allowed for your account " + "; ".join(hints),
+            "bad_commands": bad_commands
+        }), 400
+
+    # all checks passed: save uploaded playbook into USER_PLAYBOOKS_DIR/res_<reservation_id>/
+    try:
+        target_dir_name = safe_filename(f"res_{reservation_id}")
+        target_dir = os.path.join(USER_PLAYBOOKS_DIR, target_dir_name)
+        os.makedirs(target_dir, exist_ok=True)
+        # use original filename
+        original_filename = f.filename or f"uploaded_playbook_{int(time.time())}.yml"
+        safe_name = safe_filename(original_filename)
+        if not safe_name.lower().endswith(('.yml', '.yaml')):
+            # ensure extension
+            safe_name = safe_name + ".yml"
+        target_path = os.path.join(target_dir, safe_name)
+
+        # write file (overwrite if exists)
+        with open(target_path, "wb") as fh:
+            fh.write(uploaded_bytes)
+
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Failed to save uploaded playbook {f.filename}: {e}"}), 500
+
+    return jsonify({"ok": True, "message": f"Playbook {f.filename} validated and saved"}), 200
+
 
 if __name__ == '__main__':
 

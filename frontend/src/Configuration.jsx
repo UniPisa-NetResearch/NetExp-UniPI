@@ -3,41 +3,9 @@ import React, {useState, useRef, useEffect} from 'react';
 import './style/style.css';
 import './style/configuration.css';
 
-// apiClient.js (esempi)
-export async function submitPlaybook({ username, reservation_id, playbookFile, templateFile=null}) {
-  const url = `/api/validator/submitPlaybook`;
-  const fd = new FormData();
-  fd.append("username", username);
-  if (reservation_id) fd.append("reservation_id", reservation_id);
-  fd.append("playbook", playbookFile); // required
-  if (templateFile) fd.append("template", templateFile);
-
-  const resp = await fetch(url, {
-    method: "POST",
-    body: fd
-  });
-
-  if (resp.status === 202) {
-    const data = await resp.json();
-    return { ok: true, job_id: data.job_id, message: data.message };
-  } else {
-    const err = await resp.json();
-    return { ok: false, message: err.message || "Upload failed" };
-  }
-}
-
-export async function getJobStatus(jobId) {
-  const resp = await fetch(`/api/validator/jobStatus?job_id=${encodeURIComponent(jobId)}`);
-  if (!resp.ok) {
-    return { ok: false, message: `HTTP ${resp.status}` };
-  }
-
-  return await resp.json(); // contains status and possibly result
-}
-
-const fetchAvailabilityStatus = async (username) => {
+const fetchAvailabilityStatus = async (username, reservation_id) => {
     try {
-        const response = await fetch(`/api/controller/checkAvailability?username=${username}`);
+        const response = await fetch(`/api/controller/checkAvailability?username=${username}&reservation_id=${reservation_id}`);
 
         if (!response.ok) {
             console.error(`HTTP error! status: ${response.status}`);
@@ -78,9 +46,13 @@ function useFileInput(allowedExt = []) {
     const nameLower = f.name.toLowerCase();
     const isValid = allowedExt.some(ext => nameLower.endsWith(ext));
     setFileType(isValid ? 'valid' : 'invalid');
+    e.target.value = null;
   };
-
-  return { ref, file, fileType, choose, onChange, fileName: file ? file.name : '' };
+  const reset = () => {
+    setFile(null);
+    setFileType('');
+  }
+  return { ref, file, fileType, choose, onChange, fileName: file ? file.name : '', reset };
 }
 
 function handleUpload({ descriptors, setOutput, setOutputType, requireAny = true }) {
@@ -144,26 +116,29 @@ export default function Configuration({username, reservation_id}) {
   const playbook = useFileInput(['.yml', '.yaml']);
   // template output
   const [templateOutput, setTemplateOutput] = useState('');
-  const [templateOutputType, setTemplateOutputType] = useState(''); // 'success' |'error'
+  const [templateOutputType, setTemplateOutputType] = useState(''); // 'success' |'error' | 'wait'
   // playbook output
   const [playbookOutput, setPlaybookOutput] = useState('');
-  const [playbookOutputType, setPlaybookOutputType] = useState(''); // 'success' |'error'
+  const [playbookOutputType, setPlaybookOutputType] = useState(''); // 'success' |'error' | 'wait'
   // test execution output
   const [testOutput, setTestOutput] = useState('');
-  const [testOutputType, setTestOutputType] = useState(''); // 'success' | 'error'
+  const [testOutputType, setTestOutputType] = useState(''); // 'success' | 'error' | 'wait'
 
   // snapshot management
   const [snapshotList, setSnapshotList] = useState([{ name: 'snapshot0', description: 'Original network state, no configurations applied' },]);
   const [selectedSnapshot, setSelectedSnapshot] = useState('snapshot0');
   const [snapshotDescriptionInput, setSnapshotDescriptionInput] = useState('');
   const [snapshotResult, setSnapshotResult] = useState('');
-  const [snapshotResultType, setSnapshotResultType] = useState(''); // 'success' | 'error'
+  const [snapshotResultType, setSnapshotResultType] = useState(''); // 'success' | 'error' | 'wait'
 
   // result for rollback/delete
   const [actionResult, setActionResult] = useState('');
-  const [actionResultType, setActionResultType] = useState(''); // 'success' | 'error'
+  const [actionResultType, setActionResultType] = useState(''); // 'success' | 'error' | 'wait'
   // unlock functionalities when account creation is completed
   const [isAccessGranted, setIsAccessGranted] = useState(false);
+
+// when true all buttons are disabled until operation completes
+const [waitOperation, setWaitOperation] = useState(false);
 
 const [jobId, setJobId] = useState(null);
 const [polling, setPolling] = useState(false);
@@ -173,9 +148,10 @@ const downloadFile= async (file_type) =>{
 
   if (file_type === "playbook") {
     setPlaybookOutput("Downloading playbook template...");
-    setTemplateOutputType("");
+    setPlaybookOutputType("wait");
+    setWaitOperation(true);
     try {
-      const payload = { reservation_id: reservation_id };
+      const payload = { reservation_id: reservation_id};
 
       const resp = await fetch("/api/validator/downloadPlaybook", {
         method: "POST",
@@ -192,6 +168,7 @@ const downloadFile= async (file_type) =>{
 
         setPlaybookOutput(errMsg);
         setPlaybookOutputType("error");
+        setWaitOperation(false);
         return;
       }
       // read file as ArrayBuffer, create Blob and start download
@@ -210,13 +187,16 @@ const downloadFile= async (file_type) =>{
 
       setPlaybookOutput(`Downloaded playbook: ${filename}`);
       setPlaybookOutputType("success");
+      setWaitOperation(false);
     } catch (e) {
       setPlaybookOutput(`Error: ${e}`);
       setPlaybookOutputType("error");
+      setWaitOperation(false);
     }
   } else if (file_type === "template") {
     setTemplateOutput("Downloading running configs zip...");
-    setTemplateOutputType("");
+    setTemplateOutputType("wait");
+    setWaitOperation(true);
     try {
       const payload = { reservation_id: reservation_id };
 
@@ -241,6 +221,7 @@ const downloadFile= async (file_type) =>{
         }
         setTemplateOutput(errMsg);
         setTemplateOutputType("error");
+        setWaitOperation(false);
         return;
       }
 
@@ -272,62 +253,17 @@ const downloadFile= async (file_type) =>{
 
       setTemplateOutput(`Downloaded template: ${filename}`);
       setTemplateOutputType("success");
+      setWaitOperation(false);
     } catch (e) {
       setTemplateOutput(`Error: ${e}`);
       setTemplateOutputType("error");
+      setWaitOperation(false)
     }
   }
 }
 
 const runTest = () =>{
    console.log("run test");
-}
-const submitConfiguration = async () => {
-
-  setPlaybookOutput("Job queued, waiting for worker...");
-  setPlaybookOutputType(""); // neutral or 'info'
-  const resp = await submitPlaybook({
-    username,
-    reservation_id: reservation_id,
-    playbookFile: playbook.file,
-  });
-  if (!resp.ok) {
-    setPlaybookOutput(`Error: ${resp.message}`);
-    setPlaybookOutputType('error');
-    return;
-  }
-  setJobId(resp.job_id);
-  // start polling
-  startPollingJob(resp.job_id, setPlaybookOutput, setPlaybookOutputType, setPolling);
-};
-
-// funzione di polling semplice
-function startPollingJob(jobId, setOutput, setOutputType, setPolling) {
-  if (!jobId) return;
-  setPolling(true);
-  const interval = 3000; // 3s
-  const pid = setInterval(async () => {
-    try {
-      const res = await getJobStatus(jobId);
-      if (res.status === 'finished' && res.result) {
-        const r = res.result;
-        setOutput(`Return code: ${r.rc}\n\nSTDOUT:\n${r.stdout}\n\nSTDERR:\n${r.stderr}`);
-        setOutputType(r.rc === 0 ? 'success' : 'error');
-        clearInterval(pid);
-        setPolling(false);
-      } else if (res.status === 'failed') {
-        setOutput(`Job failed!`);
-        setOutputType('error');
-        clearInterval(pid);
-        setPolling(false);
-      }
-    } catch (e) {
-      setOutput(`Error retrieving job status: ${e.message}`);
-      setOutputType('error');
-      clearInterval(pid);
-      setPolling(false);
-    }
-  }, interval);
 }
 
 const getNextSnapshotIndex = (currentList) => {
@@ -346,7 +282,7 @@ useEffect(() => {
     let mounted = true;
 
     const checkStatus = async () => {
-        const command = await fetchAvailabilityStatus(username);
+        const command = await fetchAvailabilityStatus(username, reservation_id);
 
         if (!mounted) return;
 
@@ -468,16 +404,14 @@ const MAX_CHARS = 80;
     }
 
     setTemplateOutputType('Job queued, waiting for worker...');
-    setTemplateOutput('');
-
-    await submitConfiguration({username, reservation_id, templateFile: template.file || null});
+    setTemplateOutput('wait');
 
   };
 
-  const handlePlaybookFile = () => {
+  const handlePlaybookFile = async () => {
     handleUpload({
       descriptors: [
-        { file: playbook.file, fileType: playbook.fileType, label: 'Playbook' },
+        {file: playbook.file, fileType: playbook.fileType, label: 'Playbook'},
       ],
       setOutput: setPlaybookOutput,
       setOutputType: setPlaybookOutputType,
@@ -486,6 +420,67 @@ const MAX_CHARS = 80;
     setActionResult('');
     setSnapshotResult('');
     setSnapshotDescriptionInput('');
+
+    if (!playbook.file) {
+      setPlaybookOutput('No playbook file selected');
+      setPlaybookOutputType('error');
+      return;
+    }
+
+    // prepare form data
+    const form = new FormData();
+    form.append('playbook', playbook.file);
+    form.append('username', username);
+    form.append('reservation_id', reservation_id);
+
+    setWaitOperation(true); // disable all buttons/inputs
+    setPlaybookOutput('Running playbook, please wait...');
+    setPlaybookOutputType('wait');
+
+    let data;
+
+    try {
+      const resp = await fetch('/api/validator/runPlaybook', {
+        method: 'POST',
+        body: form
+      });
+
+    try {
+        // try parse JSON response if possible
+        data = await resp.json();
+    } catch(e){
+        try {
+        const txt = await resp.text();
+        data = { __raw_text: txt };
+      } catch (_) {
+        data = null;
+      }
+    }
+      if (resp.ok) {
+        // success status code: prefer message from JSON if present
+        const msg = (data && (data.message || data.output || data.result)) ? (data.message || data.output || data.result) : 'Playbook executed successfully';
+        setPlaybookOutput(msg);
+        setPlaybookOutputType('success');
+      } else {
+        // non-200 code
+        let errMsg = `HTTP ${resp.status}`;
+        if (data) {
+          if (data.message) errMsg = data.message;
+          else if (data.error) errMsg = data.error;
+          else if (data.__raw_text) errMsg = data.__raw_text;
+        } else {
+            errMsg = `HTTP ${resp.status}`;
+        }
+        setPlaybookOutput(errMsg);
+        setPlaybookOutputType('error');
+      }
+    } catch (e) {
+      setPlaybookOutput(`Network or client error: ${e}`);
+      setPlaybookOutputType('error');
+    } finally {
+      playbook.reset();
+      setWaitOperation(false);
+    }
   };
 
   return (
@@ -503,13 +498,13 @@ const MAX_CHARS = 80;
           <div className="aligned-group">
             <label className="label-inline">Download running-config zip:</label>
             <button type="button" className="template-button configuration-button"
-                    onClick={() => downloadFile("template")} disabled={!isAccessGranted}>Download</button>
+                    onClick={() => downloadFile("template")} disabled={!isAccessGranted || waitOperation}>Download</button>
             <label className="label-inline">Load running-config zip:</label>
-            <button type="button" className="template-button configuration-button choose-button" onClick={template.choose} disabled={!isAccessGranted}>Choose zip
+            <button type="button" className="template-button configuration-button choose-button" onClick={template.choose} disabled={!isAccessGranted || waitOperation}>Choose zip
             </button>
             <div className={`selected-file-name file-status-${template.fileType}`}>{template.fileName}</div>
-            <input ref={template.ref} type="file" style={{display: 'none'}} onChange={template.onChange} disabled={!isAccessGranted}/>
-            <button type="button" className="send-button configuration-button" onClick={handleTemplateFile} disabled={!isAccessGranted}>Load file
+            <input ref={template.ref} type="file" style={{display: 'none'}} onChange={template.onChange} disabled={!isAccessGranted || waitOperation}/>
+            <button type="button" className="send-button configuration-button" onClick={handleTemplateFile} disabled={!isAccessGranted || waitOperation}>Load file
             </button>
           </div>
         </div>
@@ -528,14 +523,14 @@ const MAX_CHARS = 80;
           <div className="aligned-group">
             <label className="label-inline">Download playbook template:</label>
             <button type="button" className="playbook-button configuration-button"
-                    onClick={() => downloadFile("playbook")} disabled={!isAccessGranted}>Download</button>
+                    onClick={() => downloadFile("playbook")} disabled={!isAccessGranted || waitOperation}>Download</button>
             <label className="label-inline">Load Ansible playbook:</label>
-            <button type="button" className="playbook-button configuration-button choose-button" onClick={playbook.choose} disabled={!isAccessGranted}>Choose
+            <button type="button" className="playbook-button configuration-button choose-button" onClick={playbook.choose} disabled={!isAccessGranted || waitOperation}>Choose
               playbook
             </button>
             <div className={`selected-file-name file-status-${playbook.fileType}`}>{playbook.fileName}</div>
-            <input ref={playbook.ref} type="file" style={{display: 'none'}} onChange={playbook.onChange} disabled={!isAccessGranted}/>
-            <button type="button" className="send-button configuration-button" onClick={handlePlaybookFile} disabled={!isAccessGranted}>Run playbook
+            <input ref={playbook.ref} type="file" style={{display: 'none'}} onChange={playbook.onChange} disabled={!isAccessGranted || waitOperation}/>
+            <button type="button" className="send-button configuration-button" onClick={handlePlaybookFile} disabled={!isAccessGranted || waitOperation}>Run playbook
             </button>
           </div>
         </div>
@@ -553,7 +548,7 @@ const MAX_CHARS = 80;
         <div className="config-row main-actions-row">
           <div className="aligned-group">
             <label className="label-inline">Run ping all test:</label>
-            <button type="button" className="send-button configuration-button" onClick={runTest} disabled={!isAccessGranted}>Run test</button>
+            <button type="button" className="send-button configuration-button" onClick={runTest} disabled={!isAccessGranted || waitOperation}>Run test</button>
           </div>
         </div>
 
@@ -576,9 +571,9 @@ const MAX_CHARS = 80;
               onChange={handleDescriptionChange}
               placeholder="Snapshot description"
               maxLength={MAX_CHARS}
-              disabled={!isAccessGranted}
+              disabled={!isAccessGranted || waitOperation}
           />
-          <button type="button" className="send-button configuration-button" onClick={handleTakeSnapshot} disabled={!isAccessGranted}>Take
+          <button type="button" className="send-button configuration-button" onClick={handleTakeSnapshot} disabled={!isAccessGranted || waitOperation}>Take
             snapshot
           </button>
         </div>
@@ -596,7 +591,7 @@ const MAX_CHARS = 80;
                 className="select-field"
                 value={selectedSnapshot}
                 onChange={(e) => setSelectedSnapshot(e.target.value)}
-                disabled={!isAccessGranted}
+                disabled={!isAccessGranted || waitOperation}
             >
               {snapshotList.map((s) => (
                   <option key={s.name} value={s.name}>{s.name}</option>
@@ -610,13 +605,13 @@ const MAX_CHARS = 80;
           </div>
 
           <div className="snapshot-actions">
-            <button type="button" className="rollback-button configuration-button" onClick={handleRollback} disabled={!isAccessGranted}>Rollback
+            <button type="button" className="rollback-button configuration-button" onClick={handleRollback} disabled={!isAccessGranted || waitOperation}>Rollback
             </button>
             <button
                 type="button"
                 className="delete-button delete configuration-button"
                 onClick={handleDeleteSnapshot}
-                disabled={!isAccessGranted || !selectedSnapshot || selectedSnapshot === 'snapshot0'}
+                disabled={!isAccessGranted || !selectedSnapshot || selectedSnapshot === 'snapshot0' || waitOperation}
             >
               Delete snapshot
             </button>

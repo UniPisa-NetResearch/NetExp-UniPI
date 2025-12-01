@@ -155,6 +155,12 @@
     font-weight: 600;
 }
 
+.output-field.wait {
+    border-color: #f8d54c;
+    color: #f8d54c;
+    font-weight: 600;
+}
+
 .text-input {
   padding: 6px 8px;
   border-radius: 6px;
@@ -204,7 +210,12 @@
 }
 
 .small-result.error {
-    color: #dc3545;
+    color: #f8d54c;
+    font-weight: 600;
+}
+
+.small-result.wait {
+    color: #1e7e34;
     font-weight: 600;
 }
 
