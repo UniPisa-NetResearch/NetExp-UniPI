@@ -456,10 +456,15 @@ const MAX_CHARS = 80;
         data = null;
       }
     }
+      let stdout;
+      let stderr;
+
       if (resp.ok) {
         // success status code: prefer message from JSON if present
-        const msg = (data && (data.message || data.output || data.result)) ? (data.message || data.output || data.result) : 'Playbook executed successfully';
-        setPlaybookOutput(msg);
+        const msg = (data && data.message) ? data.message : 'Playbook executed successfully';
+        stdout = (data && typeof data.stdout !== 'undefined') ? data.stdout : '';
+        stderr = (data && typeof data.stderr !== 'undefined') ? data.stderr : '';
+        setPlaybookOutput(msg + '\n' + 'stdout: ' + stdout + '\n' + 'stderr: ' + stderr);
         setPlaybookOutputType('success');
       } else {
         // non-200 code
@@ -468,10 +473,13 @@ const MAX_CHARS = 80;
           if (data.message) errMsg = data.message;
           else if (data.error) errMsg = data.error;
           else if (data.__raw_text) errMsg = data.__raw_text;
+
+          if (typeof data.stdout !== 'undefined') stdout = data.stdout;
+          if (typeof data.stderr !== 'undefined') stderr = data.stderr;
         } else {
             errMsg = `HTTP ${resp.status}`;
         }
-        setPlaybookOutput(errMsg);
+        setPlaybookOutput(errMsg + '\n' + 'stdout: ' + stdout + '\n' + 'stderr: ' + stderr);
         setPlaybookOutputType('error');
       }
     } catch (e) {

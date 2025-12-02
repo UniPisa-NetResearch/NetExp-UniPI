@@ -14,7 +14,7 @@ USER_PLAYBOOKS_DIR = os.path.join(BASE_DIR, "userPlaybooks")
 TEMPLATES_DIR = os.path.join(CONTROLLER_PLAYBOOKS_DIR, "templates")
 WRAPPERS_DIR = os.path.join(CONTROLLER_PLAYBOOKS_DIR, "wrappers")
 # playbook template schema
-INPUT_TEMPLATE_CONTENT = """- name: Apply per-host commands
+INPUT_TEMPLATE_CONTENT = r"""- name: Apply per-host commands
   hosts: all
   gather_facts: no
   vars:
@@ -24,7 +24,7 @@ INPUT_TEMPLATE_CONTENT = """- name: Apply per-host commands
   tasks:
     - name: Run commands from commands_map
       vars:
-        cmds: "{{ commands_map[inventory_hostname] | default([]) }}"
+        cmds: "{{ commands_map[inventory_hostname] | default([]) | map('regex_replace', '^\\s*sudo\\s+', 'sudo -n ') | list}}"
       ansible.builtin.shell: |
         {% for c in cmds %}
         {{ c }}

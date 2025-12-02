@@ -21,7 +21,7 @@ NETBOX_TOKEN = os.getenv("NETBOX_TOKEN", "6152fbb91529522c72307b194a690c4ca5253e
 
 MAX_HOURS = 72
 TEST = True
-EXPERIMENT_DURATION = 7        #expressed in minutes
+EXPERIMENT_DURATION = 10        #expressed in minutes
 
 nb = pynetbox.api(NETBOX_URL, token=NETBOX_TOKEN)
 

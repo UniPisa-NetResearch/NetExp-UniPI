@@ -291,6 +291,26 @@ def is_user_full(username):
     else:
         return False
 
+def execute_user_playbook(inv_path, playbook_path, extra_vars=None, timeout=900):
+
+    try:
+        rc, out, err = run_ansible_playbook(inv_path, playbook_path, extra_vars=extra_vars or {}, timeout=timeout)
+        result = {
+            "rc": rc,
+            "stdout": out,
+            "stderr": err,
+            "ok": rc == 0
+        }
+    except Exception as e:
+        # In caso di eccezione catturata dal worker
+        result = {
+            "rc": -1,
+            "stdout": "",
+            "stderr": f"Exception while running playbook: {e}",
+            "ok": False
+        }
+    return result
+
 @app.route("/api/validator/runPlaybook", methods=["POST"])
 def run_playbook():
 
@@ -384,6 +404,18 @@ def run_playbook():
             "message": f"become_user in playbook {f.filename} does not match provided username",
             "expected_become_user": username,
             "found_become_user": become_user
+        }), 400
+
+    expected_cmds = r"{{ commands_map[inventory_hostname] | default([]) | map('regex_replace', '^\s*sudo\s+', 'sudo -n ') | list}}"
+
+    # obtain the 'cmds' value from the located task (if any)
+    task_vars = task.get('vars') or {}
+    actual_cmds = task_vars.get('cmds')
+
+    if actual_cmds is None or actual_cmds != expected_cmds:
+        return jsonify({
+            "ok": False,
+            "message": f"'cmds' expression in playbook {f.filename} differs from the required template and cannot be executed"
         }), 400
 
     # check user privilege: if user is full_user skip dangerous command checks
@@ -486,7 +518,37 @@ def run_playbook():
     except Exception as e:
         return jsonify({"ok": False, "message": f"Failed to save uploaded playbook {f.filename}: {e}"}), 500
 
-    return jsonify({"ok": True, "message": f"Playbook {f.filename} validated and saved"}), 200
+    # execute playbook
+    try:
+        exec_inv_path = inv_path
+        exec_playbook_path = target_path
+
+        # sync execution
+        result = execute_user_playbook(exec_inv_path, exec_playbook_path, timeout=900)
+
+        if result.get("ok"):
+            return jsonify({
+                "ok": True,
+                "message": f"Playbook {f.filename} executed successfully",
+                "rc": result.get("rc"),
+                "stdout": result.get("stdout"),
+                "stderr": result.get("stderr")
+            }), 200
+        else:
+            return jsonify({
+                "ok": False,
+                "message": f"Playbook {f.filename} execution failed",
+                "rc": result.get("rc"),
+                "stdout": result.get("stdout"),
+                "stderr": result.get("stderr")
+            }), 500
+
+    except Exception as e:
+        # eccezione imprevista durante l'esecuzione
+        return jsonify({
+            "ok": False,
+            "message": f"Exception while executing playbook {f.filename}: {e}"
+        }), 500
 
 
 if __name__ == '__main__':
