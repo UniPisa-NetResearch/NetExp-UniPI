@@ -11,6 +11,7 @@ INVENTORY_DIR = os.path.join(BASE_DIR, "inventories")
 CONTROLLER_PLAYBOOKS_DIR = os.path.join(BASE_DIR, "controllerPlaybooks")
 CONTROLLER_CONFIGS_DIR = os.path.join(BASE_DIR, "controllerConfigs")
 USER_PLAYBOOKS_DIR = os.path.join(BASE_DIR, "userPlaybooks")
+USER_CONFIGS_DIR = os.path.join(BASE_DIR, "userConfigs")
 TEMPLATES_DIR = os.path.join(CONTROLLER_PLAYBOOKS_DIR, "templates")
 WRAPPERS_DIR = os.path.join(CONTROLLER_PLAYBOOKS_DIR, "wrappers")
 # playbook template schema
@@ -321,15 +322,20 @@ def revoke_access():
     if not os.path.exists(playbook_template_path):
        print("Playbook template not found:", playbook_template_path, " still attempting graceful removal (playbook will run against nothing).")
 
-    # running configs zip folder
+    #  controller running configs zip folder
     safe_res_config = safe_filename(f"res_{reservation_id}_running_configs")
-    running_config_path = os.path.join( CONTROLLER_CONFIGS_DIR, f"{safe_res_config}.zip")
-    if not os.path.exists(running_config_path):
-        print("Running configs zip not found:", running_config_path, " still attempting graceful removal (playbook will run against nothing).")
+    controller_running_config_path = os.path.join( CONTROLLER_CONFIGS_DIR, f"{safe_res_config}.zip")
+    if not os.path.exists(controller_running_config_path):
+        print("Running configs zip not found:", controller_running_config_path, " still attempting graceful removal (playbook will run against nothing).")
 
     # res_<reservation_id> folder with user playbooks
     safe_res_dir = safe_filename(f"res_{reservation_id}")
     user_playbook_dir = os.path.join(USER_PLAYBOOKS_DIR, safe_res_dir)
+
+    # user running configs zip folder
+    user_running_config_path = os.path.join(USER_CONFIGS_DIR, f"{safe_res_config}.zip")
+    if not os.path.exists(user_running_config_path):
+        print("Running configs zip not found:", user_running_config_path, " still attempting graceful removal (playbook will run against nothing).")
 
     # write revoke playbook
     pb_path = get_playbook_template_path("revoke")
@@ -351,11 +357,14 @@ def revoke_access():
     # remove playbook template file
     remove_files(playbook_template_path, "file")
 
-    # remove running config zip folder
-    remove_files(running_config_path, "file")
+    # remove controller running config zip folder
+    remove_files(controller_running_config_path, "file")
 
     # remove recursively the folder and all the content
     remove_files(user_playbook_dir, "folder")
+
+    # remove user running config zip folder
+    remove_files(user_running_config_path, "file")
 
     print("Deleted generated files for reservation", reservation_id)
     # remove active res file

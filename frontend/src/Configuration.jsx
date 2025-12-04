@@ -398,14 +398,68 @@ const MAX_CHARS = 80;
     setSnapshotResult('');
     setSnapshotDescriptionInput('');
 
-    if (!ok) {
-      // handleUpload has set the error
+    if (!template.file) {
+      setTemplateOutput('No configuration folder selected');
+      setTemplateOutputType('error');
       return;
     }
 
-    setTemplateOutputType('Job queued, waiting for worker...');
-    setTemplateOutput('wait');
+    // prepare form data
+    const form = new FormData();
+    form.append('template', template.file);
+    form.append('username', username);
+    form.append('reservation_id', reservation_id);
 
+    setWaitOperation(true); // disable all buttons/inputs
+    setTemplateOutput('Running configurations, please wait...');
+    setTemplateOutputType('wait');
+
+    let data;
+
+    try {
+      const resp = await fetch('/api/validator/runTemplate', {
+        method: 'POST',
+        body: form
+      });
+
+    try {
+        // try parse JSON response if possible
+        data = await resp.json();
+    } catch(e){
+        try {
+        const txt = await resp.text();
+        data = { __raw_text: txt };
+      } catch (_) {
+        data = null;
+      }
+    }
+      let results;
+
+      if (resp.ok) {
+        // success status code: prefer message from JSON if present
+        const msg = (data && data.message) ? data.message : 'Template executed successfully';
+        results = (data && typeof data.results !== 'undefined') ? data.results : '';
+        setTemplateOutput(msg + '\n' + 'results: ' + results);
+        setTemplateOutputType('success');
+      } else {
+        // non-200 code
+        let errMsg = `HTTP ${resp.status}`;
+        if (data) {
+          if (data.message) errMsg = data.message;
+          if (typeof data.results !== 'undefined') results = data.results;
+        } else {
+            errMsg = `HTTP ${resp.status}`;
+        }
+        setTemplateOutput(errMsg + '\n' + 'results: ' + results);
+        setTemplateOutputType('error');
+      }
+    } catch (e) {
+      setTemplateOutput(`Network or client error: ${e}`);
+      setTemplateOutputType('error');
+    } finally {
+      template.reset();
+      setWaitOperation(false);
+    }
   };
 
   const handlePlaybookFile = async () => {

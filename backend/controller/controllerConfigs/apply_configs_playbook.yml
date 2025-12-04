@@ -1,0 +1,75 @@
+---
+- name: Apply config_db.json to device, reload and verify system health (with retries)
+  hosts: "{{ target_host }}"
+  gather_facts: false
+  become: true
+  vars:
+    # max number of try to check system status (es. 12 * 5s = 60s)
+    max_retries: 12
+    delay_seconds: 5
+
+  tasks:
+    - name: Copy config to /tmp/new_config.json on remote
+      copy:
+        src: "{{ config_local_path }}"
+        dest: "/tmp/new_config.json"
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Move new config into place
+      shell: |
+        cp /tmp/new_config.json /etc/sonic/config_db.json
+        sync
+      register: cp_result
+      failed_when: "cp_result.rc != 0"
+
+    - name: Reload SONiC config
+      shell: config reload -y
+      register: reload_result
+      failed_when: "reload_result.rc != 0"
+
+    - name: Wait briefly for reload to start (small pause)
+      pause:
+        seconds: 2
+
+    - name: Check system health with retries until all services OK (excluding rsync)
+      # this task runs a shell on the remote device that prints the number of non-OK services (excluding rsync)
+      # it will be retried until the printed number is 0 or retries exhausted
+      shell: |
+        show system-health sysready-status | awk '
+          BEGIN { c=0 }
+          /^-+/ { next }                      # skip separator lines
+          /^Service-Name/ { next }            # skip header line
+          NF < 2 { next }                     # skip short lines
+          {
+            name=$1; status=$2;
+            # only consider lines where the second column looks like a service status
+            if (status !~ /^(OK|Down|Starting|Inactive|Failed|Stopped|Unknown|Starting)$/) next;
+            n=tolower(name);
+            if (n == "rsync") next;
+            if (status != "OK") { c++ }
+          }
+          END { print c } '
+
+      register: non_ok_count
+      failed_when: cp_result.rc != 0
+      changed_when: false
+      retries: "{{ max_retries }}"
+      delay: "{{ delay_seconds }}"
+      until: (non_ok_count.stdout | default('0') | int) == 0
+
+    - name: Capture full system-health output for diagnostics
+      shell: show system-health sysready-status
+      register: sysready_full
+      failed_when: cp_result.rc != 0
+      changed_when: false
+
+    - name: Fail if after retries there are still non-OK services (excluding rsync)
+      fail:
+        msg: >-
+          Services not OK after {{ max_retries }} attempts on host {{ inventory_hostname }}.
+          Non-OK services count: {{ non_ok_count.stdout | default('0') }}.
+          Full sysready output:
+          {{ sysready_full.stdout }}
+      when: (non_ok_count.stdout | default('0') | int) > 0

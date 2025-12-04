@@ -2,9 +2,6 @@ import os
 import json
 import shutil
 import time
-import uuid
-from rq import Queue
-from rq.job import Job
 from redis import Redis
 from flask import jsonify, request, send_file, make_response
 from ..database.db import db, User
@@ -13,6 +10,7 @@ import io
 import re
 import zipfile
 import jsonschema
+import concurrent.futures
 from jsonschema import ValidationError
 
 
@@ -22,7 +20,8 @@ from .controller import (
     ensure_inventory_dir, safe_filename, run_ansible_playbook, win_to_wsl_path,
     CONTROLLER_PLAYBOOKS_DIR,
     CONTROLLER_CONFIGS_DIR,
-    USER_PLAYBOOKS_DIR
+    USER_PLAYBOOKS_DIR,
+    USER_CONFIGS_DIR
 )
 # true if development mode is active
 TEST = True
@@ -31,23 +30,19 @@ REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.environ.get("REDIS_PORT", 6379))
 redis_conn = Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
 
-q = Queue("playbooks", connection=redis_conn)
+def extract_hosts_from_inventory(inv_path):
+    inventory_hosts = set()
 
-def download_helper(inv_path):
-
-    # parse hosts from inventory
-    hosts = []
-    with open(inv_path, "r", encoding="utf-8") as fh:
-        for raw_line in fh:
+    with open(inv_path, "r", encoding="utf-8") as inv_fh:
+        for raw_line in inv_fh:
             line = raw_line.strip()
             if not line or line.startswith("#") or line.startswith("["):
                 continue
             parts = line.split()
-            host_key = parts[0]
+            if parts:
+                inventory_hosts.add(parts[0])
 
-            hosts.append(host_key)
-
-    return hosts
+    return inventory_hosts
 
 @app.route('/api/validator/downloadPlaybook', methods=['POST'])
 def download_playbook():
@@ -102,7 +97,7 @@ def download_template():
     if not os.path.exists(inv_path):
         return jsonify({"ok": False, "message": f"Inventory not found: {inv_path}"}), 404
 
-    target_hosts = download_helper(inv_path)
+    target_hosts = extract_hosts_from_inventory(inv_path)
 
     if not target_hosts:
         return jsonify({"ok": False, "message": "No devices found in inventory to fetch configs from."}), 404
@@ -221,20 +216,6 @@ def schema_from_template(tpl):
     # default: string
     return {"type": "string"}
 
-def extract_hosts_from_inventory(inv_path):
-    inventory_hosts = set()
-
-    with open(inv_path, "r", encoding="utf-8") as inv_fh:
-        for raw_line in inv_fh:
-            line = raw_line.strip()
-            if not line or line.startswith("#") or line.startswith("["):
-                continue
-            parts = line.split()
-            if parts:
-                inventory_hosts.add(parts[0])
-
-    return inventory_hosts
-
 def get_commands_map_keys_from_playbook(playbook_obj):
     # given the loaded playbook, find keys of commands_map section (they are the hostnames)
 
@@ -291,10 +272,10 @@ def is_user_full(username):
     else:
         return False
 
-def execute_user_playbook(inv_path, playbook_path, extra_vars=None, timeout=900):
+def execute_user_playbook(inv_path, playbook_path, timeout=900):
 
     try:
-        rc, out, err = run_ansible_playbook(inv_path, playbook_path, extra_vars=extra_vars or {}, timeout=timeout)
+        rc, out, err = run_ansible_playbook(inv_path, playbook_path, timeout=timeout)
         result = {
             "rc": rc,
             "stdout": out,
@@ -302,7 +283,6 @@ def execute_user_playbook(inv_path, playbook_path, extra_vars=None, timeout=900)
             "ok": rc == 0
         }
     except Exception as e:
-        # In caso di eccezione catturata dal worker
         result = {
             "rc": -1,
             "stdout": "",
@@ -550,8 +530,294 @@ def run_playbook():
             "message": f"Exception while executing playbook {f.filename}: {e}"
         }), 500
 
+# minimal aggregation: host by host -> single text
+def build_simple_results_text(per_host_results):
+    if not per_host_results:
+        return ""
+    lines = []
+    for host in sorted(per_host_results.keys()):
+        info = per_host_results[host]
+        lines.append(f"--- {host} ---")
+        # prefer message-like fields if present
+        if isinstance(info, dict):
+            if 'stdout' in info:
+                lines.append("stdout:")
+                lines.append(info.get('stdout') or "")
+            if 'stderr' in info:
+                lines.append("stderr:")
+                lines.append(info.get('stderr') or "")
+            if 'rc' in info:
+                lines.append(f"rc: {info.get('rc')}")
+            # fallback: include full dict as JSON if no stdout/stderr
+            if 'stdout' not in info and 'stderr' not in info:
+                lines.append(json.dumps(info, ensure_ascii=False))
+
+        else:
+            # non-dict fallback
+            lines.append(str(info))
+        lines.append("")  # blank line between hosts
+    return "\n".join(lines)
+
+def validate_config_db_minimal(obj):
+    # validate config_db.json file
+    errors = []
+
+    if not isinstance(obj, dict):
+        return False, ["Top-level JSON is not an object"]
+
+    # Top-level keys
+    for key in ("DEVICE_METADATA", "PORT", "INTERFACE"):
+        if key not in obj:
+            errors.append(f"Missing top-level key: {key}")
+        elif not isinstance(obj.get(key), dict):
+            errors.append(f"Top-level key {key} must be an object/dict")
+
+    # DEVICE_METADATA checks
+    dm = obj.get("DEVICE_METADATA")
+    if isinstance(dm, dict):
+        if not dm:
+            errors.append("DEVICE_METADATA must contain at least one host entry")
+        else:
+            # check each host has required fields
+            required_dm_fields = {"hostname", "hwsku", "platform", "mac", "type", "bgp_asn"}
+            ok_host_found = False
+            for host, hostobj in dm.items():
+                if not isinstance(hostobj, dict):
+                    errors.append(f"DEVICE_METADATA.{host} is not an object")
+                    continue
+                missing = sorted(list(required_dm_fields - set(hostobj.keys())))
+                if not missing:
+                    ok_host_found = True
+                else:
+                    errors.append(f"DEVICE_METADATA.{host} missing fields: {', '.join(missing)}")
+            if not ok_host_found:
+                errors.append("No DEVICE_METADATA host contains all required fields "
+                              "(hostname, hwsku, platform, mac, type, bgp_asn)")
+
+    # PORT checks
+    ports = obj.get("PORT")
+    if isinstance(ports, dict):
+        if not ports:
+            errors.append("PORT must contain at least one port entry")
+        else:
+            required_port_fields = {"lanes", "speed", "index"}
+            for port_name, port_obj in ports.items():
+                if not isinstance(port_obj, dict):
+                    errors.append(f"PORT.{port_name} is not an object")
+                    continue
+                missing = sorted(list(required_port_fields - set(port_obj.keys())))
+                if missing:
+                    errors.append(f"PORT.{port_name} missing fields: {', '.join(missing)}")
+                # lanes should be present and non-empty
+                lanes = port_obj.get("lanes")
+                if lanes is None or (isinstance(lanes, str) and not lanes.strip()):
+                    errors.append(f"PORT.{port_name}.lanes appears empty")
+
+    # INTERFACE basic check
+    iface = obj.get("INTERFACE")
+    if isinstance(iface, dict):
+        if not iface:
+            # it's acceptable for INTERFACE to be empty, but warn
+            errors.append("INTERFACE is present but empty")
+
+    ok = len(errors) == 0
+    return ok, errors
+
+@app.route("/api/validator/runTemplate", methods=["POST"])
+def run_template():
+
+    # get form fields
+    if 'template' not in request.files:
+        return jsonify({"ok": False, "message": "Missing 'playbook' file in form-data"}), 400
+    f = request.files['template']
+    username = request.form.get('username')
+    reservation_id = request.form.get('reservation_id')
+
+    if not username:
+        return jsonify({"ok": False, "message": "Missing 'username' field"}), 400
+    if not reservation_id:
+        return jsonify({"ok": False, "message": "Missing 'reservation_id' field"}), 400
+
+    # inventory path
+    inv_dir = ensure_inventory_dir()
+    safe_inv = safe_filename(f"res-{reservation_id}-inventory")
+    inv_path = os.path.join(inv_dir, f"{safe_inv}.ini")
+
+    if not os.path.exists(inv_path):
+        return jsonify({"ok": False, "message": f"Inventory not found: {inv_path}"}), 404
+
+    # load inventory hosts
+    inventory_hosts = extract_hosts_from_inventory(inv_path)
+    if not inventory_hosts:
+        return jsonify({"ok": False, "message": "No devices found in inventory"}), 404
+
+    # read uploaded zip bytes
+    try:
+        uploaded_bytes = f.read()
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Failed to read uploaded file {f.filename}: {e}"}), 400
+
+    # validate zip
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(uploaded_bytes))
+    except zipfile.BadZipFile as e:
+        return jsonify({"ok": False, "message": f"Uploaded file is not a valid zip archive: {e}"}), 400
+
+    # collect files named <hostname>_config_db.json
+    name_re = re.compile(r'^(.+)_config_db\.json$')
+    files_map = {}
+    invalid_names = []
+    for z in zf.infolist():
+        if z.is_dir():
+            continue
+        base = os.path.basename(z.filename)
+        m = name_re.match(base)
+        if not m:
+            invalid_names.append(z.filename)
+            continue
+        hostname = m.group(1)
+        try:
+            content_bytes = zf.read(z)
+        except Exception as e:
+            return jsonify({"ok": False, "message": f"Failed to read {z.filename} from zip: {e}"}), 400
+        files_map[hostname] = (base, content_bytes)
+
+    if invalid_names:
+        return jsonify({"ok": False, "message": f"Zip {zf.filename} contains files not matching '<hostname>_config_db.json' pattern: {invalid_names}"}), 400
+
+    if not files_map:
+        return jsonify({"ok": False, "message": f"Zip {zf.filename} does not contain any '<hostname>_config_db.json' files"}), 400
+
+    # ensure uploaded hosts are subset of inventory
+    uploaded_hosts_set = set(files_map.keys())
+    invalid_hosts = sorted(list(uploaded_hosts_set - inventory_hosts))
+    if invalid_hosts:
+        return jsonify({"ok": False, "message": f"Uploaded zip {zf.filename} contains host(s) not present in the reservation inventory: {invalid_hosts}"}), 400
+
+    # check user privilege and validate JSON content
+    is_full = is_user_full(username)
+    bad_json_files = []
+    mgmt_violations = []
+    parsed_files = {}  # hostname -> (filename, parsed_obj, raw_bytes)
+    for host, (file_name, content_bytes) in files_map.items():
+        try:
+            text = content_bytes.decode("utf-8")
+        except Exception as e:
+            bad_json_files.append({"host": host, "file": file_name, "error": f"Failed to decode file as text: {e}"})
+            continue
+        try:
+            obj = json.loads(text)
+        except Exception as e:
+            bad_json_files.append({"host": host, "file": file_name, "error": f"Invalid JSON: {e}"})
+            continue
+
+        if not isinstance(obj, dict):
+            bad_json_files.append({"host": host, "file": file_name, "error": "Top-level JSON is not an object/dict"})
+            continue
+
+        # validate minimal SONiC config structure
+        valid, errors = validate_config_db_minimal(obj)
+        if not valid:
+            bad_json_files.append({"host": host, "file": file_name, "error": "Config_db minimal validation failed", "details": errors})
+            continue
+
+        parsed_files[host] = (file_name, obj, content_bytes)
+
+        if not is_full:
+            # reject any modification to MGMT_INTERFACE (top-level key present and non-empty)
+            if "MGMT_INTERFACE" in obj:
+                mgmt_block = obj.get("MGMT_INTERFACE")
+                if isinstance(mgmt_block, dict) and mgmt_block:
+                    mgmt_violations.append({
+                        "host": host,
+                        "file": file_name,
+                        "reason": "MGMT_INTERFACE present (modification of management interface is not allowed for your account)"
+                    })
+
+    if bad_json_files:
+        return jsonify({"ok": False, "message": f"One or more files in {zf.filename} are not valid JSON or have wrong format", "results": bad_json_files}), 400
+
+    if mgmt_violations:
+        return jsonify({"ok": False, "message": "MGMT_INTERFACE modifications are not allowed for your account", "results": mgmt_violations}), 400
+
+    # save uploaded zip to userConfigs (overwrite)
+    try:
+        os.makedirs(USER_CONFIGS_DIR, exist_ok=True)
+        zip_name = f"res_{reservation_id}_running_configs.zip"
+        zip_path = os.path.join(USER_CONFIGS_DIR, zip_name)
+        with open(zip_path, "wb") as out_fh:
+            out_fh.write(uploaded_bytes)
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Failed to save uploaded zip {zf.filename} to controller: {e}"}), 500
+
+    # extract files to workdir for Ansible copy
+    try:
+        workdir = os.path.join(CONTROLLER_CONFIGS_DIR, f"apply_workdir_res_{reservation_id}")
+        if os.path.exists(workdir):
+            shutil.rmtree(workdir)
+        os.makedirs(workdir, exist_ok=True)
+        extracted_paths = {}
+        for host, (file_name, obj, content_bytes) in parsed_files.items():
+            dest_path = os.path.join(workdir, file_name)
+            with open(dest_path, "wb") as fh:
+                fh.write(content_bytes)
+            extracted_paths[host] = dest_path
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Failed to extract files to workdir: {e}"}), 500
+
+    # ensure apply playbook exists (the playbook is fixed in the filesystem)
+    apply_playbook_path = os.path.join(CONTROLLER_CONFIGS_DIR, "apply_configs_playbook.yml")
+    apply_playbook_path = os.path.normpath(apply_playbook_path)
+    if not os.path.exists(apply_playbook_path):
+        return jsonify({"ok": False, "message": f"Required playbook not found on controller: {apply_playbook_path}"}), 500
+
+    # helper: convert controller path to wsl path if TEST
+    def to_remote_path(p):
+        return win_to_wsl_path(p) if TEST else p
+
+    # helper: run apply playbook for a host (playbook now includes health-check)
+    def apply_for_host(target_host, local_path):
+        local_for_ansible = to_remote_path(local_path)
+        extra_vars = {"reservation_id": reservation_id, "target_host": target_host, "config_local_path": local_for_ansible}
+        try:
+            rc, out, err = run_ansible_playbook(inv_path, apply_playbook_path, extra_vars=extra_vars, timeout=900)
+            return {"ok": rc == 0, "rc": rc, "stdout": out, "stderr": err}
+        except Exception as exc:
+            return {"ok": False, "rc": -1, "stdout": "", "stderr": f"Exception while running apply playbook: {exc}"}
+
+    # run apply in parallel per host
+    per_host_results = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(32, len(extracted_paths))) as executor:
+        future_to_host = {
+            executor.submit(apply_for_host, host, pth): host
+            for host, pth in extracted_paths.items()
+        }
+
+        for fut in concurrent.futures.as_completed(future_to_host):
+            host = future_to_host[fut]
+            try:
+                res = fut.result()
+            except Exception as e:
+                res = {"ok": False, "rc": -1, "stdout": "", "stderr": f"Internal exception: {e}"}
+            per_host_results[host] = res
+
+    if os.path.exists(workdir):
+        shutil.rmtree(workdir)
+
+    # overall status
+    overall_ok = all(v.get("ok") for v in per_host_results.values()) if per_host_results else False
+    message = "All configurations applied and health checks passed" if overall_ok else "One or more hosts failed"
+    results_text = build_simple_results_text(per_host_results)
+
+    status_code = 200 if overall_ok else 500
+    return jsonify({
+        "ok": overall_ok,
+        "message": message,
+        "results": results_text
+    }), status_code
+
 
 if __name__ == '__main__':
 
     # host 0.0.0.0 often necessary in virtual environments or containers.
-    app.run(debug=True, host='0.0.0.0', port=5003)
+    app.run(debug=False, host='0.0.0.0', port=5003)
