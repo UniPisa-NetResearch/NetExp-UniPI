@@ -1,0 +1,48 @@
+- name: Fetch SONiC config_db.json and FRR from non-host devices
+  hosts: all
+  gather_facts: no
+  vars:
+    # valori di esempio / default — sovrascrivi quando lanci il playbook
+    controller_dest_dir: "controllerConfigs"
+    reservation_id: ""
+    type: "configs"        # possibili valori: "configs" o "snapshot"
+    name: ""               # usato solo se type == "snapshot"
+
+  pre_tasks:
+    - name: Compute destination base directory according to type
+      set_fact:
+        """
+        base_dest_dir: >-
+          {% if type == 'configs' %}
+          {{ playbook_dir }}/../{{ controller_dest_dir }}/res_{{ reservation_id }}_running_configs
+          {% elif type == 'snapshot' %}
+          {{ playbook_dir }}/../snapshots/res_{{ reservation_id }}_snapshots/{{ name }}
+          {% endif %}"""
+        base_dest_dir: "{{ lookup('template', playbook_dir + '/templates/base_dest.j2') | trim }}"
+
+
+    - name: Ensure destination base directory exists (on controller)
+      delegate_to: localhost
+      run_once: true
+      ansible.builtin.file:
+        path: "{{ base_dest_dir }}"
+        state: directory
+        recurse: yes
+        mode: '0755'
+
+  tasks:
+    - name: Fetch sonic config_db.json from devices that are not role 'host'
+      ansible.builtin.fetch:
+        src: /etc/sonic/config_db.json
+        dest: "{{ base_dest_dir }}/{{ inventory_hostname }}_config_db.json"
+        flat: yes
+      when: hostvars[inventory_hostname].get('role', '') != 'host'
+      ignore_errors: yes
+
+    - name: Fetch frr.conf from devices that are not role 'host'
+      ansible.builtin.fetch:
+        src: /etc/sonic/frr/frr.conf
+        dest: "{{ base_dest_dir }}/{{ inventory_hostname }}_frr.conf"
+        flat: yes
+      when: hostvars[inventory_hostname].get('role', '') != 'host'
+      ignore_errors: yes

@@ -125,8 +125,10 @@ export default function Configuration({username, reservation_id}) {
   const [testOutputType, setTestOutputType] = useState(''); // 'success' | 'error' | 'wait'
 
   // snapshot management
-  const [snapshotList, setSnapshotList] = useState([{ name: 'snapshot0', description: 'Original network state, no configurations applied' },]);
-  const [selectedSnapshot, setSelectedSnapshot] = useState('snapshot0');
+  //const [snapshotList, setSnapshotList] = useState([{ name: 'snapshot0', description: 'Original network state, no configurations applied' },]);
+  //const [selectedSnapshot, setSelectedSnapshot] = useState('snapshot0');
+  const [snapshotList, setSnapshotList] = useState([]);
+  const [selectedSnapshot, setSelectedSnapshot] = useState('');
   const [snapshotDescriptionInput, setSnapshotDescriptionInput] = useState('');
   const [snapshotResult, setSnapshotResult] = useState('');
   const [snapshotResultType, setSnapshotResultType] = useState(''); // 'success' | 'error' | 'wait'
@@ -139,9 +141,6 @@ export default function Configuration({username, reservation_id}) {
 
 // when true all buttons are disabled until operation completes
 const [waitOperation, setWaitOperation] = useState(false);
-
-const [jobId, setJobId] = useState(null);
-const [polling, setPolling] = useState(false);
 
 const downloadFile= async (file_type) =>{
   console.log("file type: ", file_type);
@@ -262,8 +261,143 @@ const downloadFile= async (file_type) =>{
   }
 }
 
-const runTest = () =>{
-   console.log("run test");
+// snapshot API helpers
+const fetchSnapshots = async () => {
+  try {
+    const resp = await fetch(`/api/controller/getSnapshots?reservation_id=${reservation_id}`);
+    if (!resp.ok){
+        let errMsg = `HTTP ${resp.status}`;
+      try {
+        const errBody = await resp.json();
+        if (errBody && (errBody.message || errBody.error)) {
+          errMsg = errBody.message || errBody.error;
+        }
+      } catch (_) {
+        try {
+          const txt = await resp.text();
+          if (txt) errMsg = txt;
+        } catch (_) { /* ignore */ }
+      }
+      setSnapshotResult(`fetch snapshots error: ${errMsg}`);
+      setSnapshotResultType("error");
+      return;
+    }
+    const data = await resp.json();
+
+    let list = [];
+
+    // { snapshots: [{name, description}, ...] }
+    if (Array.isArray(data.snapshots)) {
+      list = data.snapshots.map(s => ({ name: s.name, description: s.description || '' }));
+    }
+
+    if (list.length === 0) {
+      list = [{ name: 'snapshot0', description: 'Original network state, no configurations applied' }];
+    }
+
+    setSnapshotList(list);
+    setSelectedSnapshot(prev => (prev && list.find(s => s.name === prev)) ? prev : list[0].name);
+  } catch (e) {
+    console.error('fetchSnapshots error', e);
+    setSnapshotResult(`fetch snapshots error: ${e}`);
+    setSnapshotResultType("error")
+  }
+};
+
+const createSnapshotApi = async (name, description) => {
+  const payload = { name, description, reservation_id };
+  const resp = await fetch('/api/controller/createSnapshot', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  if (!resp.ok) {
+    const j = await resp.json().catch(() => null);
+    throw new Error((j && (j.message || j.error)) || `HTTP ${resp.status}`);
+  }
+  return resp.json().catch(() => ({}));
+};
+
+const deleteSnapshotApi = async (name) => {
+  const resp = await fetch(`/api/controller/deleteSnapshot?name=${encodeURIComponent(name)}&reservation_id=${reservation_id}`, {
+    method: 'DELETE'
+  });
+  if (!resp.ok) {
+    const j = await resp.json().catch(() => null);
+    throw new Error((j && (j.message || j.error)) || `HTTP ${resp.status}`);
+  }
+  return resp.json().catch(() => ({}));
+};
+
+
+const runTest = async () => {
+    // stato UI
+    setTestOutput('Running ping all test, please wait...');
+    setTestOutputType('wait');
+    setWaitOperation(true);
+
+    try {
+        const payload = {reservation_id, username};
+
+        const resp = await fetch('/api/validator/pingallTest', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        });
+
+        let data;
+        try {
+            data = await resp.json();
+        } catch (e) {
+            const txt = await resp.text().catch(() => null);
+            data = {__raw_text: txt};
+        }
+
+        if (!resp.ok) {
+            const err = (data && (data.message || data.error)) ? (data.message || data.error) : `HTTP ${resp.status}`;
+            setTestOutput(`Ping all failed: ${err}\n\n${JSON.stringify(data, null, 2)}`);
+            setTestOutputType('error');
+            return;
+        }
+        // { summary: { passed: N, failed: M, total: T }, results: [{ src, dst, success, output }, ...], message: '...' }
+        const summary = data.summary || {};
+        const results = Array.isArray(data.results) ? data.results : [];
+        let out = '';
+
+        if (data.message) out += data.message + '\n\n';
+
+        out += `Summary: passed ${summary.passed || 0} / ${summary.total || results.length} failed ${summary.failed || 0}\n\n`;
+
+        results.forEach(r => {
+            const status = r.success ? 'OK' : 'FAIL';
+            out += `[${r.src} -> ${r.dst}] ${status}\n`;
+            if (r.output) {
+                const snippet = typeof r.output === 'string' ? r.output : JSON.stringify(r.output);
+                out += '  ' + snippet.split('\n').slice(0, 5).join('\n  ');
+                if (snippet.split('\n').length > 5) out += '\n  ...';
+            }
+            out += '\n\n';
+        });
+
+        if (results.length === 0 && data.__raw_text) {
+            out += `Raw output:\n${data.__raw_text}`;
+        }
+
+        // set UI color based on overall result
+        const failed = (summary.failed || 0);
+        if (failed === 0) {
+            setTestOutputType('success');
+        } else {
+            setTestOutputType('error');
+        }
+        setTestOutput(out);
+
+    } catch (e) {
+        setTestOutput(`Network or client error: ${e.message || e}`);
+        setTestOutputType('error');
+    } finally {
+        setWaitOperation(false);
+    }
 }
 
 const getNextSnapshotIndex = (currentList) => {
@@ -312,12 +446,19 @@ useEffect(() => {
     };
 }, [username]);
 
+useEffect(() => {
+  // load snapshot list on page load and  when reservation_id change
+  fetchSnapshots();
+
+}, [reservation_id]);
+
+
 // character limit for description
 
 const MAX_CHARS = 80;
 
-  // onChange for description: enforce max chars (maxLength on input also used)
-  const handleDescriptionChange = (e) => {
+// onChange for description: enforce max chars (maxLength on input also used)
+const handleDescriptionChange = (e) => {
     const val = e.target.value;
     // extra safety: prevent more than MAX_CHARS characters (slicing will only occur here, not at snapshot creation)
     if (val.length > MAX_CHARS) {
@@ -327,66 +468,125 @@ const MAX_CHARS = 80;
     }
   };
 
-  const handleTakeSnapshot = () => {
+const handleTakeSnapshot = async () => {
 
-    const text = snapshotDescriptionInput.trim();
-    if (text.length === 0) {
-      setSnapshotResult('Description is empty, please add up to 80 chars');
-      setSnapshotResultType('error');
-      return;
-    }
-    if (text.length > MAX_CHARS) {
-      setSnapshotResult(`Description too long (max ${MAX_CHARS} chars)`);
-      setSnapshotResultType('error');
-      return;
-    }
+  const text = snapshotDescriptionInput.trim();
+  if (text.length === 0) {
+    setSnapshotResult(`Description is empty, please add up to ${MAX_CHARS} chars`);
+    setSnapshotResultType('error');
+    return;
+  }
+  if (text.length > MAX_CHARS) {
+    setSnapshotResult(`Description too long (max ${MAX_CHARS} chars)`);
+    setSnapshotResultType('error');
+    return;
+  }
 
-    let nextIndex = getNextSnapshotIndex(snapshotList);
-    const name = `snapshot${nextIndex}`;
-    const newSnapshot = { name, description: text};
-    setSnapshotList((s) => [...s, newSnapshot]);
-    setSelectedSnapshot(name);
+  let nextIndex = getNextSnapshotIndex(snapshotList);
+  const name = `snapshot${nextIndex}`;
+
+  setWaitOperation(true);
+  setSnapshotResult(`Creating ${name}...`);
+  setSnapshotResultType('wait');
+
+  try {
+    await createSnapshotApi(name, text);
+    // load snapshot list from server
+    await fetchSnapshots();
+
     setSnapshotResult(`Snapshot ${name} created`);
     setSnapshotResultType('success');
-    setActionResult("");
-  };
+    setSnapshotDescriptionInput('');
+    setActionResult('');
+  } catch (e) {
+    setSnapshotResult(`Error creating snapshot: ${e.message || e}`);
+    setSnapshotResultType('error');
+  } finally {
+    setWaitOperation(false);
+  }
+};
 
-  const handleRollback = () => {
-    if (!selectedSnapshot) {
-      setActionResult('No snapshot selected');
-      setActionResultType('error');
-      return;
+const handleRollback = async () => {
+  if (!selectedSnapshot) {
+    setActionResult('No snapshot selected');
+    setActionResultType('error');
+    return;
+  }
+
+  setWaitOperation(true);
+  setActionResult(`Rolling back to ${selectedSnapshot}...`);
+  setActionResultType('wait');
+  setSnapshotResult('');
+  setSnapshotDescriptionInput('');
+
+  try {
+    const payload = {reservation_id, name: selectedSnapshot};
+    const resp = await fetch('/api/controller/rollback', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+
+    let data;
+    try {
+      data = await resp.json();
+    } catch (_) {
+      data = null;
     }
-    setActionResult(`Rollback to ${selectedSnapshot} started... (simulated)`);
-    setActionResultType('success');
-    setSnapshotResult("");
-    setSnapshotDescriptionInput("");
-  };
 
-  const handleDeleteSnapshot = () => {
-    if (!selectedSnapshot || selectedSnapshot === 'snapshot0') {
-      setActionResult('Cannot delete this snapshot');
+    if (resp.ok) {
+      // prefer message/result from server if presente
+      const msg = (data && (data.message || data.result)) ? (data.message || data.result) : `Rollback to ${selectedSnapshot} completed`;
+      setActionResult(msg);
+      setActionResultType('success');
+
+    } else {
+      const err = (data && (data.message || data.error)) ? (data.message || data.error) : `HTTP ${resp.status}`;
+      setActionResult(`Rollback failed: ${err}`);
       setActionResultType('error');
-      return;
     }
-    setSnapshotList((list) => list.filter((s) => s.name !== selectedSnapshot));
+  } catch (e) {
+    setActionResult(`Network or client error: ${e.message || e}`);
+    setActionResultType('error');
+  } finally {
+    setWaitOperation(false);
+  }
+};
 
-    // choose a new selected snapshot (fallback to snapshot0)
-    setSelectedSnapshot('snapshot0');
+const handleDeleteSnapshot = async () => {
+  if (!selectedSnapshot || selectedSnapshot === 'snapshot0') {
+    setActionResult('Cannot delete this snapshot');
+    setActionResultType('error');
+    return;
+  }
+  setWaitOperation(true);
+  setActionResult(`Deleting ${selectedSnapshot}...`);
+  setActionResultType('wait');
+
+  try {
+    await deleteSnapshotApi(selectedSnapshot);
+    // load list from server
+    await fetchSnapshots();
     setActionResult(`${selectedSnapshot} deleted`);
     setActionResultType('success');
-    setSnapshotResult("");
-    setSnapshotDescriptionInput("");
-  };
+    setSnapshotResult('');
+    setSnapshotDescriptionInput('');
+  } catch (e) {
+    setActionResult(`Error deleting snapshot: ${e.message || e}`);
+    setActionResultType('error');
+  } finally {
+    setWaitOperation(false);
+  }
+};
 
-  const selectedSnapshotDescription = () => {
+const selectedSnapshotDescription = () => {
     const s = snapshotList.find((it) => it.name === selectedSnapshot);
     return s ? s.description : '';
   };
 
-  // wrappers that call the generic handler
-  const handleTemplateFile = async () => {
-    const ok = handleUpload({
+// wrappers that call the generic handler
+const handleTemplateFile = async () => {
+   handleUpload({
       descriptors: [
         {file: template.file, fileType: template.fileType, label: 'Template'}
       ],
@@ -462,7 +662,7 @@ const MAX_CHARS = 80;
     }
   };
 
-  const handlePlaybookFile = async () => {
+const handlePlaybookFile = async () => {
     handleUpload({
       descriptors: [
         {file: playbook.file, fileType: playbook.fileType, label: 'Playbook'},

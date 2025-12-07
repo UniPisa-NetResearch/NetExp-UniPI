@@ -10,7 +10,6 @@ import io
 import re
 import zipfile
 import jsonschema
-import concurrent.futures
 from jsonschema import ValidationError
 
 
@@ -97,30 +96,27 @@ def download_template():
     if not os.path.exists(inv_path):
         return jsonify({"ok": False, "message": f"Inventory not found: {inv_path}"}), 404
 
-    target_hosts = extract_hosts_from_inventory(inv_path)
+    #target_hosts = extract_hosts_from_inventory(inv_path)
 
-    if not target_hosts:
-        return jsonify({"ok": False, "message": "No devices found in inventory to fetch configs from."}), 404
-
-    # ensure controllerConfigs dir exists
-    os.makedirs(CONTROLLER_CONFIGS_DIR, exist_ok=True)
+    #if not target_hosts:
+        #return jsonify({"ok": False, "message": "No devices found in inventory to fetch configs from."}), 404
 
     if TEST:
         controller_configs_dir_wsl = win_to_wsl_path(CONTROLLER_CONFIGS_DIR)
     else:
         controller_configs_dir_wsl = CONTROLLER_CONFIGS_DIR
 
-    get_config_playbook_path = os.path.join(CONTROLLER_CONFIGS_DIR, "get_configs_playbook.yml")
-    get_config_playbook_path = os.path.normpath(get_config_playbook_path)
+    playbook_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, "get_snapshot_playbook.yml")
+    playbook_path = os.path.normpath(playbook_path)
 
-    if not os.path.exists(get_config_playbook_path):
-        return jsonify({"ok": False, "message": f"Playbook not found: {get_config_playbook_path}"}), 500
+    if not os.path.exists(playbook_path):
+        return jsonify({"ok": False, "message": f"Playbook not found: {playbook_path}"}), 500
 
     # run the playbook synchronously using the existing inventory
     extra_vars = {"controller_dest_dir": controller_configs_dir_wsl, "reservation_id": reservation_id}
 
     try:
-        rc, out, err = run_ansible_playbook(inv_path, get_config_playbook_path, extra_vars=extra_vars, timeout=900)
+        rc, out, err = run_ansible_playbook(inv_path, playbook_path, extra_vars=extra_vars, timeout=900)
     except Exception as e:
         return jsonify({"ok": False, "message": f"Failed to execute ansible playbook: {e}"}), 500
 
@@ -750,71 +746,40 @@ def run_template():
     except Exception as e:
         return jsonify({"ok": False, "message": f"Failed to save uploaded zip {zf.filename} to controller: {e}"}), 500
 
-    # extract files to workdir for Ansible copy
+    tmp_folder_name = f"tmp_res{reservation_id}"
+    tmp_folder_path = os.path.join(USER_CONFIGS_DIR, tmp_folder_name)
+
     try:
-        workdir = os.path.join(CONTROLLER_CONFIGS_DIR, f"apply_workdir_res_{reservation_id}")
-        if os.path.exists(workdir):
-            shutil.rmtree(workdir)
-        os.makedirs(workdir, exist_ok=True)
-        extracted_paths = {}
-        for host, (file_name, obj, content_bytes) in parsed_files.items():
-            dest_path = os.path.join(workdir, file_name)
-            with open(dest_path, "wb") as fh:
-                fh.write(content_bytes)
-            extracted_paths[host] = dest_path
+        os.makedirs(tmp_folder_path, exist_ok=False)
     except Exception as e:
-        return jsonify({"ok": False, "message": f"Failed to extract files to workdir: {e}"}), 500
+        return {"ok": False, "message": f"Failed to create temp dir {tmp_folder_path}: {e}"}, 500
 
-    # ensure apply playbook exists (the playbook is fixed in the filesystem)
-    apply_playbook_path = os.path.join(CONTROLLER_CONFIGS_DIR, "apply_configs_playbook.yml")
-    apply_playbook_path = os.path.normpath(apply_playbook_path)
-    if not os.path.exists(apply_playbook_path):
-        return jsonify({"ok": False, "message": f"Required playbook not found on controller: {apply_playbook_path}"}), 500
+    # estrai zip dentro tmp_folder_path
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extractall(tmp_folder_path)
+    except zipfile.BadZipFile as e:
+        shutil.rmtree(tmp_folder_path)
+        return {"ok": False, "message": f"Uploaded file is not a valid zip: {e}"}, 400
+    except Exception as e:
+        shutil.rmtree(tmp_folder_path)
+        return {"ok": False, "message": f"Failed to extract zip: {e}"}, 500
 
-    # helper: convert controller path to wsl path if TEST
-    def to_remote_path(p):
-        return win_to_wsl_path(p) if TEST else p
+    pb_filename = "rollback_playbook.yml"
+    pb_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, pb_filename)
 
-    # helper: run apply playbook for a host (playbook now includes health-check)
-    def apply_for_host(target_host, local_path):
-        local_for_ansible = to_remote_path(local_path)
-        extra_vars = {"reservation_id": reservation_id, "target_host": target_host, "config_local_path": local_for_ansible}
-        try:
-            rc, out, err = run_ansible_playbook(inv_path, apply_playbook_path, extra_vars=extra_vars, timeout=900)
-            return {"ok": rc == 0, "rc": rc, "stdout": out, "stderr": err}
-        except Exception as exc:
-            return {"ok": False, "rc": -1, "stdout": "", "stderr": f"Exception while running apply playbook: {exc}"}
+    # run playbook with extra_vars required by client
+    extra_vars = {"type": "configs", "reservation_id": reservation_id, "user_configs_folder": tmp_folder_name}
+    rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars)
 
-    # run apply in parallel per host
-    per_host_results = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(32, len(extracted_paths))) as executor:
-        future_to_host = {
-            executor.submit(apply_for_host, host, pth): host
-            for host, pth in extracted_paths.items()
-        }
+    print("Apply configs playbook rc:", rc)
+    print("Apply configs  playbook stdout:", out)
+    print("Apply configs  playbook stderr:", err)
 
-        for fut in concurrent.futures.as_completed(future_to_host):
-            host = future_to_host[fut]
-            try:
-                res = fut.result()
-            except Exception as e:
-                res = {"ok": False, "rc": -1, "stdout": "", "stderr": f"Internal exception: {e}"}
-            per_host_results[host] = res
-
-    if os.path.exists(workdir):
-        shutil.rmtree(workdir)
-
-    # overall status
-    overall_ok = all(v.get("ok") for v in per_host_results.values()) if per_host_results else False
-    message = "All configurations applied and health checks passed" if overall_ok else "One or more hosts failed"
-    results_text = build_simple_results_text(per_host_results)
-
-    status_code = 200 if overall_ok else 500
-    return jsonify({
-        "ok": overall_ok,
-        "message": message,
-        "results": results_text
-    }), status_code
+    if rc == 0:
+        return jsonify({"ok": True, "message": "Configurations applied", "results": "rc={rc}, stdout={out}, stderr={err}"}), 200
+    else:
+        return jsonify({"ok": False, "message": f"Apply configs playbook failed", "results": "rc={rc}, stdout={out}, stderr={err}"}), 500
 
 
 if __name__ == '__main__':

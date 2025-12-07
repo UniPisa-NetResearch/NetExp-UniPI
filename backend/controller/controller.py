@@ -12,6 +12,7 @@ CONTROLLER_PLAYBOOKS_DIR = os.path.join(BASE_DIR, "controllerPlaybooks")
 CONTROLLER_CONFIGS_DIR = os.path.join(BASE_DIR, "controllerConfigs")
 USER_PLAYBOOKS_DIR = os.path.join(BASE_DIR, "userPlaybooks")
 USER_CONFIGS_DIR = os.path.join(BASE_DIR, "userConfigs")
+SNAPSHOTS_DIR = os.path.join(BASE_DIR, "snapshots")
 TEMPLATES_DIR = os.path.join(CONTROLLER_PLAYBOOKS_DIR, "templates")
 WRAPPERS_DIR = os.path.join(CONTROLLER_PLAYBOOKS_DIR, "wrappers")
 # playbook template schema
@@ -269,7 +270,34 @@ def grant_access():
             active_reservations[username] = reservation_id
             print(f"User {username} granted access and added to active_reservations")
 
-        return jsonify({"ok": True, "message": "Grant executed", "inventory": inv_path, "stdout": out, "stderr": err}), 200
+            safe_res = safe_filename(f"res_{reservation_id}_snapshots")
+            res_dir = os.path.join(SNAPSHOTS_DIR, safe_res)
+            name = "snapshot0"
+            snap_dir = os.path.join(res_dir, safe_filename(name))
+
+            # create snapshot directory
+            os.makedirs(snap_dir, exist_ok=False)
+
+            # write description file
+            desc_path = os.path.join(snap_dir, "snapshot_description.txt")
+            with open(desc_path, "w", encoding="utf-8") as fh:
+                fh.write(str("Original network state, no configurations applied"))
+
+            playbook_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, "get_snapshot_playbook.yml")
+            extra_vars = {"name": name, "type": "snapshot", "reservation_id": reservation_id}
+
+            print(f"Running playbook {playbook_path} for snapshot0 (reservation {reservation_id})")
+
+            rc, out, err = run_ansible_playbook(inv_path, playbook_path, extra_vars=extra_vars)
+
+            print("Playbook rc:", rc)
+            print("Playbook stdout:", out)
+            print("Playbook stderr:", err)
+
+            if rc == 0:
+                return jsonify({"ok": True, "message": "Grant executed", "inventory": inv_path, "stdout": out, "stderr": err}), 200
+            else:
+                return jsonify({"ok": False, "message": "Ansible failed", "rc": rc, "stdout": out, "stderr": err}), 500
     else:
         return jsonify({"ok": False, "message": "Ansible failed", "rc": rc, "stdout": out, "stderr": err}), 500
 
@@ -289,7 +317,6 @@ def remove_files(file_path, file_type):
 
         except Exception as e:
             print("Error deleting user playbook directory:", e)
-
 
 @app.route('/api/controller/revokeAccess', methods=['POST'])
 def revoke_access():
@@ -337,6 +364,21 @@ def revoke_access():
     if not os.path.exists(user_running_config_path):
         print("Running configs zip not found:", user_running_config_path, " still attempting graceful removal (playbook will run against nothing).")
 
+    pb_filename = "rollback_playbook.yml"
+    pb_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, pb_filename)
+
+    # run playbook with extra_vars required by client
+    extra_vars = {"type": "rollback", "reservation_id": reservation_id, "name": "snapshot0"}
+    print(f"Running rollback playbook {pb_path} for snapshot0 (reservation {reservation_id})")
+    rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars)
+
+    print("Rollback playbook rc:", rc)
+    print("Rollback playbook stdout:", out)
+    print("Rollback playbook stderr:", err)
+
+    if rc != 0:
+        return jsonify({"ok": False, "message": f"Rollback playbook failed (rc={rc}, stdout={out}, stderr={err})"}), 500
+
     # write revoke playbook
     pb_path = get_playbook_template_path("revoke")
     if not pb_path:
@@ -380,7 +422,6 @@ def revoke_access():
     else:
         return jsonify({"ok": False, "message": "Ansible revoke failed", "rc": rc, "stdout": out, "stderr": err}), 500
 
-
 @app.route('/api/controller/checkAvailability', methods=['GET'])
 def check_availability():
     # check if the user has an active reservation, in this case the configuration can start, otherwise wait
@@ -400,6 +441,220 @@ def check_availability():
     else:
         print(f"User {username} not found in active reservations, reservation id: {reservation_id}")
         return jsonify({"ok": True, "command": "wait_configuration"}), 200
+
+@app.route('/api/controller/getSnapshots', methods=['GET'])
+def get_snapshots():
+
+    reservation_id = request.args.get("reservation_id")
+    if not reservation_id:
+        return jsonify({"ok": False, "message": "Missing reservation_id parameter"}), 400
+
+    # sanitize reservation_id for filesystem use
+    safe_res = safe_filename(f"res_{reservation_id}_snapshots")
+    res_dir = os.path.join(SNAPSHOTS_DIR, safe_res)
+
+    if not os.path.exists(res_dir) or not os.path.isdir(res_dir):
+        # if no snapshots folder exists, return empty list
+        return jsonify({"ok": False, "message": "No present snapshots"}), 500
+
+    try:
+        entries = os.listdir(res_dir)
+    except Exception as e:
+        print("Error listing snapshots directory:", e)
+        return jsonify({"ok": False, "message": f"Failed to list snapshots: {e}"}), 500
+
+    # filter only directories named snapshotN
+    snap_dirs = []
+    for name in entries:
+        full = os.path.join(res_dir, name)
+        if os.path.isdir(full) and name.startswith("snapshot"):
+            # try to extract numeric index for sorting, fallback to 0
+            m = re.match(r"snapshot(\d+)$", name)
+            idx = int(m.group(1)) if m else 0
+            snap_dirs.append((idx, name))
+
+    # sort by numeric index ascending
+    snap_dirs.sort(key=lambda x: x[0])
+
+    snapshots = []
+    for _, snap_name in snap_dirs:
+        snap_path = os.path.join(res_dir, snap_name)
+        desc_file = os.path.join(snap_path, "snapshot_description.txt")
+        description = ""
+        try:
+            if os.path.exists(desc_file) and os.path.isfile(desc_file):
+                with open(desc_file, "r", encoding="utf-8") as fh:
+                    description = fh.read().strip()
+        except Exception as e:
+            print(f"Warning: could not read description for {snap_name}: {e}")
+            description = ""
+
+        snapshots.append({"name": snap_name, "description": description})
+
+    return jsonify({"ok": True, "snapshots": snapshots}), 200
+
+@app.route('/api/controller/deleteSnapshot', methods=['DELETE', 'POST'])
+def delete_snapshot():
+
+    # accept either query params (for DELETE) or JSON body (for POST)
+    data = request.get_json(silent=True) or {}
+    reservation_id = request.args.get("reservation_id") or data.get("reservation_id")
+    name = request.args.get("name") or data.get("name")
+
+    if not reservation_id or not name:
+        return jsonify({"ok": False, "message": "Missing reservation_id or snapshot name"}), 400
+
+    # snapshot names expected like "snapshot0", "snapshot1", ...
+    if not re.match(r"^snapshot\d+$", name):
+        return jsonify({"ok": False, "message": "Invalid snapshot name"}), 400
+
+    # prevent accidental removal of base snapshot0 if you want to protect it
+    if name == "snapshot0":
+        return jsonify({"ok": False, "message": "Cannot delete snapshot0"}), 400
+
+    # build safe paths
+    safe_res = safe_filename(f"res_{reservation_id}_snapshots")
+    res_dir = os.path.join(SNAPSHOTS_DIR, safe_res)
+    snap_path = os.path.join(res_dir, safe_filename(name))
+
+    if not os.path.exists(res_dir) or not os.path.isdir(res_dir):
+        return jsonify({"ok": False, "message": "Snapshots directory for reservation not found"}), 404
+
+    if not os.path.exists(snap_path) or not os.path.isdir(snap_path):
+        return jsonify({"ok": False, "message": f"Snapshot '{name}' not found"}), 404
+
+    try:
+        # remove directory and its content
+        shutil.rmtree(snap_path)
+        print(f"Deleted snapshot folder: {snap_path}")
+        return jsonify({"ok": True, "message": f"Snapshot '{name}' deleted"}), 200
+    except Exception as e:
+        print(f"Error deleting snapshot {snap_path}: {e}")
+        return jsonify({"ok": False, "message": f"Failed to delete snapshot: {e}"}), 500
+
+@app.route('/api/controller/createSnapshot', methods=['POST'])
+def create_snapshot():
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"ok": False, "message": "Missing or invalid JSON body"}), 400
+
+    reservation_id = data.get("reservation_id")
+    name = data.get("name")
+    description = data.get("description", "")
+
+    if not reservation_id or not name or not description:
+        return jsonify({"ok": False, "message": "Missing reservation_id or name or description"}), 400
+
+    # basic validation for snapshot name (expects snapshotN)
+    if not re.match(r"^snapshot\d+$", name):
+        return jsonify({"ok": False, "message": "Invalid snapshot name (expected 'snapshot<N>')"}), 400
+
+    # build safe paths
+    safe_res = safe_filename(f"res_{reservation_id}_snapshots")
+    res_dir = os.path.join(SNAPSHOTS_DIR, safe_res)
+    snap_dir = os.path.join(res_dir, safe_filename(name))
+
+    try:
+        # ensure base snapshots dir exists
+        os.makedirs(res_dir, exist_ok=True)
+
+        # prevent overwriting an existing snapshot
+        if os.path.exists(snap_dir):
+            return jsonify({"ok": False, "message": f"Snapshot '{name}' already exists"}), 409
+
+        # create snapshot directory
+        os.makedirs(snap_dir, exist_ok=False)
+
+        # write description file
+        desc_path = os.path.join(snap_dir, "snapshot_description.txt")
+        with open(desc_path, "w", encoding="utf-8") as fh:
+            fh.write(str(description or ""))
+
+        print(f"Created snapshot {snap_dir} with description")
+
+        safe_res_inv = safe_filename(f"res-{reservation_id}-inventory")
+        inv_path = os.path.join(INVENTORY_DIR, f"{safe_res_inv}.ini")
+        if not os.path.exists(inv_path):
+            print("Inventory for reservation not found (will still attempt playbook):", inv_path)
+
+        playbook_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, "get_snapshot_playbook.yml")
+        extra_vars = {"name": name, "type": "snapshot", "reservation_id": reservation_id}
+
+        print(f"Running playbook {playbook_path} for snapshot {name} (reservation {reservation_id})")
+
+        rc, out, err = run_ansible_playbook(inv_path, playbook_path, extra_vars=extra_vars)
+
+        print("Playbook rc:", rc)
+        print("Playbook stdout:", out)
+        print("Playbook stderr:", err)
+
+        if rc == 0:
+            return jsonify({"ok": True, "message": f"Snapshot '{name}' created", "name": name}), 201
+        else:
+            # snapshot created but playbook failed
+            return jsonify({"ok": False, "message": f"Error during snapshot '{name}' creation, playbook failed"}), 201
+
+    except Exception as e:
+        print(f"Error creating snapshot {snap_dir}: {e}")
+        # cleanup on failure if directory was partially created
+        if os.path.exists(snap_dir):
+            shutil.rmtree(snap_dir)
+
+        return jsonify({"ok": False, "message": f"Failed to create snapshot: {e}"}), 500
+
+@app.route('/api/controller/rollback', methods=['POST'])
+def rollback_snapshot():
+
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"ok": False, "message": "Missing or invalid JSON body"}), 400
+
+    reservation_id = data.get("reservation_id")
+    name = data.get("name")
+
+    if not reservation_id or not name:
+        return jsonify({"ok": False, "message": "Missing reservation_id or name"}), 400
+
+    # validate snapshot name (expects snapshotN)
+    if not re.match(r"^snapshot\d+$", name):
+        return jsonify({"ok": False, "message": "Invalid snapshot name (expected 'snapshot<N>')"}), 400
+
+    # build safe paths and check snapshot exists
+    safe_res = safe_filename(f"res_{reservation_id}_snapshots")
+    res_dir = os.path.join(SNAPSHOTS_DIR, safe_res)
+    snap_path = os.path.join(res_dir, safe_filename(name))
+
+    if not os.path.exists(res_dir):
+        return jsonify({"ok": False, "message": "Snapshots directory for reservation not found"}), 404
+
+    if not os.path.exists(snap_path):
+        return jsonify({"ok": False, "message": f"Snapshot '{name}' not found"}), 404
+
+    # find rollback playbook in controller playbooks dir
+    pb_filename = "rollback_playbook.yml"
+    pb_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, pb_filename)
+    if not os.path.exists(pb_path):
+        msg = f"Rollback playbook '{pb_filename}' not found in {CONTROLLER_PLAYBOOKS_DIR}"
+        print(msg)
+        return jsonify({"ok": False, "message": msg}), 500
+
+    # build inventory path (same convention used elsewhere)
+    safe_res_inv = safe_filename(f"res-{reservation_id}-inventory")
+    inv_path = os.path.join(INVENTORY_DIR, f"{safe_res_inv}.ini")
+
+    # run playbook with extra_vars required by client
+    extra_vars = {"type": "rollback", "reservation_id": reservation_id, "name": name}
+    print(f"Running rollback playbook {pb_path} for snapshot {name} (reservation {reservation_id})")
+    rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars)
+
+    print("Rollback playbook rc:", rc)
+    print("Rollback playbook stdout:", out)
+    print("Rollback playbook stderr:", err)
+
+    if rc == 0:
+        return jsonify({"ok": True, "message": f"Rollback to '{name}' completed"}), 200
+    else:
+        return jsonify({"ok": False, "message": f"Rollback playbook failed (rc={rc})"}), 500
 
 if __name__ == '__main__':
 

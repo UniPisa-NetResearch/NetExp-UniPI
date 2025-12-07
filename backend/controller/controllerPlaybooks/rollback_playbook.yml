@@ -1,0 +1,150 @@
+---
+- name: Apply config_db.json and frr.conf from snapshot, reload and verify system health (rollback)
+  hosts: all
+  gather_facts: false
+  become: true
+  vars:
+    # max number of try to check system status (es. 12 * 5s = 60s)
+    max_retries: 12
+    delay_seconds: 5
+
+  pre_tasks:
+    - name: Ensure this playbook is invoked for rollback
+      assert:
+        that:
+          - type is defined
+          - type in ['snapshot','configs']
+        fail_msg: "Extra var 'type' is required and must be 'snapshot' or 'configs'"
+
+    - name: When type == configs require 'user_configs_folder' extra var
+      assert:
+        that:
+          - "(type != 'configs') or (user_configs_folder is defined and user_configs_folder | length > 0)"
+        fail_msg: "When type == 'configs' you must pass extra_var user_configs_folder=<folder_name>"
+
+    - name: Ensure reservation_id and name are provided
+      when: type == 'snapshot'
+      assert:
+        that:
+          - reservation_id is defined
+          - name is defined
+        fail_msg: "reservation_id and name extra_vars are required for type = 'snapshot'"
+
+    - name: Compute source base dir according to type (rendered on controller)
+      set_fact:
+        src_base_dir: >-
+          {% if type == 'snapshot' %}
+          {{ playbook_dir }}/../snapshots/res_{{ reservation_id }}_snapshots/{{ name }}
+          {% else %}
+          {{ playbook_dir }}/../userConfigs/{{ user_configs_folder }}
+          {% endif %}
+  tasks:
+    - name: Copy config file from snapshot on controller to /tmp/new_config.json (only non-host devices)
+      copy:
+        src: "{{ src_base_dir }}/{{ inventory_hostname }}_config_db.json"
+        dest: "/tmp/new_config.json"
+        owner: root
+        group: root
+        mode: '0644'
+      when:
+        - hostvars[inventory_hostname].get('role', '') != 'host'
+      ignore_errors: no
+
+    - name: Copy frr.conf from snapshot on controller to /tmp/new_frr.conf (only non-host devices)
+      copy:
+        src: "{{ src_base_dir }}/{{ inventory_hostname }}_frr.conf"
+        dest: "/tmp/new_frr.conf"
+        owner: root
+        group: root
+        mode: '0644'
+      when:
+        - hostvars[inventory_hostname].get('role', '') != 'host'
+      ignore_errors: no
+
+    - name: Move new files into place (config + frr) and sync (only non-host devices)
+      shell: |
+        set -e
+        moved=0
+        if [ -f /tmp/new_config.json ]; then
+          cp /tmp/new_config.json /etc/sonic/config_db.json
+          moved=1
+        fi
+        if [ -f /tmp/new_frr.conf ]; then
+          cp /tmp/new_frr.conf /etc/sonic/frr/frr.conf
+          moved=1
+        fi
+        sync
+        # echo moved flag for debugging
+        echo "moved=${moved}"
+        sync
+      register: cp_result
+      failed_when: cp_result.rc != 0
+      when:
+        - hostvars[inventory_hostname].get('role', '') != 'host'
+
+    - name: Set fact 'any_moved' if at least one file was placed on device (only non-host)
+      set_fact:
+        any_moved: "{{ (stat_config.stat.exists | default(false)) or (stat_frr.stat.exists | default(false)) }}"
+      when: hostvars[inventory_hostname].get('role','') != 'host
+
+    - name: Reload SONiC config (only non-host devices)
+      shell: config reload -y
+      register: reload_result
+      failed_when: reload_result.rc != 0
+      when:
+        - hostvars[inventory_hostname].get('role', '') != 'host'
+        - any_moved | bool
+
+    - name: Wait briefly for reload to start (small pause)
+      pause:
+        seconds: 2
+      when:
+        - hostvars[inventory_hostname].get('role', '') != 'host'
+        - any_moved | bool
+
+    - name: Check system health with retries until all services OK (excluding rsync)
+      shell: |
+        show system-health sysready-status | awk '
+          BEGIN { c=0 }
+          /^-+/ { next }                      # skip separator lines
+          /^Service-Name/ { next }            # skip header line
+          NF < 2 { next }                     # skip short lines
+          {
+            name=$1; status=$2;
+            # only consider lines where the second column looks like a service status
+            if (status !~ /^(OK|Down|Starting|Inactive|Failed|Stopped|Unknown|Starting)$/) next;
+            n=tolower(name);
+            if (n == "rsync") next;
+            if (status != "OK") { c++ }
+          }
+          END { print c } '
+      register: non_ok_count
+      failed_when: cp_result is defined and cp_result.rc != 0
+      changed_when: false
+      retries: "{{ max_retries }}"
+      delay: "{{ delay_seconds }}"
+      until: (non_ok_count.stdout | default('0') | int) == 0
+      when:
+        - hostvars[inventory_hostname].get('role', '') != 'host'
+        - any_moved | bool
+
+    - name: Capture full system-health output for diagnostics
+      shell: show system-health sysready-status
+      register: sysready_full
+      failed_when: cp_result is defined and cp_result.rc != 0
+      changed_when: false
+      when:
+        - hostvars[inventory_hostname].get('role', '') != 'host'
+        - any_moved | bool
+
+    - name: Fail if after retries there are still non-OK services (excluding rsync)
+      fail:
+        msg: >-
+          Services not OK after {{ max_retries }} attempts on host {{ inventory_hostname }}.
+          Non-OK services count: {{ non_ok_count.stdout | default('0') }}.
+          Full sysready output:
+          {{ sysready_full.stdout }}
+      when:
+        - hostvars[inventory_hostname].get('role', '') != 'host'
+        - any_moved | bool
+        - (non_ok_count.stdout | default('0') | int) > 0
