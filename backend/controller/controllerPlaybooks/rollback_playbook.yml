@@ -13,8 +13,8 @@
       assert:
         that:
           - type is defined
-          - type in ['snapshot','configs']
-        fail_msg: "Extra var 'type' is required and must be 'snapshot' or 'configs'"
+          - type in ['rollback','configs']
+        fail_msg: "Extra var 'type' is required and must be 'rollback' or 'configs'"
 
     - name: When type == configs require 'user_configs_folder' extra var
       assert:
@@ -23,17 +23,17 @@
         fail_msg: "When type == 'configs' you must pass extra_var user_configs_folder=<folder_name>"
 
     - name: Ensure reservation_id and name are provided
-      when: type == 'snapshot'
+      when: type == 'rollback'
       assert:
         that:
           - reservation_id is defined
           - name is defined
-        fail_msg: "reservation_id and name extra_vars are required for type = 'snapshot'"
+        fail_msg: "reservation_id and name extra_vars are required for type = 'rollback'"
 
     - name: Compute source base dir according to type (rendered on controller)
       set_fact:
         src_base_dir: >-
-          {% if type == 'snapshot' %}
+          {% if type == 'rollback' %}
           {{ playbook_dir }}/../snapshots/res_{{ reservation_id }}_snapshots/{{ name }}
           {% else %}
           {{ playbook_dir }}/../userConfigs/{{ user_configs_folder }}

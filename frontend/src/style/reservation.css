@@ -126,6 +126,24 @@
   transform: translateY(-1px);
   box-shadow: 0 1px 4px rgba(0,0,0,0.04);
 }
+/* not reachable devices */
+.device-item.unreachable {
+  opacity: 0.45;
+  filter: grayscale(40%);
+  cursor: not-allowed;
+}
+.device-item.unreachable .device-checkbox {
+  cursor: not-allowed;
+}
+.device-item.unreachable:hover {
+  transform: none;
+  box-shadow: none;
+}
+.device-loading {
+    margin-left: 8px;
+    font-size: 0.9em;
+    opacity: 0.9;
+}
 .input-group {
     margin-bottom: 20px;
     text-align: left;

@@ -217,6 +217,7 @@
         # do not update cache here
       loop: "{{ missing_cmds }}"
       when: missing_cmds | length > 0
+      ignore_errors: yes
 
     # override commands to use wrappers if installed
     - name: Conditionally override found_cmd_paths for commands that must use wrappers

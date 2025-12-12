@@ -6,6 +6,7 @@ import NavbarLayout from './NavbarLayout.jsx';
 import Home from './Home.jsx';
 import Reservation from './Reservation.jsx';
 import Configuration from './Configuration.jsx';
+import Experiment from "./Experiment.jsx";
 
 const ConfigurationGuard = ({ isReservationPermitted, children }) => {
   const navigate = useNavigate();
@@ -212,6 +213,7 @@ function App() {
                 <Route path="/reservation" element={<NavbarWrapper><Reservation username={currentUser} isReservationActive={isReservationActive} /> </NavbarWrapper>} />
                 <Route path="/configuration" element={<NavbarWrapper><ConfigurationGuard isReservationPermitted={isReservationActive}><Configuration username={currentUser} reservation_id={reservationId}/> </ConfigurationGuard></NavbarWrapper>} />
                 {/*<Route path="/configuration" element={<NavbarWrapper><Configuration username={currentUser} reservation_id={reservationId}/></NavbarWrapper>} />*/}
+                <Route path="/experiment" element={<NavbarWrapper><Experiment username={currentUser} /> </NavbarWrapper>} />
                 {/* Nuove Pagine (usano lo stesso layout) */}
                 {/* <Route path="/configuration" element={<NavbarWrapper>{/* <ConfigurationPage /> *//*}</NavbarWrapper>} />*/}
                 {/* ... (ecc.) */}

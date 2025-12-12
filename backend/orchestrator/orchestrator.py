@@ -14,15 +14,19 @@ from redis import Redis
 from rq import Queue
 import json
 import requests
+import subprocess
+import ipaddress
 from ..app import app
 
 NETBOX_URL = os.getenv("NETBOX_URL", "http://localhost:8080")
 NETBOX_TOKEN = os.getenv("NETBOX_TOKEN", "6152fbb91529522c72307b194a690c4ca5253e93")
 
 MAX_HOURS = 72
-TEST = True
-EXPERIMENT_DURATION = 65        #expressed in minutes
-
+TEST = True                     #test mode, each reservation starts at current date + 2 min
+EXPERIMENT_DURATION = 7        #expressed in minutes
+CONTAINERLAB_TEST = True        #true if we want to test in a virtual network if the network is not accessible
+#NETBOX_SITE = "testbed"        # useful to change site of netbox
+NETBOX_SITE = "containerlab"
 nb = pynetbox.api(NETBOX_URL, token=NETBOX_TOKEN)
 
 REDIS_URL = "redis://localhost:6379"
@@ -58,10 +62,10 @@ def send_to_controller(msg_type, user_id, reservation_id):
                     interface = None
                     try:
                         # try to fetch device by asset_tag first
-                        dev = nb.dcim.devices.get(site="testbed", asset_tag=at)
+                        dev = nb.dcim.devices.get(site=NETBOX_SITE, asset_tag=at)
                         if not dev:
                             # fallback: try by name
-                            devs = nb.dcim.devices.filter(site="testbed", name=at)
+                            devs = nb.dcim.devices.filter(site=NETBOX_SITE, name=at)
                             dev = devs[0] if devs else None
 
                         if dev:
@@ -220,6 +224,34 @@ def serialize_reservation(reservation):
         'devices': devices
     }
 
+def ping_host(ip, count=2, per_ping_timeout=2, overall_timeout=5):
+    # perform a ping to 'ip' to verify reachability
+    try:
+        # address validation
+        ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    if CONTAINERLAB_TEST:
+        cmd = ["wsl", "ping", "-c", str(count), "-W", str(per_ping_timeout), str(ip)]
+    else:
+        cmd = ["ping", "-c", str(count), "-W", str(per_ping_timeout), str(ip)]
+
+    try:
+        proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=overall_timeout, check=False,)
+        return proc.returncode == 0
+    except subprocess.TimeoutExpired:
+        return False
+
+# endpoint to directly check connectivity
+@app.route("/api/orchestrator/verifyHostAvailability", methods=["GET"])
+def verify_host_availability_endpoint():
+    ip = request.args.get("ip", None)
+    if not ip:
+        return jsonify({"ok": False, "message": "Missing 'ip' parameter"}), 400
+
+    reachable = ping_host(ip)
+    return jsonify({"ip": ip, "reachable": reachable}), 200
+
 @app.route("/api/orchestrator/showDevices", methods=["GET"])
 def show_devices():
 
@@ -227,7 +259,7 @@ def show_devices():
     try:
 
         # retrieve devices from testbed site
-        devices = nb.dcim.devices.filter(site="testbed")
+        devices = nb.dcim.devices.filter(site=NETBOX_SITE)
 
         out = []
         for d in devices:
@@ -245,11 +277,18 @@ def show_devices():
 
             role = role.lower() if role else None
 
+            if primary_ip:
+                # check if the host is reachable
+                reachable = ping_host(primary_ip)
+            else:
+                reachable = False
+
             out.append({
                 "name": getattr(d, "name", None),
                 "asset_tag": asset_tag,
                 "primary_ip": primary_ip,
-                "role": role
+                "role": role,
+                "reachable": reachable
             })
 
         return jsonify(out), 200
@@ -578,39 +617,6 @@ def remove_all_scheduled_jobs():
 
     print(f"Elimination completed. {jobs_removed}  scheduled job removed.")
     return jobs_removed
-
-"""
-def remove_all_scheduled_jobs():
-    # get all  scheduled job ID
-    queue_names = ['default', 'high']
-    jobs_removed = 0
-    jobs_found = 0
-    for qname in queue_names:
-        q = Queue(name=qname, connection=Redis())
-        scheduled_job_ids = q.scheduled_job_registry.get_job_ids()
-
-        if not scheduled_job_ids:
-            print("No scheduled job found")
-            return 0
-
-        print(f"[{qname}] Found {len(scheduled_job_ids)} scheduled job. Removing...")
-        jobs_found += len(scheduled_job_ids)
-
-        for job_id in scheduled_job_ids:
-            try:
-                # retrieve job
-                job = q.fetch_job(job_id)
-                if job:
-                    # remove job from Redis
-                    job.cancel()
-                    jobs_removed += 1
-
-            except Exception as e:
-                print(f"Error during job elimination{job_id}: {e}")
-
-    print(f"Elimination completed. {jobs_removed}  scheduled job removed.")
-    return jobs_removed
-"""
 
 if __name__ == '__main__':
     #remove_all_scheduled_jobs()

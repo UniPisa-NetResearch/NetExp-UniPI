@@ -11,13 +11,6 @@
   pre_tasks:
     - name: Compute destination base directory according to type
       set_fact:
-        """
-        base_dest_dir: >-
-          {% if type == 'configs' %}
-          {{ playbook_dir }}/../{{ controller_dest_dir }}/res_{{ reservation_id }}_running_configs
-          {% elif type == 'snapshot' %}
-          {{ playbook_dir }}/../snapshots/res_{{ reservation_id }}_snapshots/{{ name }}
-          {% endif %}"""
         base_dest_dir: "{{ lookup('template', playbook_dir + '/templates/base_dest.j2') | trim }}"
 
 

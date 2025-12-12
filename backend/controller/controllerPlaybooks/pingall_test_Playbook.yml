@@ -1,0 +1,110 @@
+---
+- name: Collect data plane ip from shell
+  hosts: all
+  gather_facts: no
+  tasks:
+    - name: Execute 'ip -4 -o addr show' and filter management and loopback IP
+      ansible.builtin.shell: |
+        # Get all ip ("1: eth0    inet 192.168.1.1/24 scope global eth0")
+        IP_LINES=$(ip -4 -o addr show)
+        # management ip
+        MGMT_IP="{{ ansible_host }}"
+        
+        # management interface
+        MGMT_IFACE="{{ res_iface | default('lo') }}"
+        
+        # remove loopback (lo) and management interface
+        # extract only ip address (fourth field) and remove /mask.
+        echo "$IP_LINES" | \
+        grep -v ' lo ' | \
+        grep -v " $MGMT_IFACE " | \
+        grep -v " inet $MGMT_IP/" | \
+        awk '{split($4, a, "/"); print a[1]}' | \
+        sort -u
+      register: ip_output
+      changed_when: false
+
+    - name: Save data plane ip list
+      set_fact:
+        # create list of ip
+        non_mgmt_ips: "{{ ip_output.stdout_lines | reject('equalto', '') | list }}"
+
+- name: Unidirectional ping and collect simple results
+  hosts: all
+  gather_facts: no
+  vars:
+    # order host list to guarantee A -> B
+    all_hosts_sorted: "{{ groups['all'] | sort }}"
+    unidirectional_results: []
+
+  tasks:
+    - name: Determine source host index
+      set_fact:
+        src_index: "{{ all_hosts_sorted.index(inventory_hostname) }}"
+      when: inventory_hostname in all_hosts_sorted  # host must be in the list
+
+    - name: Iteration only on subsequent dest host in the ordered list
+      # execute loop only if src current host have data plane ips available
+      when:
+        - inventory_hostname in all_hosts_sorted # host is in the list
+        - hostvars[inventory_hostname]['non_mgmt_ips'] | length > 0
+
+      delegate_to: "{{ inventory_hostname }}" # execute command on A
+
+      # every B host that follows A in the ordered list
+      loop: "{{ all_hosts_sorted | select('community.general.nth', hostvars[inventory_hostname]['src_index'] + 1) }}"
+      loop_control:
+        loop_var: dst_host
+
+      block:
+        - name: Skip if destination (B) does not have data plane ip
+          when: hostvars[dst_host]['non_mgmt_ips'] | length > 0
+          block:
+            - name: Loop on all source IPs and all destination IPs (N x M combinations)
+              # iteration in the cartesian product of ip
+              loop: "{{ hostvars[inventory_hostname]['non_mgmt_ips'] | product(hostvars[dst_host]['non_mgmt_ips']) | list }}"
+              loop_control:
+                loop_var: ip_pair
+              register: all_ping_tests
+              ignore_errors: true # continue even if ping fail
+
+            - name: Determine overall success for A -> B
+              set_fact:
+                # success if at least one ping succeed
+                overall_success: "{{ all_ping_tests.results | selectattr('rc', 'equalto', 0) | list | length > 0 }}"
+
+            - name: Add result to the output
+              set_fact:
+                unidirectional_results: "{{ unidirectional_results + [{
+                  'src': inventory_hostname,
+                  'dst': dst_host,
+                  'success': overall_success,
+                  'output': 'Ping OK' if overall_success else 'FAIL: No IP combination worked. First error: ' + (
+                                all_ping_tests.results | selectattr('rc', 'greaterthan', 0) | first | default({'stderr': 'No output'})).stderr | split('\n') | first
+                }] }}"
+
+- name: Aggregate and save results, execute on controller (localhost)
+  hosts: localhost
+  gather_facts: no
+  vars:
+    # aggregate each result from each source
+    all_results_simple: "{{ groups['all'] | map('extract', hostvars, 'unidirectional_results') | flatten(levels=1) | list }}"
+    summary_passed: "{{ all_results_simple | selectattr('success', 'equalto', True) | list | length }}"
+    summary_failed: "{{ all_results_simple | selectattr('success', 'equalto', False) | list | length }}"
+    summary_total: "{{ all_results_simple | length }}"
+
+  tasks:
+    - name: Prepare final json object
+      set_fact:
+        final_json_output:
+          summary:
+            passed: "{{ summary_passed }}"
+            failed: "{{ summary_failed }}"
+            total: "{{ summary_total }}"
+          results: "{{ all_results_simple }}"
+          message: "Pingall test completed"
+
+    - name: Save json output on the controller
+      ansible.builtin.copy:
+        content: "{{ final_json_output | to_nice_json }}"
+        dest: "{{ results_file }}"

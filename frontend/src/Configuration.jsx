@@ -4,6 +4,7 @@ import './style/style.css';
 import './style/configuration.css';
 
 const fetchAvailabilityStatus = async (username, reservation_id) => {
+    // check if the account creation is completed for each device after reservation start
     try {
         const response = await fetch(`/api/controller/checkAvailability?username=${username}&reservation_id=${reservation_id}`);
 
@@ -13,7 +14,7 @@ const fetchAvailabilityStatus = async (username, reservation_id) => {
         }
 
         const data = await response.json();
-
+        // if start_configuration received stop polling to verify availability, otherwise continue polling
         if (data.command === 'start_configuration') {
             return 'start_configuration';
         } else if (data.command === 'wait_configuration') {
@@ -30,10 +31,11 @@ const fetchAvailabilityStatus = async (username, reservation_id) => {
 };
 
 function useFileInput(allowedExt = []) {
+  // function called when the user loads a file
   const ref = useRef(null);
   const [file, setFile] = useState(null);
   const [fileType, setFileType] = useState(''); // '' | 'valid' | 'invalid'
-
+  // selected file by the user
   const choose = () => ref.current && ref.current.click();
 
   const onChange = (e) => {
@@ -44,7 +46,7 @@ function useFileInput(allowedExt = []) {
       return;
     }
     const nameLower = f.name.toLowerCase();
-    const isValid = allowedExt.some(ext => nameLower.endsWith(ext));
+    const isValid = allowedExt.some(ext => nameLower.endsWith(ext));    // check if the extension is correct or not
     setFileType(isValid ? 'valid' : 'invalid');
     e.target.value = null;
   };
@@ -56,9 +58,10 @@ function useFileInput(allowedExt = []) {
 }
 
 function handleUpload({ descriptors, setOutput, setOutputType, requireAny = true }) {
+  // manages the behavior when a file is uploaded
   const errors = [];
   let errorMessage
-
+  // set error messages depending on file type
   descriptors.forEach((d) => {
     if (d.fileType === 'invalid') {
       errors.push(`${d.label} has wrong format.`);
@@ -69,25 +72,26 @@ function handleUpload({ descriptors, setOutput, setOutputType, requireAny = true
        }
     }
   });
-
+  // set errors if any
   if (errors.length > 0) {
     setOutput(errorMessage);
     setOutputType('error');
     return false;
   }
-
+  // error if the user press button to execute a file, but there are not selected files
+  // vedere cosa succede se c'è un playbook selezionato e l'utente preme run template
   const anySelected = descriptors.some(d => d.file);
   if (requireAny && !anySelected) {
     setOutput('No files selected');
     setOutputType('error');
     return false;
   }
-
+  // add name to uploaded files list
   const names = descriptors.reduce((acc, d) => {
     if (d.file) acc.push(`${d.label}: ${d.file.name}`);
     return acc;
   }, []);
-
+  // add to the output timestamp of upload
   const time = new Date().toLocaleString();
   setOutput(`File uploaded (${time}) — ${names.join(' | ')}`);
   setOutputType('success');
@@ -95,23 +99,22 @@ function handleUpload({ descriptors, setOutput, setOutputType, requireAny = true
 }
 
 function createDownload(blob, filename){
-  // create object URL and start download without adding permanent link
-      const url = window.URL.createObjectURL(blob);
-
-      // create <a>, set href and click
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      // some browsers need to add the element to the body, after download we remove
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      // remove URL to free memory
-      window.URL.revokeObjectURL(url);
+    // create object URL and start download without adding permanent link
+    const url = window.URL.createObjectURL(blob);
+    // create <a>, set href and click
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    // some browsers need to add the element to the body, after download we remove
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    // remove URL to free memory
+    window.URL.revokeObjectURL(url);
 }
 
 export default function Configuration({username, reservation_id}) {
-  // files: playbook, template and test files
+  // files: playbook and configuration files
   const template = useFileInput(['.zip']);
   const playbook = useFileInput(['.yml', '.yaml']);
   // template output
@@ -129,8 +132,8 @@ export default function Configuration({username, reservation_id}) {
   //const [selectedSnapshot, setSelectedSnapshot] = useState('snapshot0');
   const [snapshotList, setSnapshotList] = useState([]);
   const [selectedSnapshot, setSelectedSnapshot] = useState('');
-  const [snapshotDescriptionInput, setSnapshotDescriptionInput] = useState('');
-  const [snapshotResult, setSnapshotResult] = useState('');
+  const [snapshotDescriptionInput, setSnapshotDescriptionInput] = useState('');     // description of the snapshot
+  const [snapshotResult, setSnapshotResult] = useState('');          // result of the taken snapshot
   const [snapshotResultType, setSnapshotResultType] = useState(''); // 'success' | 'error' | 'wait'
 
   // result for rollback/delete
@@ -139,19 +142,18 @@ export default function Configuration({username, reservation_id}) {
   // unlock functionalities when account creation is completed
   const [isAccessGranted, setIsAccessGranted] = useState(false);
 
-// when true all buttons are disabled until operation completes
-const [waitOperation, setWaitOperation] = useState(false);
+ // when true all buttons are disabled until operation completes
+ const [waitOperation, setWaitOperation] = useState(false);
 
-const downloadFile= async (file_type) =>{
-  console.log("file type: ", file_type);
-
+ const downloadFile= async (file_type) =>{
+  // executed when user press download button
   if (file_type === "playbook") {
     setPlaybookOutput("Downloading playbook template...");
     setPlaybookOutputType("wait");
     setWaitOperation(true);
     try {
       const payload = { reservation_id: reservation_id};
-
+      // download playbook if user press download playbook
       const resp = await fetch("/api/validator/downloadPlaybook", {
         method: "POST",
         headers: {
@@ -164,7 +166,7 @@ const downloadFile= async (file_type) =>{
         let errMsg;
         const j = await resp.json();
         errMsg = j.message || JSON.stringify(j);
-
+        // set error messages
         setPlaybookOutput(errMsg);
         setPlaybookOutputType("error");
         setWaitOperation(false);
@@ -179,9 +181,9 @@ const downloadFile= async (file_type) =>{
       const cd = resp.headers.get("Content-Disposition");
       if (cd) {
         const m = cd.match(/filename\*=UTF-8''(.+)$|filename="?([^";]+)"?/);
-        if (m) filename = decodeURI(m[1] || m[2]);
+        if (m) filename = decodeURI(m[1] || m[2]);  // check if the filename is correct
       }
-
+      // create file download
       createDownload(blob, filename);
 
       setPlaybookOutput(`Downloaded playbook: ${filename}`);
@@ -198,7 +200,7 @@ const downloadFile= async (file_type) =>{
     setWaitOperation(true);
     try {
       const payload = { reservation_id: reservation_id };
-
+      // same approach as before, for the template zip
       const resp = await fetch("/api/validator/downloadTemplate", {
         method: "POST",
         headers: {
@@ -256,13 +258,14 @@ const downloadFile= async (file_type) =>{
     } catch (e) {
       setTemplateOutput(`Error: ${e}`);
       setTemplateOutputType("error");
-      setWaitOperation(false)
+      setWaitOperation(false);
     }
   }
 }
 
-// snapshot API helpers
-const fetchSnapshots = async () => {
+ // snapshot API helpers
+ const fetchSnapshots = async () => {
+  // function to get all snapshots list
   try {
     const resp = await fetch(`/api/controller/getSnapshots?reservation_id=${reservation_id}`);
     if (!resp.ok){
@@ -286,7 +289,7 @@ const fetchSnapshots = async () => {
 
     let list = [];
 
-    // { snapshots: [{name, description}, ...] }
+    // received data are in the following format: { snapshots: [{name, description}, ...] }
     if (Array.isArray(data.snapshots)) {
       list = data.snapshots.map(s => ({ name: s.name, description: s.description || '' }));
     }
@@ -294,7 +297,7 @@ const fetchSnapshots = async () => {
     if (list.length === 0) {
       list = [{ name: 'snapshot0', description: 'Original network state, no configurations applied' }];
     }
-
+    // set snapshot list and assign previous selected item if present or first value to selected snapshot
     setSnapshotList(list);
     setSelectedSnapshot(prev => (prev && list.find(s => s.name === prev)) ? prev : list[0].name);
   } catch (e) {
@@ -304,21 +307,23 @@ const fetchSnapshots = async () => {
   }
 };
 
-const createSnapshotApi = async (name, description) => {
-  const payload = { name, description, reservation_id };
-  const resp = await fetch('/api/controller/createSnapshot', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-  if (!resp.ok) {
-    const j = await resp.json().catch(() => null);
-    throw new Error((j && (j.message || j.error)) || `HTTP ${resp.status}`);
-  }
-  return resp.json().catch(() => ({}));
-};
+ const createSnapshotApi = async (name, description) => {
+     // send request to create a snapshot and return result
+     const payload = { name, description, reservation_id };
+     const resp = await fetch('/api/controller/createSnapshot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+     });
+     if (!resp.ok) {
+        const j = await resp.json().catch(() => null);
+        throw new Error((j && (j.message || j.error)) || `HTTP ${resp.status}`);
+     }
+     return resp.json().catch(() => ({}));
+ };
 
-const deleteSnapshotApi = async (name) => {
+ const deleteSnapshotApi = async (name) => {
+  // send request to delete a snapshot and return result
   const resp = await fetch(`/api/controller/deleteSnapshot?name=${encodeURIComponent(name)}&reservation_id=${reservation_id}`, {
     method: 'DELETE'
   });
@@ -331,14 +336,13 @@ const deleteSnapshotApi = async (name) => {
 
 
 const runTest = async () => {
-    // stato UI
     setTestOutput('Running ping all test, please wait...');
     setTestOutputType('wait');
     setWaitOperation(true);
 
     try {
-        const payload = {reservation_id, username};
-
+        const payload = {reservation_id};
+        // perform pingall test
         const resp = await fetch('/api/validator/pingallTest', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
@@ -359,13 +363,13 @@ const runTest = async () => {
             setTestOutputType('error');
             return;
         }
-        // { summary: { passed: N, failed: M, total: T }, results: [{ src, dst, success, output }, ...], message: '...' }
+        // result is in the format: { summary: { passed: N, failed: M, total: T }, results: [{ src, dst, success, output }, ...], message: '...' }
         const summary = data.summary || {};
         const results = Array.isArray(data.results) ? data.results : [];
         let out = '';
 
         if (data.message) out += data.message + '\n\n';
-
+        // set output on a specific format
         out += `Summary: passed ${summary.passed || 0} / ${summary.total || results.length} failed ${summary.failed || 0}\n\n`;
 
         results.forEach(r => {
@@ -401,7 +405,7 @@ const runTest = async () => {
 }
 
 const getNextSnapshotIndex = (currentList) => {
-  // extract numerical index
+  // extract numerical indexes from snapshot names and compute next index for a new snapshot
   const indices = currentList.map(s => {
     const match = s.name.match(/snapshot(\d+)/);
     return match ? parseInt(match[1], 10) : 0;
@@ -413,16 +417,16 @@ const getNextSnapshotIndex = (currentList) => {
 useEffect(() => {
     const POLL_INTERVAL = 10000; // 10 seconds
     let intervalId = null;
-    let mounted = true;
-
+    let mounted = true;     // to avoid update of the status after component unmount
+    // check if user can start configure devices after reservation unlock
     const checkStatus = async () => {
         const command = await fetchAvailabilityStatus(username, reservation_id);
 
         if (!mounted) return;
-
+        // if the reservation is started, set access and clear polling interval, otherwise continue polling
         if (command === 'start_configuration') {
             setIsAccessGranted(true);
-             if (intervalId) {
+            if (intervalId) {
               clearInterval(intervalId);
               intervalId = null;
             }
@@ -447,14 +451,16 @@ useEffect(() => {
 }, [username]);
 
 useEffect(() => {
-  // load snapshot list on page load and  when reservation_id change
-  fetchSnapshots();
+  // load snapshot list on page load and when reservation_id change
+  // only when the creation of reservation is completed
+  if(isAccessGranted) {
+      fetchSnapshots();
+  }
 
 }, [reservation_id]);
 
 
 // character limit for description
-
 const MAX_CHARS = 80;
 
 // onChange for description: enforce max chars (maxLength on input also used)
@@ -469,7 +475,7 @@ const handleDescriptionChange = (e) => {
   };
 
 const handleTakeSnapshot = async () => {
-
+  // manages snapshot creation
   const text = snapshotDescriptionInput.trim();
   if (text.length === 0) {
     setSnapshotResult(`Description is empty, please add up to ${MAX_CHARS} chars`);
@@ -481,7 +487,7 @@ const handleTakeSnapshot = async () => {
     setSnapshotResultType('error');
     return;
   }
-
+  // assign snapshot name
   let nextIndex = getNextSnapshotIndex(snapshotList);
   const name = `snapshot${nextIndex}`;
 
@@ -490,6 +496,7 @@ const handleTakeSnapshot = async () => {
   setSnapshotResultType('wait');
 
   try {
+    // call snapshot creation API
     await createSnapshotApi(name, text);
     // load snapshot list from server
     await fetchSnapshots();
@@ -507,6 +514,7 @@ const handleTakeSnapshot = async () => {
 };
 
 const handleRollback = async () => {
+  // manages rollback operation
   if (!selectedSnapshot) {
     setActionResult('No snapshot selected');
     setActionResultType('error');
@@ -554,6 +562,7 @@ const handleRollback = async () => {
 };
 
 const handleDeleteSnapshot = async () => {
+  // manages snapshot deletion
   if (!selectedSnapshot || selectedSnapshot === 'snapshot0') {
     setActionResult('Cannot delete this snapshot');
     setActionResultType('error');
@@ -564,6 +573,7 @@ const handleDeleteSnapshot = async () => {
   setActionResultType('wait');
 
   try {
+    // call snapshot deletion API
     await deleteSnapshotApi(selectedSnapshot);
     // load list from server
     await fetchSnapshots();
@@ -578,7 +588,7 @@ const handleDeleteSnapshot = async () => {
     setWaitOperation(false);
   }
 };
-
+// function that returns selected snapshot
 const selectedSnapshotDescription = () => {
     const s = snapshotList.find((it) => it.name === selectedSnapshot);
     return s ? s.description : '';
@@ -586,6 +596,7 @@ const selectedSnapshotDescription = () => {
 
 // wrappers that call the generic handler
 const handleTemplateFile = async () => {
+   // manages and checks loaded file
    handleUpload({
       descriptors: [
         {file: template.file, fileType: template.fileType, label: 'Template'}
@@ -617,6 +628,7 @@ const handleTemplateFile = async () => {
     let data;
 
     try {
+      // call server endpoint to run loaded template
       const resp = await fetch('/api/validator/runTemplate', {
         method: 'POST',
         body: form
@@ -663,6 +675,7 @@ const handleTemplateFile = async () => {
   };
 
 const handlePlaybookFile = async () => {
+    // manages and checks loaded file
     handleUpload({
       descriptors: [
         {file: playbook.file, fileType: playbook.fileType, label: 'Playbook'},
@@ -692,7 +705,7 @@ const handlePlaybookFile = async () => {
     setPlaybookOutputType('wait');
 
     let data;
-
+    // call endpoint to execute loaded playbook
     try {
       const resp = await fetch('/api/validator/runPlaybook', {
         method: 'POST',
@@ -740,7 +753,7 @@ const handlePlaybookFile = async () => {
       setPlaybookOutput(`Network or client error: ${e}`);
       setPlaybookOutputType('error');
     } finally {
-      playbook.reset();
+      playbook.reset();                 // remove selected file from the GUI
       setWaitOperation(false);
     }
   };

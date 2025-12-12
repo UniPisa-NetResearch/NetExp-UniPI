@@ -11,10 +11,7 @@ import re
 import zipfile
 import jsonschema
 from jsonschema import ValidationError
-
-
 from ..app import app
-
 from .controller import (
     ensure_inventory_dir, safe_filename, run_ansible_playbook, win_to_wsl_path,
     CONTROLLER_PLAYBOOKS_DIR,
@@ -30,8 +27,8 @@ REDIS_PORT = int(os.environ.get("REDIS_PORT", 6379))
 redis_conn = Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
 
 def extract_hosts_from_inventory(inv_path):
+    # function to extract hostnames from inventory
     inventory_hosts = set()
-
     with open(inv_path, "r", encoding="utf-8") as inv_fh:
         for raw_line in inv_fh:
             line = raw_line.strip()
@@ -78,15 +75,14 @@ def download_playbook():
 
 @app.route("/api/validator/downloadTemplate", methods=["POST"])
 def download_template():
-    # save <hostname>_config_db.json from non-host devices and create res_<reservation_id>running_configs.zip
-
+    # save <hostname>_config_db.json <hostname>_frr.conf from non-host devices and create res_<reservation_id>running_configs.zip
     data = request.get_json(silent=True)
     if not data:
         return jsonify({"ok": False, "message": "Missing JSON body"}), 400
 
     reservation_id = data.get("reservation_id")
     if reservation_id is None:
-        return jsonify({"ok": False, "message": "Missing reservation_id"}), 400
+        return jsonify({"ok": False, "message": "Missing reservation_id filed"}), 400
 
     # inventory path
     inv_dir = ensure_inventory_dir()
@@ -100,19 +96,19 @@ def download_template():
 
     #if not target_hosts:
         #return jsonify({"ok": False, "message": "No devices found in inventory to fetch configs from."}), 404
-
+    # if test mode, convert path to wsl
     if TEST:
         controller_configs_dir_wsl = win_to_wsl_path(CONTROLLER_CONFIGS_DIR)
     else:
         controller_configs_dir_wsl = CONTROLLER_CONFIGS_DIR
-
+    # playbook to get config_db and frr files from non host devices
     playbook_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, "get_snapshot_playbook.yml")
     playbook_path = os.path.normpath(playbook_path)
 
     if not os.path.exists(playbook_path):
         return jsonify({"ok": False, "message": f"Playbook not found: {playbook_path}"}), 500
 
-    # run the playbook synchronously using the existing inventory
+    # run the playbook using the existing inventory
     extra_vars = {"controller_dest_dir": controller_configs_dir_wsl, "reservation_id": reservation_id}
 
     try:
@@ -121,13 +117,7 @@ def download_template():
         return jsonify({"ok": False, "message": f"Failed to execute ansible playbook: {e}"}), 500
 
     if rc != 0:
-        return jsonify({
-            "ok": False,
-            "message": "Ansible playbook failed while fetching configs.",
-            "rc": rc,
-            "stdout": out,
-            "stderr": err
-        }), 500
+        return jsonify({"ok": False, "message": "Ansible playbook failed while fetching configs.", "rc": rc, "stdout": out, "stderr": err}), 500
 
     # expected directory where playbook saved files
     playbook_output_dir = os.path.join(CONTROLLER_CONFIGS_DIR, f"res_{reservation_id}_running_configs")
@@ -147,7 +137,7 @@ def download_template():
         # cleanup empty dir
         shutil.rmtree(playbook_output_dir)
         return jsonify({"ok": False, "message": "Playbook completed but no config files were saved on controller."}), 500
-
+    # create zip file
     zip_name = f"res_{reservation_id}_running_configs.zip"
     zip_path = os.path.join(CONTROLLER_CONFIGS_DIR, zip_name)
     try:
@@ -156,7 +146,7 @@ def download_template():
                 config = os.path.basename(fp)
                 zf.write(fp, arcname=config)
 
-        # remove the original folder produced by the playbook
+        # remove the original folder (non-zip) produced by the playbook
         try:
             shutil.rmtree(playbook_output_dir)
         except Exception as e:
@@ -191,18 +181,13 @@ def schema_from_template(tpl):
 
     # list -> impose same length and validate each element per index
     if isinstance(tpl, list):
-        # if empty list, we ask an empty list
+        # if empty list, we ask a schema which is an empty list
         if len(tpl) == 0:
             return {"type": "array", "minItems": 0, "maxItems": 0, "items": {"type": "array", "maxItems": 0}}
         # if list with N elements: items = [schema(elem0), schema(elem1), ...] and min/maxItems = N
         items_schema = schema_from_template(tpl[0])
-        return {
-            "type": "array",
-            "items": items_schema,
-            "minItems": len(tpl),
-            "maxItems": len(tpl)
-        }
-
+        return {"type": "array", "items": items_schema, "minItems": len(tpl), "maxItems": len(tpl)}
+    # return type of value wanted
     if isinstance(tpl, bool):
         return {"type": "boolean"}
     if isinstance(tpl, int):
@@ -214,17 +199,14 @@ def schema_from_template(tpl):
 
 def get_commands_map_keys_from_playbook(playbook_obj):
     # given the loaded playbook, find keys of commands_map section (they are the hostnames)
-
     keys = set()
     # playbook could be a list of plays
     if isinstance(playbook_obj, list):
-
         for play in playbook_obj:
-
             if not isinstance(play, dict):
                 continue
-            vars_block = play.get('vars') or {}
-            cm = vars_block.get('commands_map')
+            vars_block = play.get('vars') or {}     # get block of vars
+            cm = vars_block.get('commands_map')     # get commands_map
 
             if isinstance(cm, dict):
                 keys.update(cm.keys())
@@ -240,7 +222,6 @@ def get_commands_map_keys_from_playbook(playbook_obj):
 
 def find_task_for_commands(playbook_obj):
     # iterate plays/tasks to find a task whose name includes 'Run commands' and return that task dict (or None)
-
     if isinstance(playbook_obj, list):
         for play in playbook_obj:
             tasks = play.get('tasks') if isinstance(play, dict) else None
@@ -259,7 +240,7 @@ def find_task_for_commands(playbook_obj):
     return None
 
 def is_user_full(username):
-
+    # check in the database if the user is limited or not
     user = db.session.query(User).filter_by(username=username).first()
     full_user = getattr(user, "full_user", None)
 
@@ -268,39 +249,18 @@ def is_user_full(username):
     else:
         return False
 
-def execute_user_playbook(inv_path, playbook_path, timeout=900):
-
-    try:
-        rc, out, err = run_ansible_playbook(inv_path, playbook_path, timeout=timeout)
-        result = {
-            "rc": rc,
-            "stdout": out,
-            "stderr": err,
-            "ok": rc == 0
-        }
-    except Exception as e:
-        result = {
-            "rc": -1,
-            "stdout": "",
-            "stderr": f"Exception while running playbook: {e}",
-            "ok": False
-        }
-    return result
-
 @app.route("/api/validator/runPlaybook", methods=["POST"])
 def run_playbook():
 
     # get form fields
     if 'playbook' not in request.files:
         return jsonify({"ok": False, "message": "Missing 'playbook' file in form-data"}), 400
-    f = request.files['playbook']
+    f = request.files['playbook']               # received playbook
     username = request.form.get('username')
     reservation_id = request.form.get('reservation_id')
 
-    if not username:
-        return jsonify({"ok": False, "message": "Missing 'username' field"}), 400
-    if not reservation_id:
-        return jsonify({"ok": False, "message": "Missing 'reservation_id' field"}), 400
+    if not username or not reservation_id:
+        return jsonify({"ok": False, "message": "Missing 'username' or 'reservation_id' field"}), 400
 
     # locate controller template for this reservation
     safe_template_name = safe_filename(f"res_{reservation_id}_playbook_template")
@@ -333,9 +293,9 @@ def run_playbook():
         template_obj = yaml.safe_load(template_text)
     except Exception as e:
         return jsonify({"ok": False, "message": f"Failed to parse controller template YAML: {e}"}), 400
-
+    # create schema from template
     schema = schema_from_template(template_obj)
-
+    # validate schema
     try:
         jsonschema.validate(instance=playbook_obj, schema=schema)
     except ValidationError as ve:
@@ -347,7 +307,7 @@ def run_playbook():
     inv_path = os.path.join(inv_dir, f"{safe_inv}.ini")
 
     if not os.path.exists(inv_path):
-        return jsonify({"ok": False, "message": f"Inventory not found: {inv_path}"}), 404
+        return jsonify({"ok": False, "message": f"Reservation inventory not found: {inv_path}"}), 404
 
     # parse hosts from inventory file: take first token of non-empty/non-comment/non-group lines
     inventory_hosts = extract_hosts_from_inventory(inv_path)
@@ -381,7 +341,7 @@ def run_playbook():
             "expected_become_user": username,
             "found_become_user": become_user
         }), 400
-
+    # key 'cmd' must have the following content
     expected_cmds = r"{{ commands_map[inventory_hostname] | default([]) | map('regex_replace', '^\s*sudo\s+', 'sudo -n ') | list}}"
 
     # obtain the 'cmds' value from the located task (if any)
@@ -396,7 +356,7 @@ def run_playbook():
 
     # check user privilege: if user is full_user skip dangerous command checks
     is_full = is_user_full(username)
-
+    # commands that cannot be executed for limited users
     dangerous_prefixes = ['ip', 'vtysh', 'config', 'tc']
     bad_commands = []
 
@@ -435,8 +395,8 @@ def run_playbook():
                     continue
 
                 # get tokens, skip leading 'sudo' if present
-                tokens = re.split(r'\s+', s)
-                primary = tokens[0] if tokens else ''
+                tokens = re.split(r'\s+', s)        # split for spaces
+                primary = tokens[0] if tokens else ''      # get first token
                 if primary == 'sudo' and len(tokens) > 1:
                     primary = tokens[1]
 
@@ -496,66 +456,30 @@ def run_playbook():
 
     # execute playbook
     try:
-        exec_inv_path = inv_path
-        exec_playbook_path = target_path
+        rc, out, err = run_ansible_playbook(inv_path, target_path, timeout=900)
 
-        # sync execution
-        result = execute_user_playbook(exec_inv_path, exec_playbook_path, timeout=900)
-
-        if result.get("ok"):
+        if rc == 0:
             return jsonify({
                 "ok": True,
                 "message": f"Playbook {f.filename} executed successfully",
-                "rc": result.get("rc"),
-                "stdout": result.get("stdout"),
-                "stderr": result.get("stderr")
+                "rc": rc,
+                "stdout": out,
+                "stderr":err
             }), 200
         else:
             return jsonify({
                 "ok": False,
                 "message": f"Playbook {f.filename} execution failed",
-                "rc": result.get("rc"),
-                "stdout": result.get("stdout"),
-                "stderr": result.get("stderr")
+                "rc": rc,
+                "stdout": out,
+                "stderr": err
             }), 500
 
     except Exception as e:
-        # eccezione imprevista durante l'esecuzione
-        return jsonify({
-            "ok": False,
-            "message": f"Exception while executing playbook {f.filename}: {e}"
-        }), 500
-
-# minimal aggregation: host by host -> single text
-def build_simple_results_text(per_host_results):
-    if not per_host_results:
-        return ""
-    lines = []
-    for host in sorted(per_host_results.keys()):
-        info = per_host_results[host]
-        lines.append(f"--- {host} ---")
-        # prefer message-like fields if present
-        if isinstance(info, dict):
-            if 'stdout' in info:
-                lines.append("stdout:")
-                lines.append(info.get('stdout') or "")
-            if 'stderr' in info:
-                lines.append("stderr:")
-                lines.append(info.get('stderr') or "")
-            if 'rc' in info:
-                lines.append(f"rc: {info.get('rc')}")
-            # fallback: include full dict as JSON if no stdout/stderr
-            if 'stdout' not in info and 'stderr' not in info:
-                lines.append(json.dumps(info, ensure_ascii=False))
-
-        else:
-            # non-dict fallback
-            lines.append(str(info))
-        lines.append("")  # blank line between hosts
-    return "\n".join(lines)
+        return jsonify({"ok": False, "message": f"Exception while executing playbook {f.filename}: {e}"}), 500
 
 def validate_config_db_minimal(obj):
-    # validate config_db.json file
+    # minimal validation of config_db.json file
     errors = []
 
     if not isinstance(obj, dict):
@@ -659,24 +583,28 @@ def run_template():
     except zipfile.BadZipFile as e:
         return jsonify({"ok": False, "message": f"Uploaded file is not a valid zip archive: {e}"}), 400
 
-    # collect files named <hostname>_config_db.json
-    name_re = re.compile(r'^(.+)_config_db\.json$')
+    # collect files named <hostname>_config_db.json or <hostname>_frr.conf
+    name_re_config = re.compile(r'^(.+)_config_db\.json$')
+    name_re_frr = re.compile(r'^(.+)_frr\.conf$')
     files_map = {}
     invalid_names = []
     for z in zf.infolist():
         if z.is_dir():
             continue
         base = os.path.basename(z.filename)
-        m = name_re.match(base)
-        if not m:
+        m_cfg = name_re_config.match(base)
+        m_frr = name_re_frr.match(base)
+
+        if not (m_cfg or m_frr):
             invalid_names.append(z.filename)
             continue
-        hostname = m.group(1)
+        hostname = (m_cfg or m_frr).group(1)
         try:
             content_bytes = zf.read(z)
         except Exception as e:
             return jsonify({"ok": False, "message": f"Failed to read {z.filename} from zip: {e}"}), 400
-        files_map[hostname] = (base, content_bytes)
+        files_map.setdefault(hostname, []).append((base, content_bytes))
+        #files_map[hostname] = (base, content_bytes)
 
     if invalid_names:
         return jsonify({"ok": False, "message": f"Zip {zf.filename} contains files not matching '<hostname>_config_db.json' pattern: {invalid_names}"}), 400
@@ -754,7 +682,7 @@ def run_template():
     except Exception as e:
         return {"ok": False, "message": f"Failed to create temp dir {tmp_folder_path}: {e}"}, 500
 
-    # estrai zip dentro tmp_folder_path
+    # extract zip inside tmp_folder_path
     try:
         with zipfile.ZipFile(zip_path, "r") as zf:
             zf.extractall(tmp_folder_path)
@@ -768,7 +696,7 @@ def run_template():
     pb_filename = "rollback_playbook.yml"
     pb_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, pb_filename)
 
-    # run playbook with extra_vars required by client
+    # run rollback playbook with extra_vars required by client
     extra_vars = {"type": "configs", "reservation_id": reservation_id, "user_configs_folder": tmp_folder_name}
     rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars)
 
@@ -781,6 +709,63 @@ def run_template():
     else:
         return jsonify({"ok": False, "message": f"Apply configs playbook failed", "results": "rc={rc}, stdout={out}, stderr={err}"}), 500
 
+@app.route('/api/validator/pingallTest', methods=['POST'])
+def pingall_test():
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "Missing or invalid JSON body"}), 400
+
+    reservation_id = data.get('reservation_id')
+
+    if not reservation_id:
+        return jsonify({"error": "reservation_id is required"}), 400
+
+    # find inventory
+    inv_dir = ensure_inventory_dir()
+    safe_res = safe_filename(f"res-{reservation_id}-inventory")
+    inv_path = os.path.join(inv_dir, f"{safe_res}.ini")
+
+    if not os.path.exists(inv_path):
+        return jsonify({"error": f"Inventory file not found for reservation {reservation_id}"}), 404
+
+    local_results_filename = f"pingall_res_{reservation_id}.json"
+    local_results_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, local_results_filename)
+
+    pb_filename = "pingall_test_playbook.yml"
+    pb_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, pb_filename)
+
+    extra_vars = {"results_file": local_results_path}
+
+    # execute pingall playbook
+    print(f"Running pingall_test_playbook with inventory {inv_path}")
+    rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars, timeout=300)
+
+    # error during playbook execution
+    if rc != 0:
+        return jsonify({
+            "error": "Ansible pingall playbook failed",
+            "rc": rc,
+            "message": "Error during Ansible execution. Check stderr for details.",
+            "__raw_text": f"STDOUT:\n{out}\n\nSTDERR:\n{err}"
+        }), 500
+
+    try:
+        with open(local_results_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        # remove temporary file after read
+        os.remove(local_results_path)
+
+        # return formatted result
+        return jsonify(data), 200
+
+    except FileNotFoundError:
+        return jsonify({"error": "Results file not found. Ansible succeeded but failed to generate output.",
+                        "__raw_text": out}), 500
+    except json.JSONDecodeError:
+        return jsonify({"error": "Failed to parse JSON result file.", "__raw_text": out}), 500
+    except Exception as e:
+        return jsonify({"error": f"Internal server error reading results: {str(e)}", "__raw_text": out}), 500
 
 if __name__ == '__main__':
 

@@ -64,6 +64,8 @@ export default function Reservation({ username, isReservationActive }) {
 
   const isCurrentDate = startDate === minDate;
   const currentHour = getCurrentHour();
+  // loading state per device (key -> boolean)
+  const [loadingReachability, setLoadingReachability] = useState({});
 
   const availableStartTimes = useMemo(() => {
     if (!startDate) return timeOptions;                                 // return all hours 00 - 23, if start date is not assigned
@@ -142,6 +144,56 @@ export default function Reservation({ username, isReservationActive }) {
   useEffect(() => {
     fetchUserReservations();
   }, []);
+
+  // call endpoint to check device reachability
+  const handleDeviceClick = async (deviceKey, primaryIp) => {
+    // if device is unreachable, do nothing
+    const device = devices.find(d => (d.asset_tag || d.name) === deviceKey);
+    if (!device) return;
+    if (device.reachable === false) return;
+
+    // avoid double request
+    if (loadingReachability[deviceKey]) return;
+
+    setLoadingReachability(prev => ({ ...prev, [deviceKey]: true }));
+
+    try {
+      // call to endpoint
+      const url = `/api/orchestrator/verifyHostAvailability?ip=${encodeURIComponent(primaryIp || '')}`;
+      const resp = await fetch(url, { method: 'GET' });
+      const data = await resp.json().catch(() => ({}));
+
+      if (resp.ok && data && data.reachable === true) {
+        // reachable device
+        toggleSelectDevice(deviceKey);
+      } else {
+        // unreachable device
+        setDevices(prev =>
+          prev.map(d => {
+            const key = `${d.asset_tag || d.name || ''}`;
+            if (key === deviceKey) {
+              return { ...d, reachable: false };
+            }
+            return d;
+          })
+        );
+      }
+    } catch (err) {
+      // network error, we maintain unreachable or unchanged
+      console.error('Error checking reachability', err);
+      setDevices(prev =>
+        prev.map(d => {
+          const key = `${d.asset_tag || d.name || ''}`;
+          if (key === deviceKey) {
+            return { ...d, reachable: false };
+          }
+          return d;
+        })
+      );
+    } finally {
+      setLoadingReachability(prev => ({ ...prev, [deviceKey]: false }));
+    }
+  };
 
   const toggleSelectDevice = (deviceKey) => {
     setSelectedDevices(prev => {                                    // prev is previous value of selectedDevices
@@ -330,17 +382,23 @@ export default function Reservation({ username, isReservationActive }) {
                 return (
                     <label
                         key={key}
-                        className={`device-item ${role || ''}`}
-                        title={`${d.asset_tag || d.name || ''} ${d.primary_ip ? ' - ' + d.primary_ip : ''}`} /* information shown when the mouse is hover the element*/
+                        className={`device-item ${role || ''} ${d.reachable === false ? 'unreachable' : ''}`}
+                        title={`${d.asset_tag || d.name || ''} ${d.primary_ip ? ' - ' + d.primary_ip : ''} ${d.reachable === false ? '(unreachable)' : ''}`} /* information shown when the mouse is hover the element*/
+                        aria-disabled={d.reachable === false ? "true" : "false"}
                     >
                       <input
                           type="checkbox"
                           checked={selected}
-                          onChange={() => toggleSelectDevice(key)}
+                          //onChange={() => toggleSelectDevice(key)}
                           className="device-checkbox"
+                          //disabled={d.reachable === false}
+                          onChange={() => handleDeviceClick(key, d.primary_ip)}
+                          disabled={d.reachable === false || !!loadingReachability[key]}
+                          aria-label={`${d.name || key} selectable`}
                       />
                       <span className="device-icon" aria-hidden="true">{icon}</span>
                       <span className="device-main">
+                        { loadingReachability[key] && <span className="device-loading" aria-hidden="true">⏳</span> }
                         <span className="device-name">{d.name}</span>
                         <span className="device-ip">{d.primary_ip}</span>
                       </span>
