@@ -109,7 +109,7 @@ def download_template():
         return jsonify({"ok": False, "message": f"Playbook not found: {playbook_path}"}), 500
 
     # run the playbook using the existing inventory
-    extra_vars = {"controller_dest_dir": controller_configs_dir_wsl, "reservation_id": reservation_id}
+    extra_vars = {"controller_dest_dir": controller_configs_dir_wsl, "type": "configs", "reservation_id": reservation_id}
 
     try:
         rc, out, err = run_ansible_playbook(inv_path, playbook_path, extra_vars=extra_vars, timeout=900)

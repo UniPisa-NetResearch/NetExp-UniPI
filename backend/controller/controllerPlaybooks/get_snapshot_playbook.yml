@@ -2,7 +2,6 @@
   hosts: all
   gather_facts: no
   vars:
-    # valori di esempio / default — sovrascrivi quando lanci il playbook
     controller_dest_dir: "controllerConfigs"
     reservation_id: ""
     type: "configs"        # possibili valori: "configs" o "snapshot"

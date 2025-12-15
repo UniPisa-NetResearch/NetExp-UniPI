@@ -19,44 +19,40 @@
 }
 
 .config-row {
-  display: flex;
   align-items: center;
-  margin: 14px 0;
+  justify-content: flex-start;
+  margin-top:50px;
+  margin-bottom: 50px;
   font-weight: 500;
   color: #343a40;
 }
 
 .main-actions-row {
     flex-wrap: wrap;
-    /*justify-content: flex-start;*/
-    justify-content: space-between;
-    gap: 16px;
+    gap: 10px;
 }
 
 .aligned-group {
     display: flex;
     align-items: center;
     gap: 15px;
-    flex-grow: 1;
-    justify-content: space-between;
+    justify-content: flex-start;
 }
 
-.aligned-group-snapshot {
+.experiment-buttons {
     display: flex;
     align-items: center;
     gap: 15px;
-}
-
-.selected-file-name.test-file-name {
-  margin-right: 28px; /* regola il valore a piacere (es. 24px, 32px, 48px) */
-
 }
 
 .label-inline {
   font-size: 14px;
 }
 
-.addRemoveLabel{
+.additional-margin{
+    margin-left: 35px;
+}
+.add-remove-label{
     font-weight: bold;
     color: #6eacf3;
     cursor: pointer;
@@ -134,96 +130,29 @@
 .duration-row {
   margin-top:50px;
   margin-bottom: 50px;
-  flex-wrap: wrap;
-  justify-content: flex-start;
- font-weight: 500;
+  font-weight: 500;
   color: #343a40;
 }
 
 .duration-field {
-  width: 100%;
-  display: flex;
-  min-height: 60px;
+  width: 25%;
   border: 1px solid #ddd;
-  padding: 8px;
-  border-radius: 6px;
-  resize: vertical;
+  border-radius: 4px;
+  height: 25px;
 }
 
-.output-field.success {
-    border-color: #1e7e34;
-    color: #1e7e34;
-    font-weight: 600;
-}
-
-.output-field.error {
-    border-color: #dc3545;
-    color: #dc3545;
-    font-weight: 600;
-}
-
-.output-field.wait {
-    border-color: #f8d54c;
-    color: #f8d54c;
-    font-weight: 600;
-}
-
-.text-input {
-  padding: 6px 8px;
-  border-radius: 6px;
+.add-metric-field {
+  width: 55%;
   border: 1px solid #ddd;
-  width: auto;
-  flex-grow: 1;
-}
-
-.snapshot-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-left: 16px;
-}
-
-.description-display-group {
-    flex-grow: 1;
-}
-
-.snapshot-desc {
-  padding: 6px 8px;
-  border: 1px solid #eee;
-  border-radius: 6px;
-  background: #fafafa;
-  font-weight: 400;
-  font-size: 13px;
-  flex-grow: 1;
+  border-radius: 4px;
+  height: 25px;
 }
 
 .select-field {
   padding: 6px 8px;
   border-radius: 6px;
+  width: 50%;
   border: 1px solid #ddd;
-}
-
-.small-result {
-  min-height: 20px;
-  color: #222;
-  font-size: 13px;
-  margin-top: 6px;
-  margin-bottom: 50px;
-}
-
-.small-result.success {
-    color: #1e7e34;
-    font-weight: 600;
-}
-
-.small-result.error {
-    color: #f8d54c;
-    font-weight: 600;
-}
-
-.small-result.wait {
-    color: #1e7e34;
-    font-weight: 600;
 }
 
 .delete[disabled], .delete:disabled {

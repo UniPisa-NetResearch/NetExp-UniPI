@@ -231,7 +231,7 @@ export default function Configuration({username, reservation_id}) {
       const blob = new Blob([arrayBuffer], { type: "application/zip" });
 
       // default filename
-      let filename = `res_${reservation_id}running_configs.zip`;
+      let filename = `res_${reservation_id}_running_configs.zip`;
       // retrieve filename from header Content-Disposition if exists
       const cd = resp.headers.get("Content-Disposition");
       if (cd) {
