@@ -72,9 +72,11 @@ function App() {
                 // set timer status if actively reserved
                 if (data.isActive) {
                     setIsReservationActive(true);
+                    setReservationId(data.reservation_id)
                     setActiveReservationExpiration(data.expires_at);
                 } else {
                     setIsReservationActive(false);
+                    setReservationId(null)
                     setActiveReservationExpiration(null);
                 }
             } else {

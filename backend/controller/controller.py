@@ -311,17 +311,20 @@ def remove_files(file_path, file_type):
         try:
             if os.path.exists(file_path):
                 os.remove(file_path)
-
+                print(f"Deleted file: {file_path}")
+            else:
+                print(f"File not found (skipping): {file_path}")
         except Exception as e:
-            print("Error deleting inventory file:", e)
-
+            print(f"Error deleting file {file_path}:", e)
     elif file_type == "folder":
         try:
             if os.path.exists(file_path):
                 shutil.rmtree(file_path)
-
+                print(f"Deleted folder: {file_path}")
+            else:
+                print(f"Folder not found (skipping): {file_path}")
         except Exception as e:
-            print("Error deleting user playbook directory:", e)
+            print(f"Error deleting folder {file_path}:", e)
 
 @app.route('/api/controller/revokeAccess', methods=['POST'])
 def revoke_access():
@@ -346,20 +349,14 @@ def revoke_access():
     # get inventory path
     safe_res = safe_filename(f"res-{reservation_id}-inventory")
     inv_path = os.path.join(INVENTORY_DIR, f"{safe_res}.ini")
-    if not os.path.exists(inv_path):
-       print("Inventory not found:", inv_path, " still attempting graceful removal (playbook will run against nothing).")
 
     # get template path
     safe_res_template = safe_filename(f"res_{reservation_id}_playbook_template")
     playbook_template_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, f"{safe_res_template}.yml")
-    if not os.path.exists(playbook_template_path):
-       print("Playbook template not found:", playbook_template_path, " still attempting graceful removal (playbook will run against nothing).")
 
     #  get controller running configs zip folder path
     safe_res_config = safe_filename(f"res_{reservation_id}_running_configs")
     controller_running_config_path = os.path.join( CONTROLLER_CONFIGS_DIR, f"{safe_res_config}.zip")
-    if not os.path.exists(controller_running_config_path):
-        print("Running configs zip not found:", controller_running_config_path, " still attempting graceful removal (playbook will run against nothing).")
 
     # get res_<reservation_id> folder with user playbooks
     safe_res_dir = safe_filename(f"res_{reservation_id}")
@@ -367,23 +364,6 @@ def revoke_access():
 
     # get user running configs zip folder
     user_running_config_path = os.path.join(USER_CONFIGS_DIR, f"{safe_res_config}.zip")
-    if not os.path.exists(user_running_config_path):
-        print("Running configs zip not found:", user_running_config_path, " still attempting graceful removal (playbook will run against nothing).")
-
-    pb_filename = "rollback_playbook.yml"
-    pb_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, pb_filename)
-
-    # run rollback playbook with extra_vars required by client
-    extra_vars = {"type": "rollback", "reservation_id": reservation_id, "name": "snapshot0"}
-    print(f"Running rollback playbook {pb_path} for snapshot0 (reservation {reservation_id})")
-    rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars)
-
-    print("Rollback playbook rc:", rc)
-    print("Rollback playbook stdout:", out)
-    print("Rollback playbook stderr:", err)
-
-    if rc != 0:
-        return jsonify({"ok": False, "message": f"Rollback playbook failed (rc={rc}, stdout={out}, stderr={err})"}), 500
 
     # execute revoke playbook
     pb_path = get_playbook_template_path("revoke")
@@ -397,6 +377,27 @@ def revoke_access():
     print("Ansible revoke rc:", rc)
     print("Ansible revoke stdout:", out)
     print("Ansible revoke stderr:", err)
+
+    if rc != 0:
+        return jsonify({"ok": False, "message": "Ansible revoke failed", "rc": rc, "stdout": out, "stderr": err}), 500
+
+    print("Successful revoke playbook")
+
+    pb_filename = "rollback_playbook.yml"
+    pb_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, pb_filename)
+    # run rollback playbook with extra_vars required by client
+    extra_vars = {"type": "rollback", "reservation_id": reservation_id, "name": "snapshot0"}
+    print(f"Running rollback playbook {pb_path} for snapshot0 (reservation {reservation_id})")
+    rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars)
+
+    print("Rollback playbook rc:", rc)
+    print("Rollback playbook stdout:", out)
+    print("Rollback playbook stderr:", err)
+
+    if rc != 0:
+        return jsonify({"ok": False, "message": f"Rollback playbook failed (rc={rc}, stdout={out}, stderr={err})"}), 500
+
+    print("Successful rollback playbook")
 
     # delete inventory and playbook files
     # remove inventory file
@@ -418,6 +419,11 @@ def revoke_access():
     remove_files(f"res{reservation_id}", "file")
     print("Deleted generated files for reservation", reservation_id)
 
+    if username in active_reservations:
+        del active_reservations[username]  # remove reservation from active reservation list
+        print(f"User {username} removed from active_reservations")
+
+    """
     if rc == 0:
         # revoked user account
         if username in active_reservations:
@@ -426,6 +432,8 @@ def revoke_access():
         return jsonify({"ok": True, "message": "Revoke executed", "stdout": out, "stderr": err}), 200
     else:
         return jsonify({"ok": False, "message": "Ansible revoke failed", "rc": rc, "stdout": out, "stderr": err}), 500
+    """
+    return jsonify({"ok": True, "message": "Revoke executed", "stdout": out, "stderr": err}), 200
 
 @app.route('/api/controller/checkAvailability', methods=['GET'])
 def check_availability():

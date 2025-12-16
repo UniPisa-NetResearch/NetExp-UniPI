@@ -33,11 +33,11 @@
     - name: Compute source base dir according to type (rendered on controller)
       set_fact:
         src_base_dir: >-
-          {% if type == 'rollback' %}
+          {%- if type == 'rollback' -%}
           {{ playbook_dir }}/../snapshots/res_{{ reservation_id }}_snapshots/{{ name }}
-          {% else %}
+          {%- else -%}
           {{ playbook_dir }}/../userConfigs/{{ user_configs_folder }}
-          {% endif %}
+          {%- endif -%}
   tasks:
     - name: Copy config file from snapshot on controller to /tmp/new_config.json (only non-host devices)
       copy:

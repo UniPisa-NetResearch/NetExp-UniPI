@@ -23,10 +23,9 @@ NETBOX_TOKEN = os.getenv("NETBOX_TOKEN", "6152fbb91529522c72307b194a690c4ca5253e
 
 MAX_HOURS = 72
 TEST = True                     #test mode, each reservation starts at current date + 2 min
-EXPERIMENT_DURATION = 7        #expressed in minutes
-CONTAINERLAB_TEST = True        #true if we want to test in a virtual network if the network is not accessible
-#NETBOX_SITE = "testbed"        # useful to change site of netbox
-NETBOX_SITE = "containerlab"
+EXPERIMENT_DURATION = 10       #expressed in minutes
+NETBOX_SITE = "testbed"        # useful to change site of netbox
+#NETBOX_SITE = "containerlab"
 nb = pynetbox.api(NETBOX_URL, token=NETBOX_TOKEN)
 
 REDIS_URL = "redis://localhost:6379"
@@ -231,7 +230,7 @@ def ping_host(ip, count=2, per_ping_timeout=2, overall_timeout=5):
         ipaddress.ip_address(ip)
     except ValueError:
         return False
-    if CONTAINERLAB_TEST:
+    if TEST:
         cmd = ["wsl", "ping", "-c", str(count), "-W", str(per_ping_timeout), str(ip)]
     else:
         cmd = ["ping", "-c", str(count), "-W", str(per_ping_timeout), str(ip)]
@@ -276,13 +275,12 @@ def show_devices():
             role = getattr(role_obj, "slug", None) or getattr(role_obj, "name", None)
 
             role = role.lower() if role else None
-
             if primary_ip:
                 # check if the host is reachable
                 reachable = ping_host(primary_ip)
             else:
                 reachable = False
-
+            print(f"ip address: {primary_ip} - reachable: {reachable}")
             out.append({
                 "name": getattr(d, "name", None),
                 "asset_tag": asset_tag,

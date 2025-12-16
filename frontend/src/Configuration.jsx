@@ -456,8 +456,7 @@ useEffect(() => {
   if(isAccessGranted) {
       fetchSnapshots();
   }
-
-}, [reservation_id]);
+}, [reservation_id, isAccessGranted]);
 
 
 // character limit for description
