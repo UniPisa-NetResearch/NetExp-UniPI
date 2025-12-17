@@ -35,6 +35,8 @@
         src_base_dir: >-
           {%- if type == 'rollback' -%}
           {{ playbook_dir }}/../snapshots/res_{{ reservation_id }}_snapshots/{{ name }}
+          {%- elif user_configs_folder.startswith('/') -%}
+          {{ user_configs_folder }}
           {%- else -%}
           {{ playbook_dir }}/../userConfigs/{{ user_configs_folder }}
           {%- endif -%}
@@ -48,7 +50,7 @@
         mode: '0644'
       when:
         - hostvars[inventory_hostname].get('role', '') != 'host'
-      ignore_errors: no
+      ignore_errors: "{{ type == 'configs' }}"
 
     - name: Copy frr.conf from snapshot on controller to /tmp/new_frr.conf (only non-host devices)
       copy:
@@ -59,7 +61,7 @@
         mode: '0644'
       when:
         - hostvars[inventory_hostname].get('role', '') != 'host'
-      ignore_errors: no
+      ignore_errors: "{{ type == 'configs' }}"
 
     - name: Move new files into place (config + frr) and sync (only non-host devices)
       shell: |
@@ -84,8 +86,8 @@
 
     - name: Set fact 'any_moved' if at least one file was placed on device (only non-host)
       set_fact:
-        any_moved: "{{ (stat_config.stat.exists | default(false)) or (stat_frr.stat.exists | default(false)) }}"
-      when: hostvars[inventory_hostname].get('role','') != 'host
+        any_moved: "{{ cp_result.stdout is defined and 'moved=1' in cp_result.stdout }}"
+      when: hostvars[inventory_hostname].get('role','') != 'host'
 
     - name: Reload SONiC config (only non-host devices)
       shell: config reload -y

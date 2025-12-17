@@ -12,16 +12,6 @@
       set_fact:
         base_dest_dir: "{{ lookup('template', playbook_dir + '/templates/base_dest.j2') | trim }}"
 
-
-    - name: Ensure destination base directory exists (on controller)
-      delegate_to: localhost
-      run_once: true
-      ansible.builtin.file:
-        path: "{{ base_dest_dir }}"
-        state: directory
-        recurse: yes
-        mode: '0755'
-
   tasks:
     - name: Fetch sonic config_db.json from devices that are not role 'host'
       ansible.builtin.fetch:

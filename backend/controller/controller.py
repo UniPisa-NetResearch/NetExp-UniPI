@@ -32,6 +32,7 @@ INPUT_TEMPLATE_CONTENT = r"""- name: Apply per-host commands
         {% for c in cmds %}
         {{ c }}
         {% endfor %}
+      when: commands_map[inventory_hostname] is defined and (commands_map[inventory_hostname] | length > 0)  
 """
 
 ANSIBLE_EXTRA_ARGS = ""            #  extra args (ex. -c paramiko)
@@ -182,7 +183,7 @@ def create_res_playbook_template(username, reservation_id, devices):
 
     for d in devices:
         host  = d.get("id_device")
-        ip = "192.168.1.10"
+        ip = "192.168.15.10"
         if d.get("role") != "host":
             iface = "eth1"
         else:
@@ -365,6 +366,10 @@ def revoke_access():
     # get user running configs zip folder
     user_running_config_path = os.path.join(USER_CONFIGS_DIR, f"{safe_res_config}.zip")
 
+    #  get controller running configs zip folder path
+    safe_res_snapshots_dir = safe_filename(f"res_{reservation_id}_snapshots")
+    res_snapshots_path = os.path.join(SNAPSHOTS_DIR, safe_res_snapshots_dir)
+
     # execute revoke playbook
     pb_path = get_playbook_template_path("revoke")
     if not pb_path:
@@ -407,13 +412,16 @@ def revoke_access():
     remove_files(playbook_template_path, "file")
 
     # remove controller running config zip folder
-    remove_files(controller_running_config_path, "folder")
+    remove_files(controller_running_config_path, "file")
 
-    # remove recursively the folder and all the content
+    # remove recursively the folder and all the content of user playbooks for the reservation
     remove_files(user_playbook_dir, "folder")
 
     # remove user running config zip folder
-    remove_files(user_running_config_path, "folder")
+    remove_files(user_running_config_path, "file")
+
+    # remove <res_id>_snapshots folder
+    remove_files(res_snapshots_path, "folder")
 
     # remove active res file
     remove_files(f"res{reservation_id}", "file")
@@ -423,16 +431,6 @@ def revoke_access():
         del active_reservations[username]  # remove reservation from active reservation list
         print(f"User {username} removed from active_reservations")
 
-    """
-    if rc == 0:
-        # revoked user account
-        if username in active_reservations:
-            del active_reservations[username]       # remove reservation from active reservation list
-            print(f"User {username} removed from active_reservations")
-        return jsonify({"ok": True, "message": "Revoke executed", "stdout": out, "stderr": err}), 200
-    else:
-        return jsonify({"ok": False, "message": "Ansible revoke failed", "rc": rc, "stdout": out, "stderr": err}), 500
-    """
     return jsonify({"ok": True, "message": "Revoke executed", "stdout": out, "stderr": err}), 200
 
 @app.route('/api/controller/checkAvailability', methods=['GET'])

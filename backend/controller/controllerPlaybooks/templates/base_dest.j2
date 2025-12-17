@@ -1,5 +1,5 @@
 {% if type == 'configs' %}
-{{ playbook_dir }}/../{{ controller_dest_dir }}/res_{{ reservation_id }}_running_configs
+{{ controller_dest_dir }}
 {% elif type == 'snapshot' %}
 {{ playbook_dir }}/../snapshots/res_{{ reservation_id }}_snapshots/{{ name }}
 {% endif %}

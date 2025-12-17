@@ -97,10 +97,12 @@ def download_template():
     #if not target_hosts:
         #return jsonify({"ok": False, "message": "No devices found in inventory to fetch configs from."}), 404
     # if test mode, convert path to wsl
+    full_dest_dir = os.path.join(CONTROLLER_CONFIGS_DIR, f"res_{reservation_id}_running_configs")
     if TEST:
-        controller_configs_dir_wsl = win_to_wsl_path(CONTROLLER_CONFIGS_DIR)
+        controller_configs_dir = win_to_wsl_path(full_dest_dir)
     else:
-        controller_configs_dir_wsl = CONTROLLER_CONFIGS_DIR
+        controller_configs_dir = full_dest_dir
+
     # playbook to get config_db and frr files from non host devices
     playbook_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, "get_snapshot_playbook.yml")
     playbook_path = os.path.normpath(playbook_path)
@@ -109,10 +111,16 @@ def download_template():
         return jsonify({"ok": False, "message": f"Playbook not found: {playbook_path}"}), 500
 
     # run the playbook using the existing inventory
-    extra_vars = {"controller_dest_dir": controller_configs_dir_wsl, "type": "configs", "reservation_id": reservation_id}
+    extra_vars = {"controller_dest_dir": controller_configs_dir, "type": "configs", "reservation_id": reservation_id}
+
+    print(f"controller_configs_dir_wsl = {controller_configs_dir}")
+    print(f"Expected output dir (Windows) = {full_dest_dir}")
 
     try:
         rc, out, err = run_ansible_playbook(inv_path, playbook_path, extra_vars=extra_vars, timeout=900)
+        print(f"Ansible rc={rc}")
+        print(f"Ansible stdout:\n{out}")
+        print(f"Ansible stderr:\n{err}")
     except Exception as e:
         return jsonify({"ok": False, "message": f"Failed to execute ansible playbook: {e}"}), 500
 
@@ -120,7 +128,12 @@ def download_template():
         return jsonify({"ok": False, "message": "Ansible playbook failed while fetching configs.", "rc": rc, "stdout": out, "stderr": err}), 500
 
     # expected directory where playbook saved files
-    playbook_output_dir = os.path.join(CONTROLLER_CONFIGS_DIR, f"res_{reservation_id}_running_configs")
+    playbook_output_dir = full_dest_dir
+
+    print(f"Looking for files in: {playbook_output_dir}")
+    print(f"Directory exists: {os.path.exists(playbook_output_dir)}")
+    if os.path.exists(playbook_output_dir):
+        print(f"Directory contents: {os.listdir(playbook_output_dir)}")
 
     # verify directory exists and collect files
     if not os.path.isdir(playbook_output_dir):
@@ -354,6 +367,23 @@ def run_playbook():
             "message": f"'cmds' expression in playbook {f.filename} differs from the required template and cannot be executed"
         }), 400
 
+    # validate 'when' clause to ensure hosts without commands are skipped
+    expected_when = "commands_map[inventory_hostname] is defined and (commands_map[inventory_hostname] | length > 0)"
+
+    actual_when = task.get('when')
+
+    # normalize whitespace for comparison
+    def normalize_whitespace(command):
+        if command is None:
+            return None
+        return re.sub(r'\s+', ' ', str(command).strip())
+
+    normalized_expected = normalize_whitespace(expected_when)
+    normalized_actual = normalize_whitespace(actual_when)
+
+    if normalized_actual != normalized_expected:
+        return jsonify({"ok": False, "message": f"'when' clause in playbook {f.filename} is missing or incorrect. Expected: '{expected_when}'"}), 400
+
     # check user privilege: if user is full_user skip dangerous command checks
     is_full = is_user_full(username)
     # commands that cannot be executed for limited users
@@ -586,31 +616,64 @@ def run_template():
     # collect files named <hostname>_config_db.json or <hostname>_frr.conf
     name_re_config = re.compile(r'^(.+)_config_db\.json$')
     name_re_frr = re.compile(r'^(.+)_frr\.conf$')
+
+    zip_basename = os.path.splitext(os.path.basename(f.filename))[0]
+    print(f"DEBUG: Looking for folder matching zip name: {zip_basename}")
+
+    all_files = zf.namelist()
+
+    # check existence of folder with same name as zip file
+    target_folder = None
+    for name in all_files:
+        if '/' in name:
+            first_part = name.split('/')[0]
+            if first_part == zip_basename:
+                target_folder = first_part
+                break
+
+    if not target_folder:
+        return jsonify({"ok": False, "message": f"Zip must contain a folder named '{zip_basename}'"}), 400
+
+    print(f"DEBUG: Found target folder: {target_folder}")
+
+    # check valid name of files inside target directory
     files_map = {}
     invalid_names = []
+
     for z in zf.infolist():
+        # skip directory
         if z.is_dir():
             continue
+
+        # consider only files in target_folder
+        if not z.filename.startswith(target_folder + '/'):
+            continue
+
         base = os.path.basename(z.filename)
+
+        # skip if empty file
+        if not base:
+            continue
+
         m_cfg = name_re_config.match(base)
         m_frr = name_re_frr.match(base)
 
         if not (m_cfg or m_frr):
-            invalid_names.append(z.filename)
+            invalid_names.append(base)
             continue
+
         hostname = (m_cfg or m_frr).group(1)
         try:
             content_bytes = zf.read(z)
         except Exception as e:
             return jsonify({"ok": False, "message": f"Failed to read {z.filename} from zip: {e}"}), 400
-        files_map.setdefault(hostname, []).append((base, content_bytes))
-        #files_map[hostname] = (base, content_bytes)
+
+        # save only config_db for JSON visualization (frr.conf is ignored in validation)
+        if m_cfg:
+            files_map.setdefault(hostname, []).append((base, content_bytes))
 
     if invalid_names:
-        return jsonify({"ok": False, "message": f"Zip {zf.filename} contains files not matching '<hostname>_config_db.json' pattern: {invalid_names}"}), 400
-
-    if not files_map:
-        return jsonify({"ok": False, "message": f"Zip {zf.filename} does not contain any '<hostname>_config_db.json' files"}), 400
+        return jsonify({"ok": False, "message": f"Zip contains files with invalid names inside '{target_folder}/' folder: {invalid_names}. Only '<hostname>_config_db.json' and '<hostname>_frr.conf' are allowed"}), 400
 
     # ensure uploaded hosts are subset of inventory
     uploaded_hosts_set = set(files_map.keys())
@@ -623,40 +686,41 @@ def run_template():
     bad_json_files = []
     mgmt_violations = []
     parsed_files = {}  # hostname -> (filename, parsed_obj, raw_bytes)
-    for host, (file_name, content_bytes) in files_map.items():
-        try:
-            text = content_bytes.decode("utf-8")
-        except Exception as e:
-            bad_json_files.append({"host": host, "file": file_name, "error": f"Failed to decode file as text: {e}"})
-            continue
-        try:
-            obj = json.loads(text)
-        except Exception as e:
-            bad_json_files.append({"host": host, "file": file_name, "error": f"Invalid JSON: {e}"})
-            continue
+    for host, files_list in files_map.items():
+        for file_name, content_bytes in files_list:
+            try:
+                text = content_bytes.decode("utf-8")
+            except Exception as e:
+                bad_json_files.append({"host": host, "file": file_name, "error": f"Failed to decode file as text: {e}"})
+                continue
+            try:
+                obj = json.loads(text)
+            except Exception as e:
+                bad_json_files.append({"host": host, "file": file_name, "error": f"Invalid JSON: {e}"})
+                continue
 
-        if not isinstance(obj, dict):
-            bad_json_files.append({"host": host, "file": file_name, "error": "Top-level JSON is not an object/dict"})
-            continue
+            if not isinstance(obj, dict):
+                bad_json_files.append({"host": host, "file": file_name, "error": "Top-level JSON is not an object/dict"})
+                continue
 
-        # validate minimal SONiC config structure
-        valid, errors = validate_config_db_minimal(obj)
-        if not valid:
-            bad_json_files.append({"host": host, "file": file_name, "error": "Config_db minimal validation failed", "details": errors})
-            continue
+            # validate minimal SONiC config structure
+            valid, errors = validate_config_db_minimal(obj)
+            if not valid:
+                bad_json_files.append({"host": host, "file": file_name, "error": "Config_db minimal validation failed", "details": errors})
+                continue
 
-        parsed_files[host] = (file_name, obj, content_bytes)
+            parsed_files[host] = (file_name, obj)
 
-        if not is_full:
-            # reject any modification to MGMT_INTERFACE (top-level key present and non-empty)
-            if "MGMT_INTERFACE" in obj:
-                mgmt_block = obj.get("MGMT_INTERFACE")
-                if isinstance(mgmt_block, dict) and mgmt_block:
-                    mgmt_violations.append({
-                        "host": host,
-                        "file": file_name,
-                        "reason": "MGMT_INTERFACE present (modification of management interface is not allowed for your account)"
-                    })
+            if not is_full:
+                # reject any modification to MGMT_INTERFACE (top-level key present and non-empty)
+                if "MGMT_INTERFACE" in obj:
+                    mgmt_block = obj.get("MGMT_INTERFACE")
+                    if isinstance(mgmt_block, dict) and mgmt_block:
+                        mgmt_violations.append({
+                            "host": host,
+                            "file": file_name,
+                            "reason": "MGMT_INTERFACE present (modification of management interface is not allowed for your account)"
+                        })
 
     if bad_json_files:
         return jsonify({"ok": False, "message": f"One or more files in {zf.filename} are not valid JSON or have wrong format", "results": bad_json_files}), 400
@@ -685,7 +749,70 @@ def run_template():
     # extract zip inside tmp_folder_path
     try:
         with zipfile.ZipFile(zip_path, "r") as zf:
-            zf.extractall(tmp_folder_path)
+            """
+            all_files = zf.namelist()
+
+            # get file zip name without extension
+            zip_basename = os.path.splitext(os.path.basename(f.filename))[0]
+            print(f"DEBUG: Looking for folder matching zip name: {zip_basename}")
+
+            # find folder with same name of zip file
+            target_folder = None
+            for name in all_files:
+                if '/' in name:
+                    first_part = name.split('/')[0]
+                    if first_part == zip_basename:
+                        target_folder = first_part
+                        break
+
+            if not target_folder:
+                raise Exception(f"No folder matching zip filename '{zip_basename}' found in zip")
+
+            print(f"DEBUG: Found target folder in zip: {target_folder}")
+
+            # extract files inside target_folder, remove prefix
+            for member in zf.infolist():
+                # skip folder and files in other folders
+                if not member.filename.startswith(target_folder + '/'):
+                    continue
+
+                # remove target folder prefix
+                relative_path = member.filename[len(target_folder) + 1:]
+
+                # skip if it is the folder or empty paths
+                if not relative_path or member.is_dir():
+                    continue
+
+                # extract files in tmp_folder_path
+                member.filename = relative_path
+                zf.extract(member, tmp_folder_path)
+            """
+            for member in zf.infolist():
+                # only files inside target_folder
+                if not member.filename.startswith(target_folder + '/'):
+                    continue
+                # skip directory
+                if member.is_dir():
+                    continue
+
+                base = os.path.basename(member.filename)
+                # skip empty files
+                if not base:
+                    continue
+
+                # extract file directly in tmp_folder_path with base name
+                member.filename = base
+                zf.extract(member, tmp_folder_path)
+
+            print(f"DEBUG: Extracted files to: {tmp_folder_path}")
+            print(f"DEBUG: Files extracted: {os.listdir(tmp_folder_path)}")
+
+        if TEST:
+            tmp_folder_path_wsl = win_to_wsl_path(tmp_folder_path)
+            print(f"DEBUG: tmp_folder_path_wsl = {tmp_folder_path_wsl}")
+        else:
+            tmp_folder_path_wsl = tmp_folder_path
+
     except zipfile.BadZipFile as e:
         shutil.rmtree(tmp_folder_path)
         return {"ok": False, "message": f"Uploaded file is not a valid zip: {e}"}, 400
@@ -693,21 +820,36 @@ def run_template():
         shutil.rmtree(tmp_folder_path)
         return {"ok": False, "message": f"Failed to extract zip: {e}"}, 500
 
+    if TEST:
+        user_configs_folder = tmp_folder_path_wsl
+    else:
+        user_configs_folder = tmp_folder_path
+
+    print(f"DEBUG: Passing to Ansible: user_configs_folder={user_configs_folder}")
+
     pb_filename = "rollback_playbook.yml"
     pb_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, pb_filename)
 
     # run rollback playbook with extra_vars required by client
-    extra_vars = {"type": "configs", "reservation_id": reservation_id, "user_configs_folder": tmp_folder_name}
+    extra_vars = {"type": "configs", "reservation_id": reservation_id, "user_configs_folder": user_configs_folder}
     rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars)
 
     print("Apply configs playbook rc:", rc)
     print("Apply configs  playbook stdout:", out)
     print("Apply configs  playbook stderr:", err)
 
+    # remove temporary folder after execution
+    try:
+        if os.path.exists(tmp_folder_path):
+            shutil.rmtree(tmp_folder_path)
+            print(f"Removed temp folder: {tmp_folder_path}")
+    except Exception as e:
+        print(f"Warning: failed to remove temp folder {tmp_folder_path}: {e}")
+
     if rc == 0:
-        return jsonify({"ok": True, "message": "Configurations applied", "results": "rc={rc}, stdout={out}, stderr={err}"}), 200
+        return jsonify({"ok": True, "message": "Configurations applied", "results": f"rc={rc}, stdout={out}, stderr={err}"}), 200
     else:
-        return jsonify({"ok": False, "message": f"Apply configs playbook failed", "results": "rc={rc}, stdout={out}, stderr={err}"}), 500
+        return jsonify({"ok": False, "message": f"Apply configs playbook failed", "results": f"rc={rc}, stdout={out}, stderr={err}"}), 500
 
 @app.route('/api/validator/pingallTest', methods=['POST'])
 def pingall_test():

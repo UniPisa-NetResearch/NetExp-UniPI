@@ -739,7 +739,12 @@ const handlePlaybookFile = async () => {
           if (data.message) errMsg = data.message;
           else if (data.error) errMsg = data.error;
           else if (data.__raw_text) errMsg = data.__raw_text;
-
+          if (data.invalid_hosts && data.invalid_hosts.length > 0) {
+             errMsg += '\n\nInvalid Hosts found inside playbook:\n' + data.invalid_hosts.join(', ');
+          }
+          if (data.inventory_hosts && data.inventory_hosts.length > 0) {
+             errMsg += '\n\nValid Inventory Hosts:\n' + data.inventory_hosts.join(', ');
+          }
           if (typeof data.stdout !== 'undefined') stdout = data.stdout;
           if (typeof data.stderr !== 'undefined') stderr = data.stderr;
         } else {
