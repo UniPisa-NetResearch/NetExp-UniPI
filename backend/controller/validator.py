@@ -118,9 +118,9 @@ def download_template():
 
     try:
         rc, out, err = run_ansible_playbook(inv_path, playbook_path, extra_vars=extra_vars, timeout=900)
-        print(f"Ansible rc={rc}")
-        print(f"Ansible stdout:\n{out}")
-        print(f"Ansible stderr:\n{err}")
+        #print(f"Ansible rc={rc}")
+        #print(f"Ansible stdout:\n{out}")
+        #print(f"Ansible stderr:\n{err}")
     except Exception as e:
         return jsonify({"ok": False, "message": f"Failed to execute ansible playbook: {e}"}), 500
 
@@ -488,6 +488,10 @@ def run_playbook():
     try:
         rc, out, err = run_ansible_playbook(inv_path, target_path, timeout=900)
 
+        #print("Playbook rc:", rc)
+        #print("Playbook stdout:", out)
+        #print("Playbook stderr:", err)
+
         if rc == 0:
             return jsonify({
                 "ok": True,
@@ -749,44 +753,6 @@ def run_template():
     # extract zip inside tmp_folder_path
     try:
         with zipfile.ZipFile(zip_path, "r") as zf:
-            """
-            all_files = zf.namelist()
-
-            # get file zip name without extension
-            zip_basename = os.path.splitext(os.path.basename(f.filename))[0]
-            print(f"DEBUG: Looking for folder matching zip name: {zip_basename}")
-
-            # find folder with same name of zip file
-            target_folder = None
-            for name in all_files:
-                if '/' in name:
-                    first_part = name.split('/')[0]
-                    if first_part == zip_basename:
-                        target_folder = first_part
-                        break
-
-            if not target_folder:
-                raise Exception(f"No folder matching zip filename '{zip_basename}' found in zip")
-
-            print(f"DEBUG: Found target folder in zip: {target_folder}")
-
-            # extract files inside target_folder, remove prefix
-            for member in zf.infolist():
-                # skip folder and files in other folders
-                if not member.filename.startswith(target_folder + '/'):
-                    continue
-
-                # remove target folder prefix
-                relative_path = member.filename[len(target_folder) + 1:]
-
-                # skip if it is the folder or empty paths
-                if not relative_path or member.is_dir():
-                    continue
-
-                # extract files in tmp_folder_path
-                member.filename = relative_path
-                zf.extract(member, tmp_folder_path)
-            """
             for member in zf.infolist():
                 # only files inside target_folder
                 if not member.filename.startswith(target_folder + '/'):
@@ -834,9 +800,9 @@ def run_template():
     extra_vars = {"type": "configs", "reservation_id": reservation_id, "user_configs_folder": user_configs_folder}
     rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars)
 
-    print("Apply configs playbook rc:", rc)
-    print("Apply configs  playbook stdout:", out)
-    print("Apply configs  playbook stderr:", err)
+    #print("Apply configs playbook rc:", rc)
+    #print("Apply configs  playbook stdout:", out)
+    #print("Apply configs  playbook stderr:", err)
 
     # remove temporary folder after execution
     try:

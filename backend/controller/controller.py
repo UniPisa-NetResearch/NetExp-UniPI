@@ -2,6 +2,8 @@ import os
 import json
 import re
 import subprocess
+import time
+
 from flask import jsonify, request
 import shutil
 from ..app import app
@@ -138,16 +140,65 @@ def run_ansible_playbook(inventory_path: str, playbook_path: str, extra_vars: di
     else:
         cmd = ["ansible-playbook", "-i", inventory_path, playbook_path]
 
+    cmd += ["--forks", "10"]                                # useful for parallel operations
+
     if ANSIBLE_EXTRA_ARGS:
         cmd += ANSIBLE_EXTRA_ARGS.split()                   # add extra args if present
     if extra_vars:
         cmd += ["--extra-vars", json.dumps(extra_vars)]     # add extra vars if present
     print("Running:", " ".join(cmd))
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout) #run playbook as subprocess
-        return proc.returncode, proc.stdout, proc.stderr
-    except subprocess.TimeoutExpired as te:
-        return 124, "", f"TimeoutExpired: {te}"
+        #proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout) #run playbook as subprocess
+        #return proc.returncode, proc.stdout, proc.stderr
+    #except subprocess.TimeoutExpired as te:
+        #return 124, "", f"TimeoutExpired: {te}"
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            universal_newlines=True
+        )
+
+        stdout_lines = []
+        stderr_lines = []
+
+        # read real time result
+        start_time = time.time()
+
+        while True:
+            if time.time() - start_time > timeout:
+                proc.kill()
+                return 124, ''.join(stdout_lines), f"TimeoutExpired after {timeout}s"
+
+            # check if process is terminated
+            if proc.poll() is not None:
+                break
+
+            # read stdout
+            line = proc.stdout.readline()
+            if line:
+                print(line.rstrip())  # print in real time
+                stdout_lines.append(line)
+
+            time.sleep(0.1)  # small pause
+
+        # read remaining lines
+        remaining_out = proc.stdout.read()
+        if remaining_out:
+            print(remaining_out.rstrip())
+            stdout_lines.append(remaining_out)
+
+        remaining_err = proc.stderr.read()
+        if remaining_err:
+            stderr_lines.append(remaining_err)
+
+        stdout = ''.join(stdout_lines)
+        stderr = ''.join(stderr_lines)
+
+        return proc.returncode, stdout, stderr
+
     except Exception as e:
         return 1, "", str(e)
 
@@ -263,9 +314,9 @@ def grant_access():
     # run ansible-playbook
     extra_vars = {"username": username, "ssh_key": ssh_key, "full_user": bool(full_user)}
     rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars)
-    print("Ansible rc:", rc)
-    print("Ansible stdout:", out)
-    print("Ansible stderr:", err)
+    #print("Ansible rc:", rc)
+    #print("Ansible stdout:", out)
+    #print("Ansible stderr:", err)
 
     if rc == 0:
         # user account creation completed
@@ -295,9 +346,9 @@ def grant_access():
 
             rc, out, err = run_ansible_playbook(inv_path, playbook_path, extra_vars=extra_vars)
 
-            print("Playbook rc:", rc)
-            print("Playbook stdout:", out)
-            print("Playbook stderr:", err)
+            #print("Playbook rc:", rc)
+            #print("Playbook stdout:", out)
+            #print("Playbook stderr:", err)
 
             if rc == 0:
                 return jsonify({"ok": True, "message": "Grant executed", "inventory": inv_path, "stdout": out, "stderr": err}), 200
@@ -379,9 +430,9 @@ def revoke_access():
 
     extra_vars = {"username": username, "ssh_key": ssh_key}
     rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars)
-    print("Ansible revoke rc:", rc)
-    print("Ansible revoke stdout:", out)
-    print("Ansible revoke stderr:", err)
+    #print("Ansible revoke rc:", rc)
+    #print("Ansible revoke stdout:", out)
+    #print("Ansible revoke stderr:", err)
 
     if rc != 0:
         return jsonify({"ok": False, "message": "Ansible revoke failed", "rc": rc, "stdout": out, "stderr": err}), 500
@@ -395,9 +446,9 @@ def revoke_access():
     print(f"Running rollback playbook {pb_path} for snapshot0 (reservation {reservation_id})")
     rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars)
 
-    print("Rollback playbook rc:", rc)
-    print("Rollback playbook stdout:", out)
-    print("Rollback playbook stderr:", err)
+    #print("Rollback playbook rc:", rc)
+    #print("Rollback playbook stdout:", out)
+    #print("Rollback playbook stderr:", err)
 
     if rc != 0:
         return jsonify({"ok": False, "message": f"Rollback playbook failed (rc={rc}, stdout={out}, stderr={err})"}), 500
@@ -591,15 +642,15 @@ def create_snapshot():
 
         rc, out, err = run_ansible_playbook(inv_path, playbook_path, extra_vars=extra_vars)
 
-        print("Playbook rc:", rc)
-        print("Playbook stdout:", out)
-        print("Playbook stderr:", err)
+        #print("Playbook rc:", rc)
+        #print("Playbook stdout:", out)
+        #print("Playbook stderr:", err)
 
         if rc == 0:
-            return jsonify({"ok": True, "message": f"Snapshot '{name}' created", "name": name}), 201
+            return jsonify({"ok": True, "message": f"Snapshot '{name}' created", "name": name}), 200
         else:
             # snapshot created but playbook failed
-            return jsonify({"ok": False, "message": f"Error during snapshot '{name}' creation, playbook failed"}), 201
+            return jsonify({"ok": False, "message": f"Error during snapshot '{name}' creation, playbook failed"}), 400
 
     except Exception as e:
         print(f"Error creating snapshot {snap_dir}: {e}")
@@ -654,9 +705,9 @@ def rollback():
     print(f"Running rollback playbook {pb_path} for snapshot {name} (reservation {reservation_id})")
     rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars)
 
-    print("Rollback playbook rc:", rc)
-    print("Rollback playbook stdout:", out)
-    print("Rollback playbook stderr:", err)
+    #print("Rollback playbook rc:", rc)
+    #print("Rollback playbook stdout:", out)
+    #print("Rollback playbook stderr:", err)
 
     if rc == 0:
         return jsonify({"ok": True, "message": f"Rollback to '{name}' completed"}), 200

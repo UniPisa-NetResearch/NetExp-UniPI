@@ -23,7 +23,7 @@ NETBOX_TOKEN = os.getenv("NETBOX_TOKEN", "6152fbb91529522c72307b194a690c4ca5253e
 
 MAX_HOURS = 72
 TEST = True                    #test mode, each reservation starts at current date + 2 min
-EXPERIMENT_DURATION = 35        #expressed in minutes
+EXPERIMENT_DURATION = 7        #expressed in minutes
 NETBOX_SITE = "testbed"        # useful to change site of netbox
 #NETBOX_SITE = "containerlab"
 nb = pynetbox.api(NETBOX_URL, token=NETBOX_TOKEN)

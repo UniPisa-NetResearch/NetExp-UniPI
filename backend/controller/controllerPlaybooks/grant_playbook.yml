@@ -1,7 +1,8 @@
 - name: Grant SSH access to reservation users (no package installs)
   hosts: all
-  gather_facts: yes
+  gather_facts: no
   become: yes
+  strategy: free               # parallel tasks
   vars:
     test: false                # if false the management interfaces are the real one, otherwise are eth1 and enp1s0
     res_group: resusers        # group used to collect reservation users
@@ -23,39 +24,21 @@
       - tshark
 
   tasks:
-    # detect type of device -----------------------------------------------------------
-
-    # check if SONiC config binary exists
-    - name: Detect presence of 'config' via command -v
-      ansible.builtin.shell: "command -v config || true"
-      register: which_config
-      changed_when: false
-      check_mode: no
-
-    # check if vtysh config binary exists
-    - name: Detect presence of 'vtysh' via command -v
-      ansible.builtin.shell: "command -v vtysh || true"
-      register: which_vtysh
-      changed_when: false
-      check_mode: no
-
-    # set if the device is SONiC switch or minipc Qotom and set the correct interface
-    - name: Set device type facts and default management interface
+    # set is_sonic if the device is SONiC switch or minipc Qotom and set the correct interface
+    - name: Set device type facts and default management interface from inventory role
       ansible.builtin.set_fact:
-        is_sonic: "{{ (which_config.stdout != '' or which_vtysh.stdout != '') | bool }}"
+        is_sonic: "{{ hostvars[inventory_hostname].get('role', '') != 'host' }}"
         mgmt_iface: >-
           {{
             (
-              ( 'eth1' if (which_config.stdout != '' or which_vtysh.stdout != '') else 'enp1s0' )
+              ( 'eth1' if (hostvars[inventory_hostname].get('role', '') != 'host') else 'enp1s0' )
             )
             if ( test | default(False) | bool )
             else
             (
-              (
-                hostvars[inventory_hostname].get('res_iface')
-                if ( hostvars[inventory_hostname].get('res_iface') is defined and hostvars[inventory_hostname].get('res_iface') not in [None, ''] )
-                else ( 'eth0' if (which_config.stdout != '' or which_vtysh.stdout != '') else 'enp2s0' )
-              )
+              hostvars[inventory_hostname].get('res_iface')
+              if ( hostvars[inventory_hostname].get('res_iface') is defined and hostvars[inventory_hostname].get('res_iface') not in [None, ''] )
+              else ( 'eth0' if (hostvars[inventory_hostname].get('role', '') != 'host') else 'enp2s0' )
             )
           }}
 
@@ -68,7 +51,7 @@
         group: root
         mode: '0644'
 
-    # install all the wrappers on the devices ----------------------------------------------
+    # install all the wrappers on the devices
     - block:
       - name: Deploy res_ip wrapper (always)
         ansible.builtin.copy:
@@ -86,49 +69,33 @@
           group: root
           mode: '0755'
 
-      - name: Deploy res_vtysh wrapper (only on SONiC if vtysh present)
+      - name: Deploy res_vtysh wrapper (only on SONiC)
         ansible.builtin.copy:
           src: "wrappers/res_vtysh.sh"
           dest: /usr/local/sbin/res_vtysh
           owner: root
           group: root
           mode: '0755'
-        when: is_sonic and (which_vtysh.stdout != '')
+        when: is_sonic
 
-      - name: Deploy res_config wrapper (only on SONiC if config present)
+      - name: Deploy res_config wrapper (only on SONiC)
         ansible.builtin.copy:
           src: "wrappers/res_config.sh"
           dest: /usr/local/sbin/res_config
           owner: root
           group: root
           mode: '0755'
-        when: is_sonic and (which_config.stdout != '')
+        when: is_sonic
 
       when: not full_user | bool
-    #------------------------------------------------------------------------------------------------------
     # verify which wrappers exist on the target, used to build a convenience map
-    - name: Check presence of installed wrappers on remote
-      ansible.builtin.stat:
-        path: "{{ item }}"
-      loop:
-        - /usr/local/sbin/res_ip
-        - /usr/local/sbin/res_tc
-        - /usr/local/sbin/res_vtysh
-        - /usr/local/sbin/res_config
-      register: stat_wrappers
-      changed_when: false
-      when: not full_user | bool
-
-    # create a dict like { res_ip: true, res_tc: true, ... } to simplify later conditionals
-    - name: Build a dict of wrapper existence for convenience
+    - name: Set wrapper existence based on deployment
       ansible.builtin.set_fact:
-        wrapper_exists: >-
-          {{
-            dict(
-              ['res_ip','res_tc','res_vtysh','res_config']
-              | zip( stat_wrappers.results | map(attribute='stat.exists') )
-            )
-          }}
+        wrapper_exists:
+          res_ip: true
+          res_tc: true
+          res_vtysh: "{{ is_sonic }}"
+          res_config: "{{ is_sonic }}"
       when: not full_user | bool
 
     # ensure the group exists for later user creation
@@ -150,27 +117,26 @@
         groups: "{{ res_group }}"
         append: yes
 
-    # detect real paths for candidate commands using `command -v`
-    - name: Run command -v for each candidate command (detection only)
-      ansible.builtin.shell: "command -v {{ item }} || true"
-      loop: "{{ candidate_cmds }}"
-      register: which_results
+    # detect real paths for candidate commands using `command -v`, create a script that perform the command for each value of the list with one ssh connection
+    - name: Detect all candidate commands at once
+      ansible.builtin.shell: |
+        for cmd in {{ candidate_cmds | join(' ') }}; do
+          path=$(command -v $cmd 2>/dev/null || true)
+          if [ -n "$path" ]; then
+            echo "${cmd} ${path}"
+          fi
+        done
+      register: which_all
       changed_when: false
       check_mode: no
 
     # create a dictionary mapping, example result: { "ip": "/usr/bin/ip", "tc": "/sbin/tc", ... }
     # only for non-empty output
-    - name: Build mapping command -> path (only found entries)
+    - name: Build mapping command -> path from single output
       ansible.builtin.set_fact:
-        found_cmd_paths: >-
-          {{
-            dict(
-              candidate_cmds
-              | zip(which_results.results | map(attribute='stdout'))
-              | selectattr('1','!=','')
-              | list
-            )
-          }}
+        found_cmd_paths: "{{ found_cmd_paths | default({}) | combine({item.split()[0]: item.split()[1]}) }}"
+      loop: "{{ which_all.stdout_lines }}"
+      when: item | trim != ''
 
     # install missing candidate commands via apt (skip config and vtysh, already installed on SONiC and not necessary on minipc)
     # create list of missing commands
@@ -182,15 +148,11 @@
             | difference(['vtysh','config'])
           }}
 
-    #  log missing commands
-    - name: Debug missing commands (for review)
-      ansible.builtin.debug:
-        msg: "Missing commands to install: {{ missing_cmds }}"
-
     # try apt update, ignore_errors preserves flow even if update_cache fails
-    - name: Run apt update (ignore failure of update_cache)
+    - name: Run apt update only if cache is old (ignore failure of update_cache)
       ansible.builtin.apt:
         update_cache: yes
+        cache_valid_time: 86400  # 24 hours in seconds
       ignore_errors: yes
 
     # map command : apt package
@@ -210,14 +172,26 @@
           tshark: tshark
 
     # install missing packages
-    - name: Install packages for missing commands
+    - name: Install packages for missing commands (batch)
       ansible.builtin.apt:
-        name: "{{ pkg_map[item] | default(item) }}"
+        name: "{{ missing_cmds | map('extract', pkg_map, default=missing_cmds) | list }}"
         state: present
-        # do not update cache here
-      loop: "{{ missing_cmds }}"
       when: missing_cmds | length > 0
       ignore_errors: yes
+      async: 300  # timeout of 5 minutes (for slow tasks)
+      poll: 0     # don't wait completion
+      register: apt_install_async
+
+    # wait for async task completion
+    - name: Wait for package installation to complete
+      async_status:
+        jid: "{{ item.ansible_job_id }}"
+      loop: "{{ apt_install_async.results }}"
+      when: apt_install_async is defined and item.ansible_job_id is defined
+      register: apt_install_result
+      until: apt_install_result.finished
+      retries: 60
+      delay: 5
 
     # override commands to use wrappers if installed
     - name: Conditionally override found_cmd_paths for commands that must use wrappers
@@ -245,12 +219,6 @@
         found_cmd_paths_overridden: "{{ found_cmd_paths | default({}) }}"
       when: full_user | bool
 
-    # log the mapping of found commands
-    - name: show found command paths
-      ansible.builtin.debug:
-        msg:
-          found_cmd_paths: "{{ found_cmd_paths }}"
-
     # collect absolute paths (values of the mapping) into a list for sudoers
     - name: Build allowed_bins list from found command paths (absolute paths)
       ansible.builtin.set_fact:
@@ -259,25 +227,12 @@
             (found_cmd_paths_overridden | default(found_cmd_paths)).values() | select('!=', '') | list
           }}
 
-    # print the final list of binaries that will be allowed in sudoers
-    - name: final allowed binaries (absolute paths)
-      ansible.builtin.debug:
-        var: allowed_bins
-
     # compose categorized command lists for sudoers (RES_NET, RES_CONFIG, RES_TEST)
     - name: Compose sudo alias lists (RES_NET, RES_CONFIG, RES_TEST)
       ansible.builtin.set_fact:
         res_net_cmds: "{{ allowed_bins | select('search','/usr/local/sbin/res_ip$|/bin/ip$|/sbin/ip$|/usr/bin/ip$|/usr/sbin/ip$|/bin/ping$|/usr/bin/ping$|/usr/bin/traceroute$|/sbin/traceroute$|/usr/sbin/tc$|/sbin/tc$|/usr/local/sbin/res_tc$') | list }}"
         res_config_cmds: "{{ allowed_bins | select('search','/usr/local/sbin/res_config$|/usr/bin/config$|config$|/usr/local/sbin/res_vtysh$|vtysh$') | list }}"
         res_test_cmds: "{{ allowed_bins | select('search','iperf3$|netperf$|nping$|scapy$|tcpreplay$|tcpdump$|tshark$') | list }}"
-
-    # log the categorized lists
-    - name: show categorized command groups for sudoers
-      ansible.builtin.debug:
-        msg:
-          res_net_cmds: "{{ res_net_cmds }}"
-          res_config_cmds: "{{ res_config_cmds }}"
-          res_test_cmds: "{{ res_test_cmds }}"
 
     # deploy sudoers file (using a template) with only the present absolute paths
     - name: Install limited sudoers for reservation user (only for present commands)

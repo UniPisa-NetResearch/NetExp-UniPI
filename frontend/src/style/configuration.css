@@ -210,12 +210,12 @@
 }
 
 .small-result.error {
-    color: #f8d54c;
+    color: #dc3545;
     font-weight: 600;
 }
 
 .small-result.wait {
-    color: #1e7e34;
+    color: #f8d54c;
     font-weight: 600;
 }
 
