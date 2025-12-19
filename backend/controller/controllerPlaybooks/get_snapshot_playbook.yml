@@ -1,6 +1,7 @@
 - name: Fetch SONiC config_db.json and FRR from non-host devices
   hosts: all
   gather_facts: no
+  strategy: free               # parallel tasks
   vars:
     controller_dest_dir: "controllerConfigs"
     reservation_id: ""

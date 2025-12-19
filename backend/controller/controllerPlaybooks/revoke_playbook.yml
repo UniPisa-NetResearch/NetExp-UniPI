@@ -2,6 +2,7 @@
   hosts: all
   gather_facts: no
   become: yes
+  strategy: free               # parallel tasks
   tasks:
     - name: Ensure operate on correct username variable
       ansible.builtin.set_fact:

@@ -140,7 +140,7 @@ def run_ansible_playbook(inventory_path: str, playbook_path: str, extra_vars: di
     else:
         cmd = ["ansible-playbook", "-i", inventory_path, playbook_path]
 
-    cmd += ["--forks", "10"]                                # useful for parallel operations
+    cmd += ["--forks", "15"]                                # useful for parallel operations
 
     if ANSIBLE_EXTRA_ARGS:
         cmd += ANSIBLE_EXTRA_ARGS.split()                   # add extra args if present

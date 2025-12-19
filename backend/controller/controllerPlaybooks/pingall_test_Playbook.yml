@@ -2,6 +2,7 @@
 - name: Collect data plane ip from shell
   hosts: all
   gather_facts: no
+  strategy: free               # parallel tasks
   tasks:
     - name: Execute 'ip -4 -o addr show' and filter management and loopback IP
       ansible.builtin.shell: |
