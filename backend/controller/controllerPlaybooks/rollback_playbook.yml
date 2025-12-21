@@ -43,6 +43,51 @@
           {%- endif -%}
 
   tasks:
+    - name: Check if per-host config_db exists on controller (type=configs)
+      when:
+        - type == 'configs'
+        - hostvars[inventory_hostname].get('role', '') != 'host'
+      delegate_to: localhost
+      become: false
+      run_once: false
+      stat:
+        path: "{{ src_base_dir }}/{{ inventory_hostname }}_config_db.json"
+      register: cfgdb_stat
+
+    - name: Check if per-host frr.conf exists on controller (type=configs)
+      when:
+        - type == 'configs'
+        - hostvars[inventory_hostname].get('role', '') != 'host'
+      delegate_to: localhost
+      become: false
+      run_once: false
+      stat:
+        path: "{{ src_base_dir }}/{{ inventory_hostname }}_frr.conf"
+      register: frr_stat
+
+    - name: Decide if this host must be configured (type=configs)
+      when:
+        - hostvars[inventory_hostname].get('role', '') != 'host'
+      set_fact:
+        must_configure: >-
+          {% if type == 'rollback' %}
+          true
+          {% else %}
+          {{ (cfgdb_stat.stat.exists | default(false)) or
+             (frr_stat.stat.exists | default(false)) }}
+          {% endif %}
+
+    - name: Cleanup previous temp configs (only non-host devices)
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/new_config.json
+        - /tmp/new_frr.conf
+      when:
+        - hostvars[inventory_hostname].get('role', '') != 'host'
+        - must_configure
+
     - name: Copy config file from snapshot on controller to /tmp/new_config.json (only non-host devices)
       copy:
         src: "{{ src_base_dir }}/{{ inventory_hostname }}_config_db.json"
@@ -52,7 +97,8 @@
         mode: '0644'
       when:
         - hostvars[inventory_hostname].get('role', '') != 'host'
-      ignore_errors: "{{ type == 'configs' }}"
+        - must_configure
+        - (type == 'rollback' or cfgdb_stat.stat.exists | default(false))
 
     - name: Copy frr.conf from snapshot on controller to /tmp/new_frr.conf (only non-host devices)
       copy:
@@ -63,7 +109,8 @@
         mode: '0644'
       when:
         - hostvars[inventory_hostname].get('role', '') != 'host'
-      ignore_errors: "{{ type == 'configs' }}"
+        - must_configure
+        - (type == 'rollback' or frr_stat.stat.exists | default(false))
 
     - name: Move new files into place (config + frr) and sync (only non-host devices)
       shell: |
@@ -83,6 +130,7 @@
       failed_when: cp_result.rc != 0
       when:
         - hostvars[inventory_hostname].get('role', '') != 'host'
+        - must_configure
 
     - name: Reload SONiC config (only non-host devices)
       shell: config reload -y
@@ -90,6 +138,7 @@
       failed_when: reload_result.rc != 0
       when:
         - hostvars[inventory_hostname].get('role', '') != 'host'
+        - must_configure
         - cp_result.stdout is defined and 'moved=1' in cp_result.stdout
 
     - name: Check system health with retries until all services OK (excluding rsync)
@@ -114,6 +163,7 @@
       until: (non_ok_count.stdout | default('0') | int) == 0
       when:
         - hostvars[inventory_hostname].get('role', '') != 'host'
+        - must_configure
         - cp_result.stdout is defined and 'moved=1' in cp_result.stdout
 
     - name: Capture full system-health output for diagnostics
@@ -122,6 +172,7 @@
       changed_when: false
       when:
         - hostvars[inventory_hostname].get('role', '') != 'host'
+        - must_configure
         - cp_result.stdout is defined and 'moved=1' in cp_result.stdout
 
     - name: Fail if after retries there are still non-OK services (excluding rsync)
@@ -133,5 +184,6 @@
           {{ sysready_full.stdout }}
       when:
         - hostvars[inventory_hostname].get('role', '') != 'host'
+        - must_configure
         - cp_result.stdout is defined and 'moved=1' in cp_result.stdout
         - (non_ok_count.stdout | default('0') | int) > 0

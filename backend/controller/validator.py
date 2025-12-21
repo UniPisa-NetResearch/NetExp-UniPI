@@ -839,10 +839,15 @@ def pingall_test():
     local_results_filename = f"pingall_res_{reservation_id}.json"
     local_results_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, local_results_filename)
 
+    if TEST:
+       folder_path_wsl = win_to_wsl_path(local_results_path)
+    else:
+       folder_path_wsl = local_results_path.replace('\\', '/')
+
     pb_filename = "pingall_test_playbook.yml"
     pb_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, pb_filename)
 
-    extra_vars = {"results_file": local_results_path}
+    extra_vars = {"results_file": folder_path_wsl}
 
     # execute pingall playbook
     print(f"Running pingall_test_playbook with inventory {inv_path}")

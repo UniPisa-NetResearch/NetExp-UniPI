@@ -287,6 +287,7 @@ def grant_access():
     full_user =data.get("full_user")
     reservation_id = data.get("reservation_id")
     devices = data.get("devices")
+    containerlab_test = data.get("containerlab_test")
 
     if ssh_key is None or user_id is None or username is None or reservation_id is None or devices is None or full_user is None:
         print("grantAccess: missing required fields")
@@ -303,6 +304,10 @@ def grant_access():
     # create inventory file (only devices with ip)
     inv_path, hosts = write_inventory(reservation_id, devices)
     print("Inventory written:", inv_path, "hosts:", hosts)
+
+    if containerlab_test:
+        active_reservations[username] = reservation_id
+        return jsonify({"ok": True, "message": "Containerlab inventory created"}), 200
 
     # check grant playbook file
     pb_path = get_playbook_template_path("grant")
@@ -391,12 +396,17 @@ def revoke_access():
     user_id = data.get("user_id")
     username = data.get("username")
     reservation_id = data.get("reservation_id")
+    containerlab_test = data.get("containerlab_test")
 
     if ssh_key is None or user_id is None or username is None or reservation_id is None:
         print("revokeAccess: missing required fields")
         return jsonify({"ok": False, "message": "Missing required fields (ssh_key, user_id, username, reservation_id)"}), 400
 
     print("REVOKE ACCESS RECEIVED", data)
+
+    if containerlab_test:
+        del active_reservations[username]
+        return jsonify({"ok": True, "message": "Skip revoke operations for containerlab test"}), 200
 
     # get inventory path
     safe_res = safe_filename(f"res-{reservation_id}-inventory")

@@ -23,9 +23,10 @@ NETBOX_TOKEN = os.getenv("NETBOX_TOKEN", "6152fbb91529522c72307b194a690c4ca5253e
 
 MAX_HOURS = 72
 TEST = True                    #test mode, each reservation starts at current date + 2 min
-EXPERIMENT_DURATION = 5        #expressed in minutes
-NETBOX_SITE = "testbed"        # useful to change site of netbox
-#NETBOX_SITE = "containerlab"
+CONTAINERLAB_TEST = True
+EXPERIMENT_DURATION = 40        #expressed in minutes
+#NETBOX_SITE = "testbed"        # useful to change site of netbox
+NETBOX_SITE = "containerlab"
 nb = pynetbox.api(NETBOX_URL, token=NETBOX_TOKEN)
 
 REDIS_URL = "redis://localhost:6379"
@@ -125,7 +126,8 @@ def send_to_controller(msg_type, user_id, reservation_id):
                     "username": username,
                     "full_user": full_user,
                     "reservation_id": reservation_id,
-                    "devices": devices_list
+                    "devices": devices_list,
+                    "containerlab_test": CONTAINERLAB_TEST
                 }
 
                 # send to controller
@@ -143,7 +145,8 @@ def send_to_controller(msg_type, user_id, reservation_id):
                     "ssh_key": ssh_key,
                     "user_id": user_id,
                     "username": username,
-                    "reservation_id": reservation_id
+                    "reservation_id": reservation_id,
+                    "containerlab_test": CONTAINERLAB_TEST
                 }
                 try:
                     resp = requests.post("http://localhost:5002/api/controller/revokeAccess", json=revoke_payload, timeout=10)

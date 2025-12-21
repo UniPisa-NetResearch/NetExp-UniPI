@@ -370,27 +370,36 @@ const runTest = async () => {
 
         if (data.message) out += data.message + '\n\n';
         // set output on a specific format
-        out += `Summary: passed ${summary.passed || 0} / ${summary.total || results.length} failed ${summary.failed || 0}\n\n`;
+        out += `Summary:\n`;
+        out += `  Reachable: ${summary.reachable || 0}\n`;
+        out += `  Unreachable: ${summary.unreachable || 0}\n`;
+        if (summary.no_source_ip > 0) out += `  No source IP: ${summary.no_source_ip}\n`;
+        if (summary.no_dest_ip > 0) out += `  No destination IP: ${summary.no_dest_ip}\n`;
+        out += `  Total tests: ${summary.total || 0}\n\n`;
+
+        const statusEmoji = {
+            'reachable': '✓',
+            'unreachable': '✗',
+            'no_source_ip': '⚠',
+            'no_dest_ip': '⚠'
+        };
 
         results.forEach(r => {
-            const status = r.success ? 'OK' : 'FAIL';
-            out += `[${r.src} -> ${r.dst}] ${status}\n`;
+            const emoji = statusEmoji[r.status] || '?';
+            out += `${emoji} [${r.src} -> ${r.dst}] ${r.status.toUpperCase()}\n`;
             if (r.output) {
-                const snippet = typeof r.output === 'string' ? r.output : JSON.stringify(r.output);
-                out += '  ' + snippet.split('\n').slice(0, 5).join('\n  ');
-                if (snippet.split('\n').length > 5) out += '\n  ...';
+                out += `  ${r.output}\n`;
             }
-            out += '\n\n';
+            out += '\n';
         });
 
-        if (results.length === 0 && data.__raw_text) {
-            out += `Raw output:\n${data.__raw_text}`;
-        }
+        const reachable = summary.reachable || 0;
+        const total = summary.total || 0;
 
-        // set UI color based on overall result
-        const failed = (summary.failed || 0);
-        if (failed === 0) {
+        if (reachable === total) {
             setTestOutputType('success');
+        } else if (summary.unreachable > 0 || summary.no_source_ip > 0 || summary.no_dest_ip > 0) {
+            setTestOutputType('wait');  // warning in yellow
         } else {
             setTestOutputType('error');
         }
