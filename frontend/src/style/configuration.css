@@ -129,7 +129,7 @@
   margin-bottom: 50px;
   flex-wrap: wrap;
   justify-content: flex-start;
- font-weight: 500;
+  font-weight: 500;
   color: #343a40;
 }
 
@@ -222,4 +222,90 @@
 .delete[disabled], .delete:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+/* principal container for HTML output*/
+.output-html {
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 14px;
+  overflow-y: auto;
+  padding: 8px;
+  background-color: rgba(255, 255, 255, 0.5);
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  min-height: 60px;
+  line-height: 1.5;
+  display: block;
+  resize: vertical;
+}
+
+/* placeholder when void output */
+.placeholder-text {
+  color: #757575;
+}
+
+/* message header */
+.message-header {
+  font-weight: 500;
+  margin-bottom: 16px;
+  color: #343a40;
+  display: block;
+}
+
+/* summary section */
+.summary-section {
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #dee2e6;
+  display: block;
+}
+
+.summary-section strong {
+  font-weight: 500;
+  color: #343a40;
+}
+
+.summary-section > div {
+  margin-bottom: 4px;
+  display: block;
+}
+
+.status-success,
+.status-error,
+.status-warning,
+.status-default {
+  display: block !important;
+  margin-bottom: 16px;
+  padding: 8px;
+  border-radius: 4px;
+  background-color: #f8f9fa;
+  width: 98%;
+}
+
+.status-success {
+  color: #28a745;
+  border-left: 4px solid #28a745;
+}
+
+.status-error {
+  color: #dc3545;
+  border-left: 4px solid #dc3545;
+}
+
+.status-warning {
+  color: #ffc107;
+  border-left: 4px solid #ffc107;
+}
+
+.result-main {
+  font-weight: 500;
+  margin-bottom: 4px;
+  display: block;
+}
+
+.result-detail {
+  font-size: 13px;
+  opacity: 0.9;
+  margin-left: 8px;
+  display: block;
 }

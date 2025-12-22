@@ -359,7 +359,8 @@ const runTest = async () => {
 
         if (!resp.ok) {
             const err = (data && (data.message || data.error)) ? (data.message || data.error) : `HTTP ${resp.status}`;
-            setTestOutput(`Ping all failed: ${err}\n\n${JSON.stringify(data, null, 2)}`);
+            const errorHtml = `<div class="status-error">Ping all failed: ${err}</div><pre>${JSON.stringify(data, null, 2)}</pre>`;
+            setTestOutput(errorHtml);
             setTestOutputType('error');
             return;
         }
@@ -368,14 +369,16 @@ const runTest = async () => {
         const results = Array.isArray(data.results) ? data.results : [];
         let out = '';
 
-        if (data.message) out += data.message + '\n\n';
+        if (data.message) out += `<div class="message-header">${data.message}</div>`;
         // set output on a specific format
-        out += `Summary:\n`;
-        out += `  Reachable: ${summary.reachable || 0}\n`;
-        out += `  Unreachable: ${summary.unreachable || 0}\n`;
-        if (summary.no_source_ip > 0) out += `  No source IP: ${summary.no_source_ip}\n`;
-        if (summary.no_dest_ip > 0) out += `  No destination IP: ${summary.no_dest_ip}\n`;
-        out += `  Total tests: ${summary.total || 0}\n\n`;
+        out += `<div class="summary-section">`;
+        out += `<div><strong>Summary:</strong></div>`;
+        out += `<div>&nbsp;&nbsp;Reachable: ${summary.reachable || 0}</div>`;
+        out += `<div>&nbsp;&nbsp;Unreachable: ${summary.unreachable || 0}</div>`;
+        if (summary.no_source_ip > 0) out += `<div>&nbsp;&nbsp;No source IP: ${summary.no_source_ip}</div>`;
+        if (summary.no_dest_ip > 0) out += `<div>&nbsp;&nbsp;No destination IP: ${summary.no_dest_ip}</div>`;
+        out += `<div>&nbsp;&nbsp;Total tests: ${summary.total || 0}</div>`;
+        out += `</div>`;
 
         const statusEmoji = {
             'reachable': '✓',
@@ -384,13 +387,23 @@ const runTest = async () => {
             'no_dest_ip': '⚠'
         };
 
+        const statusClass = {
+            'reachable': 'status-success',
+            'unreachable': 'status-error',
+            'no_source_ip': 'status-warning',
+            'no_dest_ip': 'status-warning'
+        };
+
         results.forEach(r => {
             const emoji = statusEmoji[r.status] || '?';
-            out += `${emoji} [${r.src} -> ${r.dst}] ${r.status.toUpperCase()}\n`;
+            const cssClass = statusClass[r.status] || 'status-default';
+
+            out += `<div class="${cssClass}">`;
+            out += `<div class="result-main">${emoji} [${r.src} → ${r.dst}] ${r.status.toUpperCase()}</div>`;
             if (r.output) {
-                out += `  ${r.output}\n`;
+                out += `<div class="result-detail">&nbsp;&nbsp;${r.output}</div>`;
             }
-            out += '\n';
+           out += `</div>`;
         });
 
         const reachable = summary.reachable || 0;
@@ -403,10 +416,11 @@ const runTest = async () => {
         } else {
             setTestOutputType('error');
         }
+
         setTestOutput(out);
 
     } catch (e) {
-        setTestOutput(`Network or client error: ${e.message || e}`);
+        setTestOutput(`<div class="status-error">Network or client error: ${e.message || e}</div>`);
         setTestOutputType('error');
     } finally {
         setWaitOperation(false);
@@ -844,8 +858,10 @@ const handlePlaybookFile = async () => {
         <div className="output-row">
           <div className="aligned-group">
             <label className="label-inline label-output">Output:</label>
-            <textarea readOnly className={`output-field ${testOutputType}`} value={testOutput}
-                      placeholder="Output of the test"/>
+            <div
+              className={`output-field output-html ${testOutputType}`}
+              dangerouslySetInnerHTML={{ __html: testOutput || '<span class="placeholder-text">Output of the test</span>' }}
+            />
           </div>
         </div>
 
