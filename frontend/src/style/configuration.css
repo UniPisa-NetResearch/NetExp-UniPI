@@ -241,7 +241,15 @@
 
 /* placeholder when void output */
 .placeholder-text {
+  text-align: left;
+  display: block;
   color: #757575;
+}
+
+.wait-message {
+  color: #f8d54c;
+  text-align: left;
+  display: block;
 }
 
 /* message header */

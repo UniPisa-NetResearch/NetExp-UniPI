@@ -14,6 +14,17 @@ export default function Experiment({username, reservation_id}) {
     const [selectedMetrics, setSelectedMetrics] = useState([]); // multiple selection
     const [telemetryType, setTelemetryType] = useState(''); // radio button status
 
+    // free mode states
+    const [freePlaybookFiles, setFreePlaybookFiles] = useState([]);
+    const freeModeFileRef = useRef(null);
+    const [experimentMessage, setExperimentMessage] = useState('');
+    const [experimentMessageType, setExperimentMessageType] = useState(''); // 'success' | 'error'
+    // guided mode states
+    const [guidedDuration, setGuidedDuration] = useState('');
+    const deviceList = ['sw1', 'sw2', 'sw3', 'sw4', 'h1', 'h2', 'h3', 'h4'];
+    const [iperfClients, setIperfClients] = useState([]);
+    const [iperfServers, setIperfServers] = useState([]);
+
     // list of metrics
     const metricOptions = [
         'CPU Utilization',
@@ -234,248 +245,357 @@ export default function Experiment({username, reservation_id}) {
             prev.map(m => m.id === id ? { ...m, value } : m)
         );
     };
+    // Free mode ---------------------------------------------------------------------------
+    const handleFreePlaybookFiles = (e) => {
+        const files = Array.from(e.target.files || []);
 
+        const validFiles = files.filter(f => {
+            const name = f.name.toLowerCase();
+            return name.endsWith('.yml') || name.endsWith('.yaml');
+        });
+
+        setFreePlaybookFiles(prev => [...prev, ...validFiles]);
+        e.target.value = null;
+    };
+
+    const removeFreePlaybookFile = (index) => {
+        setFreePlaybookFiles(prev => prev.filter((_, i) => i !== index));
+    };
+
+    const chooseFreePlaybooks = () => {
+        freeModeFileRef.current?.click();
+    };
+
+    // Interactive mode -------------------------------------------------------------------------
+    const handleCreateExperiment = () => {
+        // check each field is not empty
+        const allRowsFilled = playbookRows.every(row => row.executionTime && row.file);
+
+        if (!experimentDuration || experimentDuration === '0') {
+            setExperimentMessage('Error: Experiment duration is required');
+            setExperimentMessageType('error');
+            return;
+        }
+
+        if (!allRowsFilled) {
+            setExperimentMessage('Error: All playbook rows must have execution time and file selected');
+            setExperimentMessageType('error');
+            return;
+        }
+
+        setExperimentMessage('experiment_description.yml');
+        setExperimentMessageType('success');
+    };
+
+    // Guided mode -------------------------------------------------------------------------------
+    const handleDeviceSelect = (device, type) => {
+        if (type === 'client') {
+            setIperfClients(prev =>
+                prev.includes(device)
+                    ? prev.filter(d => d !== device)
+                    : [...prev, device]
+            );
+        } else {
+            setIperfServers(prev =>
+                prev.includes(device)
+                    ? prev.filter(d => d !== device)
+                    : [...prev, device]
+            );
+        }
+    };
 
     // ----------------------------------------------
     return (
         <div className="home-content-wrapper experiment-wrapper">
 
             <div className="card experiment-card">
-                <h2 className="title">⚙️ Setup and run experiment</h2>
+                <h2 className="title">🧪 Setup and run experiment</h2>
 
                 {/* Row for type 1 of experiment */}
-                <div className="config-row main-actions-row">
-                    <div className="aligned-group">
-                        <label className="label-inline">Download description template:</label>
-                        <button type="button" className="template-button configuration-button"
-                                onClick={() => downloadFile("template")} disabled={runningExperiment}>Download
-                        </button>
-                        <label className="label-inline additional-margin">Load experiment description:</label>
-                        <button type="button" className="template-button configuration-button choose-button"
-                                onClick={experimentDescription.choose} disabled={runningExperiment}>Choose description
-                        </button>
-                        <div className={`selected-file-name file-status-${experimentDescription.fileType}`}>{experimentDescription.fileName}</div>
-                        <input ref={experimentDescription.ref} type="file" style={{display: 'none'}} onChange={experimentDescription.onChange}
-                               disabled={runningExperiment}/>
+                <div className="experiment-section">
+                    <h3 className="section-title">Free Mode</h3>
+                    <div className="section-content">
+                        <div className="config-row">
+                            <label className="label-inline label-fixed-width">Download description template:</label>
+                            <button type="button" className="template-button configuration-button"
+                                    onClick={() => downloadFile("template")} disabled={runningExperiment}>Download
+                            </button>
+                            <label className="label-inline label-fixed-width additional-margin">Load experiment description:</label>
+                            <button type="button" className="template-button configuration-button choose-button"
+                                    onClick={experimentDescription.choose} disabled={runningExperiment}>Choose
+                                description
+                            </button>
+                            <div
+                                className={`selected-file-name file-status-${experimentDescription.fileType}`}>{experimentDescription.fileName}</div>
+                            <input ref={experimentDescription.ref} type="file" style={{display: 'none'}}
+                                   onChange={experimentDescription.onChange}
+                                   disabled={runningExperiment}/>
+                        </div>
+
+                        <div className="config-row">
+                            <label className="label-inline label-fixed-width">Load playbooks:</label>
+                            <button type="button" className="template-button configuration-button choose-button"
+                                    onClick={chooseFreePlaybooks} disabled={runningExperiment}>Choose playbooks
+                            </button>
+                            <input ref={freeModeFileRef} type="file" multiple accept=".yml,.yaml"
+                                   style={{display: 'none'}} onChange={handleFreePlaybookFiles}
+                                   disabled={runningExperiment}/>
+                        </div>
+
+                        {freePlaybookFiles.length > 0 && (
+                            <div className="config-row">
+                                <div className="playbook-files-list">
+                                    {freePlaybookFiles.map((file, idx) => (
+                                        <div key={idx} className="playbook-file-item">
+                                            <span className="file-name-text">{file.name}</span>
+                                            <button
+                                                type="button"
+                                                className="remove-file-btn"
+                                                onClick={() => removeFreePlaybookFile(idx)}
+                                                disabled={runningExperiment}
+                                            >×</button>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
 
-                {/* Experiment duration line */}
-                <div className="duration-row">
-                    <div className="aligned-group">
-                        <label className="label-inline label-output">Insert experiment duration (seconds):</label>
-                        <input
-                            type={"text"}
-                            className={`duration-field`}
-                            value={experimentDuration}
-                            onChange={handleNumericChange(setExperimentDuration)}
-                            readOnly={runningExperiment}
-                        />
-                        <button type="button" className="send-button experiment-button additional-margin"
-                                disabled={runningExperiment}>Create experiment
-                        </button>
-                    </div>
-                </div>
-
-                {/* Row for second mode of experiment definition */}
-                {/*<div className="config-row main-actions-row">
-                    <div className="aligned-group">
-                        <label className="label-inline">Time of execution (seconds):</label>
-                        <textarea
-                            className={`duration-field`}
-                            value={executionTime}
-                            onChange={handleNumericChange(setExecutionTime)}
-                            readOnly={runningExperiment}
-                        />
-                        <label className="label-inline additional-margin">Load playbook/script:</label>
-                        <button type="button" className="playbook-button configuration-button choose-button"
-                                onClick={experimentStep.choose} disabled={runningExperiment}>Choose file
-                        </button>
-                        <div className={`selected-file-name file-status-${experimentStep.fileType}`}>{experimentStep.fileName}</div>
-                        <input ref={experimentStep.ref} type="file" style={{display: 'none'}}
-                               onChange={experimentStep.onChange}
-                               disabled={runningExperiment}/>
-                        <label className="label-inline add-remove-label" onClick={() => handleAddRemove('add_playbook')}>+</label>
-                        <label className="label-inline add-remove-label" onClick={() => handleAddRemove('remove_playbook')}>-</label>
-                    </div>
-                </div>*/}
-                {playbookRows.map((row, idx) => (
-                    <div key={row.id} className="config-row main-actions-row">
-                        <div className="aligned-group">
-                            <label className="label-inline">Time of execution (seconds):</label>
+                <div className="experiment-section">
+                    <h3 className="section-title">Interactive Mode</h3>
+                    <div className="section-content">
+                        <div className="config-row">
+                            {/* Experiment duration line */}
+                            <label className="label-inline label-fixed-width label-output">Insert experiment duration
+                                (seconds):</label>
                             <input
                                 type={"text"}
-                                className="duration-field"
-                                value={row.executionTime}
-                                onChange={(e) => handleExecutionTimeChange(row.id, e.target.value)}
+                                className={`duration-field`}
+                                value={experimentDuration}
+                                onChange={handleNumericChange(setExperimentDuration)}
                                 readOnly={runningExperiment}
                             />
-                            <label className="label-inline additional-margin">Load playbook/script:</label>
+                            <button type="button" className="send-button experiment-button additional-margin"
+                                    onClick={handleCreateExperiment}
+                                    disabled={runningExperiment}>Create experiment
+                            </button>
+                            <div className={`experiment-created-message ${experimentMessageType}`}>{experimentMessage}</div>
+
+                        </div>
+                        {/* Row for second mode of experiment definition */}
+                        {playbookRows.map((row, idx) => (
+                            <div key={row.id} className="config-row config-row-nowrap">
+                                <label className="label-inline label-fixed-width">Time of execution
+                                    (seconds):</label>
+                                <input
+                                        type={"text"}
+                                        className="duration-field"
+                                        value={row.executionTime}
+                                        onChange={(e) => handleExecutionTimeChange(row.id, e.target.value)}
+                                        readOnly={runningExperiment}
+                                    />
+                                    <label className="label-inline label-secondary additional-margin">Load
+                                        playbook/script:</label>
+                                    <button
+                                        type="button"
+                                        className="playbook-button configuration-button choose-button"
+                                        onClick={() => choosePlaybookFile(row.id)}
+                                        disabled={runningExperiment}
+                                    >
+                                        Choose file
+                                    </button>
+                                    <div
+                                        className={`selected-file-name file-status-${row.fileType}`}>{row.fileName}</div>
+                                    <input
+                                        type="file"
+                                        ref={(el) => (playbookFileRefs.current[row.id] = el)}
+                                        style={{display: 'none'}}
+                                        onChange={(e) => onPlaybookFileChange(e, row.id)}
+                                        disabled={runningExperiment}
+                                    />
+                                    <label
+                                        className="label-inline add-remove-label"
+                                        onClick={() => handleAddPlaybookRow(idx)}
+                                    >+</label>
+                                    <label
+                                        className="label-inline add-remove-label"
+                                        onClick={() => handleRemovePlaybookRow(idx)}
+                                        style={{
+                                            opacity: idx === 0 ? 0.3 : 1,
+                                            pointerEvents: idx === 0 ? 'none' : 'auto'
+                                        }}
+                                    >-</label>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="experiment-section">
+                        <h3 className="section-title">Guided Mode</h3>
+                        <div className="section-content">
+                            {/* Row for third type of experiment */}
+                            <div className="config-row">
+                                <label className="label-inline label-fixed-width">Experiment duration (seconds):</label>
+                                <input
+                                    type="text"
+                                    className="duration-field"
+                                    value={guidedDuration}
+                                    onChange={handleNumericChange(setGuidedDuration)}
+                                    readOnly={runningExperiment}
+                                />
+                            </div>
+                            <div className="config-row">
+                                <label className="label-inline label-fixed-width">Select iperf configuration:</label>
+                            </div>
+
+                            {/* Device selection table */}
+                            <div className="config-row">
+                                <div className="device-selection-table">
+                                    <div className="device-table-header">
+                                        <span className="device-col">Device</span>
+                                        <span className="role-col">Client</span>
+                                        <span className="role-col">Server</span>
+                                    </div>
+                                    {deviceList.map(device => (
+                                        <div key={device} className="device-table-row">
+                                            <span className="device-col">{device}</span>
+                                            <span className="role-col">
+
+                                                <input
+                                                    type="checkbox"
+                                                    checked={iperfClients.includes(device)}
+                                                    onChange={() => handleDeviceSelect(device, 'client')}
+                                                    disabled={runningExperiment}
+                                                />
+                                            </span>
+                                            <span className="role-col">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={iperfServers.includes(device)}
+                                                    onChange={() => handleDeviceSelect(device, 'server')}
+                                                    disabled={runningExperiment}
+                                                />
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                <div className="experiment-section">
+                    <h3 className="section-title">Telemetry</h3>
+                    <div className="section-content">
+                        {/* choose metric row */}
+                        <div className="config-row">
+                            <label className="label-inline label-fixed-width label-output">Choose metrics:</label>
+                            <select
+                                className="select-field"
+                                disabled={runningExperiment}
+                                multiple={true}                 // multiple selection
+                                value={selectedMetrics}
+                                onChange={(e) => {
+                                    // multiple selection logic
+                                    const options = Array.from(e.target.options);
+                                    const value = options.filter(option => option.selected).map(option => option.value);
+                                    setSelectedMetrics(value);
+                                }}
+                            >
+                                {/* select fill with metricOptions */}
+                                {metricOptions.map((metric) => (
+                                    <option key={metric} value={metric}>
+                                        {metric}
+                                    </option>
+                                ))}
+                            </select>
+                            <button type="button"
+                                    className="template-button configuration-button choose-button additional-margin"
+                                    onClick={handleAddMetrics} disabled={runningExperiment}>Add metrics
+                            </button>
+                        </div>
+
+                        {/* add metric row */}
+                        {metricRows.map((m, idx) => (
+                            <div key={m.id} className="config-row">
+                                <label className="label-inline label-fixed-width">Add metric:</label>
+
+                                <input
+                                    type={"text"}
+                                    className="add-metric-field"
+                                    value={m.value}
+                                    onChange={(e) => handleMetricChange(m.id, e.target.value)}
+                                    readOnly={runningExperiment}
+                                />
+
+                                <label className="label-inline add-remove-label" onClick={() => handleAddMetricRow(idx)}>+</label>
+
+                                <label
+                                    className="label-inline add-remove-label"
+                                    onClick={() => handleRemoveMetricRow(idx)}
+                                    style={{
+                                        opacity: idx === 0 ? 0.3 : 1,
+                                        pointerEvents: idx === 0 ? 'none' : 'auto'
+                                    }}
+                                >-</label>
+                            </div>
+                        ))}
+
+                        {/* Telemetry type row */}
+                        <div className="config-row">
+                            <label className="label-inline label-fixed-width">Telemetry type:</label>
+                            <div className="radio-group">
+                                <input
+                                    type="radio"
+                                    id="realTime"
+                                    name="telemetry_type"
+                                    value="Real time mode"
+                                    checked={telemetryType === 'Real time mode'}
+                                    onChange={(e) => setTelemetryType(e.target.value)}
+                                    disabled={runningExperiment}
+                                />
+                                <label className="label-inline label-radio" htmlFor="realTime">Real time mode</label>
+                                <input
+                                    type="radio"
+                                    id="afterExperiment"
+                                    name="telemetry_type"
+                                    value="After experiment mode"
+                                    checked={telemetryType === 'After experiment mode'}
+                                    onChange={(e) => setTelemetryType(e.target.value)}
+                                    disabled={runningExperiment}
+                                />
+                                <label className="label-inline label-radio" htmlFor="afterExperiment">After experiment
+                                    mode</label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="experiment-section experiment-controls">
+                    {/* Experiment time left row */}
+                    <div className="config-row config-row-space-between">
+                        <div className="time-left-group">
+                            <label className="label-inline label-fixed-width">Experiment time left:</label>
+                            <label className="label-inline time-display">--:--</label>
+                        </div>
+                        {/* Experiment buttons */}
+                        <div className="experiment-buttons">
+                            <button type="button" className="rollback-button configuration-button"
+                                    disabled={runningExperiment}>Run experiment
+                            </button>
                             <button
                                 type="button"
-                                className="playbook-button configuration-button choose-button"
-                                onClick={() => choosePlaybookFile(row.id)}
-                                disabled={runningExperiment}
+                                className="delete-button delete configuration-button"
+                                disabled={!runningExperiment}
                             >
-                            Choose file
+                                Finish experiment
                             </button>
-                            <div className={`selected-file-name file-status-${row.fileType}`}>{row.fileName}</div>
-                            <input
-                                type="file"
-                                ref={(el) => (playbookFileRefs.current[row.id] = el)}
-                                style={{ display: 'none' }}
-                                onChange={(e) => onPlaybookFileChange(e, row.id)}
-                                disabled={runningExperiment}
-                            />
-                            <label
-                                className="label-inline add-remove-label"
-                                onClick={() => handleAddPlaybookRow(idx)}
-                            >+</label>
-                            <label
-                                className="label-inline add-remove-label"
-                                onClick={() => handleRemovePlaybookRow(idx)}
-                                style={{
-                                    opacity: idx === 0 ? 0.3 : 1,
-                                    pointerEvents: idx === 0 ? 'none' : 'auto'
-                                }}
-                            >-</label>
                         </div>
                     </div>
-                ))}
-
-                {/* Row for third type of experiment */}
-                <div className="config-row main-actions-row">
-                    <div className="aligned-group">
-                        <label className="label-inline">Download description template:</label>
-                        <button type="button" className="template-button configuration-button"
-                                onClick={() => downloadFile("template")} disabled={runningExperiment}>Download
-                        </button>
-                        <label className="label-inline additional-margin">Load experiment description:</label>
-                        <button type="button" className="template-button configuration-button choose-button"
-                                onClick={experimentDescriptionThird.choose} disabled={runningExperiment}>Choose description
-                        </button>
-                        <div className={`selected-file-name file-status-${experimentDescriptionThird.fileType}`}>{experimentDescriptionThird.fileName}</div>
-                        <input ref={experimentDescriptionThird.ref} type="file" style={{display: 'none'}} onChange={experimentDescriptionThird.onChange}
-                               disabled={runningExperiment}/>
-                    </div>
-                </div>
-
-                {/* choose metric row */}
-                <div className="config-row">
-                    <div className="aligned-group">
-                        <label className="label-inline label-output">Choose metrics:</label>
-                        <select
-                            className="select-field"
-                            disabled={runningExperiment}
-                            multiple={true}                 // multiple selection
-                            value={selectedMetrics}
-                            onChange={(e) => {
-                                // multiple selection logic
-                                const options = Array.from(e.target.options);
-                                const value = options.filter(option => option.selected).map(option => option.value);
-                                setSelectedMetrics(value);
-                            }}
-                        >
-                            {/* select fill with metricOptions */}
-                            {metricOptions.map((metric) => (
-                                <option key={metric} value={metric}>
-                                    {metric}
-                                </option>
-                            ))}
-                        </select>
-                        <button type="button" className="template-button configuration-button choose-button additional-margin"
-                                onClick={handleAddMetrics} disabled={runningExperiment}>Add metrics
-                        </button>
-                    </div>
-                </div>
-
-                {/* add metric row */}
-                {/*
-                <div className="config-row main-actions-row">
-                    <div className="aligned-group">
-                        <label className="label-inline">Add metric:</label>
-                        <textarea
-                            className={`add-metric-field`}
-                            value={newMetric}
-                            onChange={(e) => setNewMetric(e.target.value)} // input management
-                            readOnly={runningExperiment}
-                        />
-                        <label className="label-inline add-remove-label" onClick={() => handleAddRemove('add_metric')}>+</label>
-                        <label className="label-inline add-remove-label" onClick={() => handleAddRemove('remove_metric')}>-</label>
-                    </div>
-                </div>
-                */}
-                {metricRows.map((m, idx) => (
-                    <div key={m.id} className="config-row main-actions-row">
-                        <div className="aligned-group">
-                            <label className="label-inline">Add metric:</label>
-
-                            <input
-                                type={"text"}
-                                className="add-metric-field"
-                                value={m.value}
-                                onChange={(e) => handleMetricChange(m.id, e.target.value)}
-                                readOnly={runningExperiment}
-                            />
-
-                            <label className="label-inline add-remove-label" onClick={() => handleAddMetricRow(idx)}>+</label>
-
-                            <label
-                                className="label-inline add-remove-label"
-                                onClick={() => handleRemoveMetricRow(idx)}
-                                style={{
-                                    opacity: idx === 0 ? 0.3 : 1,
-                                    pointerEvents: idx === 0 ? 'none' : 'auto'
-                                }}
-                            >-</label>
+                    <div className="config-row">
+                        <div className="experiment-output-message">
+                            {/* Initial void message, change after run/delete */}
                         </div>
-                    </div>
-                ))}
-
-                {/* Telemetry type row */}
-                <div className="config-row main-actions-row">
-                    <label className="label-inline">Telemetry type:</label>
-                    <input
-                        type="radio"
-                        id="realTime"
-                        name="telemetry_type"
-                        value="Real time mode"
-                        checked={telemetryType === 'Real time mode'}
-                        onChange={(e) => setTelemetryType(e.target.value)}
-                        disabled={runningExperiment}
-                    />
-                    <label className="label-inline" htmlFor="realTime">Real time mode</label>
-                    <input
-                        type="radio"
-                        id="afterExperiment"
-                        name="telemetry_type"
-                        value="After experiment mode"
-                        checked={telemetryType === 'After experiment mode'}
-                        onChange={(e) => setTelemetryType(e.target.value)}
-                        disabled={runningExperiment}
-                    />
-                    <label className="label-inline" htmlFor="afterExperiment">After experiment mode</label>
-                </div>
-
-                {/* Experiment time left row */}
-                <div className="config-row main-actions-row">
-                    <label className="label-inline">Experiment time left:</label>
-                    <label className="label-inline">--:--</label>
-                </div>
-
-                {/* Experiment buttons */}
-                <div className="config-row main-actions-row">
-                    <div className="experiment-buttons">
-                        <button type="button" className="rollback-button configuration-button"
-                                disabled={runningExperiment}>Run experiment
-                        </button>
-                        <button
-                            type="button"
-                            className="delete-button delete configuration-button"
-                            disabled={!runningExperiment}
-                        >
-                            Finish experiment
-                        </button>
                     </div>
                 </div>
             </div>

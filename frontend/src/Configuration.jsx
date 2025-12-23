@@ -336,7 +336,7 @@ export default function Configuration({username, reservation_id}) {
 
 
 const runTest = async () => {
-    setTestOutput('Running ping all test, please wait...');
+    setTestOutput('<span class="wait-message">Running ping all test, please wait...</span>');
     setTestOutputType('wait');
     setWaitOperation(true);
 
