@@ -44,11 +44,29 @@ export default function Experiment({username, reservation_id}) {
     const idCounter = useRef(1);
 
     const [playbookRows, setPlaybookRows] = useState([
-      { id: 1, executionTime: '', file: null, fileName: '', fileType: '' }
+      { id: 1, executionTime: '', file: null, fileName: '', fileType: '', selectedDevices: [] }
     ]);
 
     const playbookFileRefs = useRef({});
 
+    const handleDeviceToggle = (rowId, device) => {
+        setPlaybookRows(prev =>
+            prev.map(r => {
+                if (r.id === rowId) {
+                    const isSelected = r.selectedDevices.includes(device);
+                    return {
+                        ...r,
+                        selectedDevices: isSelected
+                            ? r.selectedDevices.filter(d => d !== device)
+                            : [...r.selectedDevices, device]
+                    };
+                }
+                return r;
+            })
+        );
+    };
+
+    // metrics section --------------------------------------------------------------------------
     const metricIdCounter = useRef(1);
 
     const [metricRows, setMetricRows] = useState([
@@ -181,7 +199,8 @@ export default function Experiment({username, reservation_id}) {
                 executionTime: '',
                 file: null,
                 fileName: '',
-                fileType: ''
+                fileType: '',
+                selectedDevices: []
             });
             return copy;
         });
@@ -266,8 +285,31 @@ export default function Experiment({username, reservation_id}) {
         freeModeFileRef.current?.click();
     };
 
+    const downloadTemplate = async () => {
+        setWaitOperation(true);
+        const payload = {reservation_id};
+        try {
+            const response = await fetch(`http://localhost:5004/api/experimenter/template`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/x-yaml'},
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                console.error('Failed to download template');
+            }
+
+            const blob = await response.blob();
+            createDownload(blob, 'experiment_template.yml');
+        } catch (error) {
+            console.error('Error downloading template:', error);
+        } finally {
+            setWaitOperation(false);
+        }
+    };
+
     // Interactive mode -------------------------------------------------------------------------
-    const handleCreateExperiment = () => {
+    const handleCreateExperiment = async () => {
         // check each field is not empty
         const allRowsFilled = playbookRows.every(row => row.executionTime && row.file);
 
@@ -292,8 +334,50 @@ export default function Experiment({username, reservation_id}) {
             return;
         }
 
-        setExperimentMessage('experiment_description.yml');
-        setExperimentMessageType('success');
+        const formData = new FormData();
+        formData.append('duration', experimentDuration);
+        formData.append('reservation_id', reservation_id);
+
+        // add playbook rows as JSON
+        const playbooksData = playbookRows.map(row => ({
+            execution_time: row.executionTime,
+            devices: row.selectedDevices,
+            filename: row.fileName
+        }));
+
+        formData.append('playbooks_data', JSON.stringify(playbooksData));
+
+        // add file
+        playbookRows.forEach((row, index) => {
+            if (row.file) {
+                formData.append(`playbook_${index}`, row.file);
+            }
+        });
+
+        setWaitOperation(true);
+        try {
+            const response = await fetch('http://localhost:5004/api/experimenter/createExperiment', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!response.ok) {
+                console.error('Failed to create experiment');
+            }
+
+            const blob = await response.blob();
+            const filename = `res_${reservation_id}_exp_description.yml`;
+            createDownload(blob, filename);
+
+            setExperimentMessage(filename);
+            setExperimentMessageType('success');
+        } catch (error) {
+            console.error('Error creating experiment:', error);
+            setExperimentMessage('Error creating experiment');
+            setExperimentMessageType('error');
+        } finally {
+            setWaitOperation(false);
+        }
     };
 
     // Guided mode -------------------------------------------------------------------------------
@@ -335,7 +419,7 @@ export default function Experiment({username, reservation_id}) {
                         <div className="config-row">
                             <label className="label-inline label-fixed-width">Download description template:</label>
                             <button type="button" className="template-button configuration-button"
-                                    onClick={() => downloadFile("template")} disabled={runningExperiment}>Download
+                                    onClick={downloadTemplate} disabled={runningExperiment || waitOperation}>Download
                             </button>
                             <label className="label-inline label-fixed-width additional-margin">Load experiment description:</label>
                             <button type="button" className="template-button configuration-button choose-button"
@@ -401,28 +485,26 @@ export default function Experiment({username, reservation_id}) {
                         </div>
                         {/* Row for second mode of experiment definition */}
                         {playbookRows.map((row, idx) => (
-                            <div key={row.id} className="config-row config-row-nowrap">
-                                <label className="label-inline label-fixed-width">Time of execution
-                                    (seconds):</label>
+                            <div key={row.id} className="config-row config-row-nowrap  playbook-row-container">
+                                <label className="label-inline label-time">Time of execution(seconds):</label>
                                 <input
                                     type={"text"}
-                                    className="duration-field"
+                                    className="time-field-short"
                                     value={row.executionTime}
                                     onChange={(e) => handleExecutionTimeChange(row.id, e.target.value)}
                                     readOnly={runningExperiment}
                                 />
-                                <label className="label-inline label-secondary additional-margin">Load
-                                    playbook/script:</label>
+                                <label className="label-inline label-playbook">Load playbook:</label>
                                 <button
                                     type="button"
-                                    className="playbook-button configuration-button choose-button"
+                                    className="playbook-button configuration-button"
                                     onClick={() => choosePlaybookFile(row.id)}
-                                        disabled={runningExperiment}
+                                    disabled={runningExperiment}
                                 >
                                     Choose file
                                 </button>
                                 <div
-                                    className={`selected-file-name file-status-${row.fileType}`}>{row.fileName}</div>
+                                    className={`selected-file-name-compact file-status-${row.fileType}`}>{row.fileName}</div>
                                 <input
                                     type="file"
                                     ref={(el) => (playbookFileRefs.current[row.id] = el)}
@@ -430,6 +512,20 @@ export default function Experiment({username, reservation_id}) {
                                     onChange={(e) => onPlaybookFileChange(e, row.id)}
                                     disabled={runningExperiment}
                                 />
+                                <label className="label-inline label-devices">Devices:</label>
+                                <div className="device-checkboxes">
+                                    {deviceList.map(device => (
+                                        <label key={device} className="device-checkbox-label">
+                                            <input
+                                                type="checkbox"
+                                                checked={row.selectedDevices.includes(device)}
+                                                onChange={() => handleDeviceToggle(row.id, device)}
+                                                disabled={runningExperiment}
+                                            />
+                                            <span>{device}</span>
+                                        </label>
+                                    ))}
+                                </div>
                                 <label
                                     className="label-inline add-remove-label"
                                     onClick={() => handleAddPlaybookRow(idx)}

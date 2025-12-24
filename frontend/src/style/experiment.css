@@ -380,3 +380,106 @@
   margin-left: 12px;
   flex: 1;
 }
+
+.playbook-row-container {
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.label-time {
+  min-width: 60px;
+  margin-right: 4px;
+  white-space: nowrap;
+}
+
+.time-field-short {
+  width: 170px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  height: 25px;
+  padding: 4px;
+}
+
+.label-playbook {
+  min-width: 65px;
+  margin-left: 12px;
+  margin-right: 4px;
+  white-space: nowrap;
+}
+
+.selected-file-name-compact {
+  width: 140px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  padding: 4px 8px;
+  margin-right: 8px;
+}
+
+.selected-file-name-compact.file-status-valid {
+  color: #1e7e34;
+  border: 1px solid #28a745;
+  background-color: rgba(40, 167, 69, 0.1);
+  border-radius: 4px;
+}
+
+.selected-file-name-compact.file-status-invalid {
+  color: #dc3545;
+  border: 1px solid #dc3545;
+  background-color: rgba(220, 53, 69, 0.1);
+  border-radius: 4px;
+}
+
+.label-devices {
+  min-width: 55px;
+  margin-left: 8px;
+  margin-right: 4px;
+  white-space: nowrap;
+}
+
+/* Device checkboxes inline */
+.device-checkboxes {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  align-items: center;
+  margin-right: 12px;
+  max-width: 300px;
+}
+
+.device-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background-color: rgba(255, 255, 255, 0.8);
+  transition: background-color 0.2s;
+  white-space: nowrap;
+}
+
+.device-checkbox-label:hover {
+  background-color: rgba(0, 123, 255, 0.1);
+}
+
+.device-checkbox-label input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  margin: 0;
+}
+
+.device-checkbox-label span {
+  font-weight: 500;
+  color: #343a40;
+}
+
+.device-checkbox-label input[type="checkbox"]:checked + span {
+  color: #007bff;
+  font-weight: 600;
+}
