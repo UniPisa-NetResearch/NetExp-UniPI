@@ -165,7 +165,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   font-size: 13px;
-  padding-left: 8px;
+  padding: 8px 12px;
   margin-right:7px;
 }
 
@@ -207,7 +207,7 @@
   color: white;
 }
 
-.rollback-button {
+.start-button {
   background-color: #eccb47;
   color: white;
 }
@@ -228,7 +228,7 @@
   background-color: #056fe1;
 }
 
-.rollback-button:hover {
+.start-button:hover {
   background-color: #dfb813;
   color: white;
 }
@@ -307,9 +307,9 @@
 .experiment-created-message {
   padding: 8px 12px;
   border-radius: 4px;
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 600;
-  min-width: 200px;
+
 }
 
 .experiment-created-message.success {
@@ -369,4 +369,14 @@
   cursor: pointer;
   width: 18px;
   height: 18px;
+}
+
+.guided-row {
+  align-items: center; /*flex-start;*/
+  gap: 12px;
+}
+
+.guided-right {
+  margin-left: 12px;
+  flex: 1;
 }

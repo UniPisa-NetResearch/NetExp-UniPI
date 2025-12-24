@@ -272,13 +272,22 @@ export default function Experiment({username, reservation_id}) {
         const allRowsFilled = playbookRows.every(row => row.executionTime && row.file);
 
         if (!experimentDuration || experimentDuration === '0') {
-            setExperimentMessage('Error: Experiment duration is required');
+            setExperimentMessage('Experiment duration is required');
             setExperimentMessageType('error');
             return;
         }
 
         if (!allRowsFilled) {
-            setExperimentMessage('Error: All playbook rows must have execution time and file selected');
+            setExperimentMessage('Following rows must have execution time and file selected');
+            setExperimentMessageType('error');
+            return;
+        }
+
+        // check for invalid files
+        const hasInvalidFiles = playbookRows.some(row => row.fileType === 'invalid');
+
+        if (hasInvalidFiles) {
+            setExperimentMessage('Invalid playbook files detected');
             setExperimentMessageType('error');
             return;
         }
@@ -290,17 +299,25 @@ export default function Experiment({username, reservation_id}) {
     // Guided mode -------------------------------------------------------------------------------
     const handleDeviceSelect = (device, type) => {
         if (type === 'client') {
-            setIperfClients(prev =>
-                prev.includes(device)
-                    ? prev.filter(d => d !== device)
-                    : [...prev, device]
-            );
+            // deselect, if client selected
+            if (iperfClients.includes(device)) {
+                setIperfClients(prev => prev.filter(d => d !== device));
+                setIperfServers(prev => prev.filter(d => d !== device)); // remove from server
+            } else {
+                // select as client, remove from server
+                setIperfClients(prev => [...prev, device]);
+                setIperfServers(prev => prev.filter(d => d !== device));
+            }
         } else {
-            setIperfServers(prev =>
-                prev.includes(device)
-                    ? prev.filter(d => d !== device)
-                    : [...prev, device]
-            );
+            // deselect, if server selected
+            if (iperfServers.includes(device)) {
+                setIperfServers(prev => prev.filter(d => d !== device));
+                setIperfClients(prev => prev.filter(d => d !== device)); // // remove from client
+            } else {
+                // // select as server, remove from  client
+                setIperfServers(prev => [...prev, device]);
+                setIperfClients(prev => prev.filter(d => d !== device));
+            }
         }
     };
 
@@ -326,7 +343,7 @@ export default function Experiment({username, reservation_id}) {
                                 description
                             </button>
                             <div
-                                className={`selected-file-name file-status-${experimentDescription.fileType}`}>{experimentDescription.fileName}</div>
+                                className={`selected-file-name file-status-${experimentDescription.fileType} additional-margin`}>{experimentDescription.fileName}</div>
                             <input ref={experimentDescription.ref} type="file" style={{display: 'none'}}
                                    onChange={experimentDescription.onChange}
                                    disabled={runningExperiment}/>
@@ -334,7 +351,7 @@ export default function Experiment({username, reservation_id}) {
 
                         <div className="config-row">
                             <label className="label-inline label-fixed-width">Load playbooks:</label>
-                            <button type="button" className="template-button configuration-button choose-button"
+                            <button type="button" className="playbook-button configuration-button choose-button"
                                     onClick={chooseFreePlaybooks} disabled={runningExperiment}>Choose playbooks
                             </button>
                             <input ref={freeModeFileRef} type="file" multiple accept=".yml,.yaml"
@@ -381,7 +398,6 @@ export default function Experiment({username, reservation_id}) {
                                     disabled={runningExperiment}>Create experiment
                             </button>
                             <div className={`experiment-created-message ${experimentMessageType}`}>{experimentMessage}</div>
-
                         </div>
                         {/* Row for second mode of experiment definition */}
                         {playbookRows.map((row, idx) => (
@@ -389,68 +405,68 @@ export default function Experiment({username, reservation_id}) {
                                 <label className="label-inline label-fixed-width">Time of execution
                                     (seconds):</label>
                                 <input
-                                        type={"text"}
-                                        className="duration-field"
-                                        value={row.executionTime}
-                                        onChange={(e) => handleExecutionTimeChange(row.id, e.target.value)}
-                                        readOnly={runningExperiment}
-                                    />
-                                    <label className="label-inline label-secondary additional-margin">Load
-                                        playbook/script:</label>
-                                    <button
-                                        type="button"
-                                        className="playbook-button configuration-button choose-button"
-                                        onClick={() => choosePlaybookFile(row.id)}
-                                        disabled={runningExperiment}
-                                    >
-                                        Choose file
-                                    </button>
-                                    <div
-                                        className={`selected-file-name file-status-${row.fileType}`}>{row.fileName}</div>
-                                    <input
-                                        type="file"
-                                        ref={(el) => (playbookFileRefs.current[row.id] = el)}
-                                        style={{display: 'none'}}
-                                        onChange={(e) => onPlaybookFileChange(e, row.id)}
-                                        disabled={runningExperiment}
-                                    />
-                                    <label
-                                        className="label-inline add-remove-label"
-                                        onClick={() => handleAddPlaybookRow(idx)}
-                                    >+</label>
-                                    <label
-                                        className="label-inline add-remove-label"
-                                        onClick={() => handleRemovePlaybookRow(idx)}
-                                        style={{
-                                            opacity: idx === 0 ? 0.3 : 1,
-                                            pointerEvents: idx === 0 ? 'none' : 'auto'
-                                        }}
-                                    >-</label>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-
-                    <div className="experiment-section">
-                        <h3 className="section-title">Guided Mode</h3>
-                        <div className="section-content">
-                            {/* Row for third type of experiment */}
-                            <div className="config-row">
-                                <label className="label-inline label-fixed-width">Experiment duration (seconds):</label>
-                                <input
-                                    type="text"
+                                    type={"text"}
                                     className="duration-field"
-                                    value={guidedDuration}
-                                    onChange={handleNumericChange(setGuidedDuration)}
+                                    value={row.executionTime}
+                                    onChange={(e) => handleExecutionTimeChange(row.id, e.target.value)}
                                     readOnly={runningExperiment}
                                 />
+                                <label className="label-inline label-secondary additional-margin">Load
+                                    playbook/script:</label>
+                                <button
+                                    type="button"
+                                    className="playbook-button configuration-button choose-button"
+                                    onClick={() => choosePlaybookFile(row.id)}
+                                        disabled={runningExperiment}
+                                >
+                                    Choose file
+                                </button>
+                                <div
+                                    className={`selected-file-name file-status-${row.fileType}`}>{row.fileName}</div>
+                                <input
+                                    type="file"
+                                    ref={(el) => (playbookFileRefs.current[row.id] = el)}
+                                    style={{display: 'none'}}
+                                    onChange={(e) => onPlaybookFileChange(e, row.id)}
+                                    disabled={runningExperiment}
+                                />
+                                <label
+                                    className="label-inline add-remove-label"
+                                    onClick={() => handleAddPlaybookRow(idx)}
+                                >+</label>
+                                <label
+                                    className="label-inline add-remove-label"
+                                    onClick={() => handleRemovePlaybookRow(idx)}
+                                    style={{
+                                        opacity: idx === 0 ? 0.3 : 1,
+                                        pointerEvents: idx === 0 ? 'none' : 'auto'
+                                    }}
+                                >-</label>
                             </div>
-                            <div className="config-row">
-                                <label className="label-inline label-fixed-width">Select iperf configuration:</label>
-                            </div>
+                        ))}
+                    </div>
+                </div>
 
-                            {/* Device selection table */}
-                            <div className="config-row">
+                <div className="experiment-section">
+                    <h3 className="section-title">Guided Mode</h3>
+                    <div className="section-content">
+                        {/* Row for third type of experiment */}
+                        <div className="config-row">
+                            <label className="label-inline label-fixed-width">Experiment duration (seconds):</label>
+                            <input
+                                type="text"
+                                className="duration-field"
+                                value={guidedDuration}
+                                onChange={handleNumericChange(setGuidedDuration)}
+                                readOnly={runningExperiment}
+                            />
+                        </div>
+
+                        <div className="config-row guided-row">
+                            <label className="label-inline label-fixed-width">Select iperf configuration:</label>
+
+                            <div className="guided-right">
+                                {/* Device selection table */}
                                 <div className="device-selection-table">
                                     <div className="device-table-header">
                                         <span className="device-col">Device</span>
@@ -461,7 +477,6 @@ export default function Experiment({username, reservation_id}) {
                                         <div key={device} className="device-table-row">
                                             <span className="device-col">{device}</span>
                                             <span className="role-col">
-
                                                 <input
                                                     type="checkbox"
                                                     checked={iperfClients.includes(device)}
@@ -483,6 +498,7 @@ export default function Experiment({username, reservation_id}) {
                             </div>
                         </div>
                     </div>
+                </div>
 
                 <div className="experiment-section">
                     <h3 className="section-title">Telemetry</h3>
@@ -509,8 +525,9 @@ export default function Experiment({username, reservation_id}) {
                                     </option>
                                 ))}
                             </select>
+
                             <button type="button"
-                                    className="template-button configuration-button choose-button additional-margin"
+                                    className="send-button configuration-button choose-button additional-margin"
                                     onClick={handleAddMetrics} disabled={runningExperiment}>Add metrics
                             </button>
                         </div>
@@ -580,7 +597,7 @@ export default function Experiment({username, reservation_id}) {
                         </div>
                         {/* Experiment buttons */}
                         <div className="experiment-buttons">
-                            <button type="button" className="rollback-button configuration-button"
+                            <button type="button" className="start-button configuration-button"
                                     disabled={runningExperiment}>Run experiment
                             </button>
                             <button
@@ -592,6 +609,7 @@ export default function Experiment({username, reservation_id}) {
                             </button>
                         </div>
                     </div>
+
                     <div className="config-row">
                         <div className="experiment-output-message">
                             {/* Initial void message, change after run/delete */}
