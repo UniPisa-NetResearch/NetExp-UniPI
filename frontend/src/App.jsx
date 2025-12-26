@@ -44,6 +44,7 @@ function App() {
     const [isAuthenticated, setIsAuthenticated] = useState(false);
     const [currentUser, setCurrentUser] = useState(null);
     const [currentUserId, setCurrentUserId] = useState(null);
+    const [isAdmin, setIsAdmin] = useState(false);
     const [reservationId, setReservationId] = useState(null);
 
     // tracks if a reservation is active (token granted) to show the timer
@@ -96,7 +97,7 @@ function App() {
         setIsAuthenticated(true);
         setCurrentUser(userData.username);
         setCurrentUserId(userData.user_id);
-
+        setIsAdmin(userData.is_admin);
         checkActiveReservation(userData.username);
     };
 
@@ -105,6 +106,7 @@ function App() {
         setIsAuthenticated(false);
         setCurrentUser(null);
         setCurrentUserId(null);
+        setIsAdmin(false);
         // reset all reservation states on logout
         setIsReservationActive(false);
         setActiveReservationExpiration(null);
@@ -211,7 +213,7 @@ function App() {
             <Route element={<ProtectedRoute isAuthenticated={isAuthenticated} />}>
 
                 {/* Home Page */}
-                <Route path="/" element={<NavbarWrapper><Home username={currentUser} /></NavbarWrapper>} />
+                <Route path="/" element={<NavbarWrapper><Home username={currentUser} isAdmin={isAdmin} userId={currentUserId}/></NavbarWrapper>} />
                 <Route path="/reservation" element={<NavbarWrapper><Reservation username={currentUser} isReservationActive={isReservationActive} /> </NavbarWrapper>} />
                 <Route path="/configuration" element={<NavbarWrapper><ConfigurationGuard isReservationPermitted={isReservationActive}><Configuration username={currentUser} reservation_id={reservationId}/> </ConfigurationGuard></NavbarWrapper>} />
                 {/*<Route path="/configuration" element={<NavbarWrapper><Configuration username={currentUser} reservation_id={reservationId}/></NavbarWrapper>} />*/}

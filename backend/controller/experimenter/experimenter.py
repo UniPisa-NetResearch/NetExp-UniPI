@@ -151,4 +151,4 @@ def create_experiment():
 if __name__ == '__main__':
 
     # host 0.0.0.0 often necessary in virtual environments or containers.
-    app.run(debug=False, host='0.0.0.0', port=5004)
+    app.run(debug=False, host='0.0.0.0', port=5004, use_reloader=False)

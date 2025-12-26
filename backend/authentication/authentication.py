@@ -1,9 +1,16 @@
 from flask import jsonify, request
-from ..database.db import db, User
+from ..database.db import db, User, Reservation, ReservationDevice
 import base64
+from redis import Redis
+from rq import Queue
+from rq.job import Job
+from ..utils import get_next_available_id
 from ..app import app
 
 SUPPORTED_KEY_TYPES = ['ssh-ed25519', 'ssh-rsa']
+REDIS_URL = "redis://localhost:6379"
+redis = Redis.from_url(REDIS_URL)
+queue = Queue(connection=redis)
 
 def check_ssh_key(ssh_key):
     # separate the key elements
@@ -43,7 +50,7 @@ def login():
     user = User.query.filter_by(username=username).first()
 
     if user and user.check_password(password):
-        return jsonify({"message": "Login successful", "user_id": user.id, "username": user.username}), 200
+        return jsonify({"message": "Login successful", "user_id": user.id, "username": user.username, "is_admin": user.is_admin}), 200
     else:
         return jsonify({"message": "Invalid username or password"}), 401
 
@@ -71,12 +78,21 @@ def signup():
     if error:
         return error
 
+    # get next available ID (fills gaps)
+    next_id = get_next_available_id(User)
+
     # User creation
-    new_user = User(username=username, ssh_key=ssh_key)
+    new_user = User(id=next_id, username=username, ssh_key=ssh_key)
     new_user.set_password(password)
 
     db.session.add(new_user)
     try:
+        db.session.commit()
+        # Reset sequence to avoid conflicts
+        db.session.execute(db.text("""
+                    SELECT setval(pg_get_serial_sequence('"user"', 'id'), 
+                                 (SELECT MAX(id) FROM "user"), true);
+                """))
         db.session.commit()
         return jsonify({"message": "Registration successful. You can now log in.", "user_id": new_user.id, "username": new_user.username}), 201
     except Exception as ex:
@@ -136,6 +152,160 @@ def change_key():
     else:
         return jsonify({"message": "User not found"}), 404
 
+
+# Get all users (admin only)
+@app.route('/api/auth/admin/get_all_users', methods=['GET'])
+def get_all_users():
+    try:
+        users = User.query.order_by(User.id).all()
+        users_list = [{
+            'id': user.id,
+            'username': user.username,
+            'full_user': user.full_user,
+            'is_admin': user.is_admin
+        } for user in users]
+        return jsonify({"users": users_list}), 200
+    except Exception as ex:
+        app.logger.error(f"Error fetching users: {ex}")
+        return jsonify({"message": "Failed to fetch users"}), 500
+
+def cancel_jobs(reservation_id):
+    job_ids = [
+        f"res-{reservation_id}-start",
+        f"res-{reservation_id}-end"
+    ]
+
+    for job_id in job_ids:
+        try:
+            job = Job.fetch(job_id, connection=redis)
+            job.cancel()
+            app.logger.info(f"Cancelled job: {job_id}")
+        except Exception as job_ex:
+            app.logger.warning(f"Could not cancel job {job_id}: {job_ex}")
+
+# Delete user and their reservations (admin only)
+@app.route('/api/auth/admin/delete_user', methods=['DELETE'])
+def delete_user():
+    data = request.get_json()
+    user_id = data.get('user_id')
+
+    if not user_id:
+        return jsonify({"message": "User ID is required"}), 400
+
+    try:
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"message": "User not found"}), 404
+
+        # Delete all reservations for this user
+        reservations = Reservation.query.filter_by(username=user.username).all()
+
+        for reservation in reservations:
+            cancel_jobs(reservation.id)
+
+            db.session.delete(reservation)
+
+        # Delete the user
+        db.session.delete(user)
+        db.session.commit()
+
+        return jsonify({"message": "User and related reservations deleted successfully"}), 200
+    except Exception as ex:
+        db.session.rollback()
+        app.logger.error(f"Error deleting user: {ex}")
+        return jsonify({"message": "Failed to delete user"}), 500
+
+
+# Update user permissions (admin only)
+@app.route('/api/auth/admin/update_user', methods=['PUT'])
+def update_user():
+    data = request.get_json()
+    user_id = data.get('user_id')
+    full_user = data.get('full_user')
+    is_admin = data.get('is_admin')
+    current_user_id = data.get('current_user_id')
+
+    if not user_id:
+        return jsonify({"message": "User ID is required"}), 400
+
+    try:
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"message": "User not found"}), 404
+
+        # Update fields
+        if full_user is not None:
+            user.full_user = full_user
+
+        # Only update is_admin if not modifying self
+        if is_admin is not None and user_id != current_user_id:
+            user.is_admin = is_admin
+
+        db.session.commit()
+        return jsonify({"message": "User updated successfully"}), 200
+    except Exception as ex:
+        db.session.rollback()
+        app.logger.error(f"Error updating user: {ex}")
+        return jsonify({"message": "Failed to update user"}), 500
+
+
+# Get all reservations with devices (admin only)
+@app.route('/api/auth/admin/get_all_reservations', methods=['GET'])
+def get_all_reservations():
+    try:
+        reservations = Reservation.query.order_by(Reservation.startDate.desc(), Reservation.startTime.desc()).all()
+        reservations_list = []
+
+        for res in reservations:
+            # Get devices for this reservation
+            devices = ReservationDevice.query.filter_by(reservation_id=res.id).all()
+            device_tags = [dev.asset_tag for dev in devices]
+
+            reservations_list.append({
+                'id': res.id,
+                'username': res.username,
+                'start_date': res.startDate.isoformat(),
+                'end_date': res.endDate.isoformat(),
+                'start_time': res.startTime.strftime('%H:%M'),
+                'end_time': res.endTime.strftime('%H:%M'),
+                'has_token': res.token is not None,
+                'devices': device_tags
+            })
+
+        return jsonify({"reservations": reservations_list}), 200
+    except Exception as ex:
+        app.logger.error(f"Error fetching reservations: {ex}")
+        return jsonify({"message": "Failed to fetch reservations"}), 500
+
+
+# Delete reservation and cancel Redis jobs (admin only)
+@app.route('/api/auth/admin/delete_reservation', methods=['DELETE'])
+def delete_reservation():
+    data = request.get_json()
+    reservation_id = data.get('reservation_id')
+
+    if not reservation_id:
+        return jsonify({"message": "Reservation ID is required"}), 400
+
+    try:
+        reservation = Reservation.query.get(reservation_id)
+        if not reservation:
+            return jsonify({"message": "Reservation not found"}), 404
+
+        # Cancel Redis jobs
+        cancel_jobs(reservation_id)
+
+        # Delete reservation (CASCADE will delete ReservationDevice entries)
+        db.session.delete(reservation)
+        db.session.commit()
+
+        return jsonify({"message": "Reservation deleted successfully"}), 200
+    except Exception as ex:
+        db.session.rollback()
+        app.logger.error(f"Error deleting reservation: {ex}")
+        return jsonify({"message": "Failed to delete reservation"}), 500
+
+
 if __name__ == '__main__':
     with app.app_context():
         # create tables on the DB, if they don't exist
@@ -146,4 +316,4 @@ if __name__ == '__main__':
             print(f"ERROR: Could not connect to PostgresSQL. Ensure the DB server is running and accessible: {e}")
 
     # host 0.0.0.0 often necessary in virtual environments or containers.
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=False)

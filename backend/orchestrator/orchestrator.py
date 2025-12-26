@@ -4,9 +4,10 @@ from flask import jsonify, request
 from backend.orchestrator.socketio_instance import socketio
 from backend.orchestrator.orchestrator_jobs import reservation_start_job, reservation_end_job
 from ..database.db import db, User, Reservation, ReservationDevice
+from ..utils import get_next_available_id
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
-from sqlalchemy import tuple_, and_, text
+from sqlalchemy import tuple_, and_
 from sqlalchemy.exc import SQLAlchemyError
 import os
 import pynetbox
@@ -24,7 +25,7 @@ NETBOX_TOKEN = os.getenv("NETBOX_TOKEN", "6152fbb91529522c72307b194a690c4ca5253e
 MAX_HOURS = 72
 TEST = True                    #test mode, each reservation starts at current date + 2 min
 CONTAINERLAB_TEST = False       # useful to test pingall
-EXPERIMENT_DURATION = 40        #expressed in minutes
+EXPERIMENT_DURATION = 5        #expressed in minutes
 NETBOX_SITE = "testbed"        # useful to change site of netbox
 #NETBOX_SITE = "containerlab"
 nb = pynetbox.api(NETBOX_URL, token=NETBOX_TOKEN)
@@ -401,8 +402,12 @@ def check_reservation():
                 "conflicts": conflicts
             }), 409
 
+    # Get next available ID (fills gaps)
+    next_id = get_next_available_id(Reservation)
+
     # no conflict found, reservation creation
     new_res = Reservation(
+        id=next_id,
         username=username,
         startDate=start_dt.date(),
         endDate=end_dt.date(),
@@ -426,6 +431,13 @@ def check_reservation():
             )
             db.session.add(rd)
 
+        db.session.commit()
+
+        # Reset sequence to avoid conflicts
+        db.session.execute(db.text("""
+                   SELECT setval(pg_get_serial_sequence('reservation', 'id'), 
+                                (SELECT MAX(id) FROM reservation), true);
+               """))
         db.session.commit()
 
         # job scheduling
@@ -513,35 +525,6 @@ def delete_reservation():
         db.session.delete(reservation_to_delete)
         db.session.commit()
 
-        # reset sequence so the next inserted id is coherent
-        # if the table is empty, lst attribute os setval is false, otherwise true
-        reset_sql = text("""
-                    WITH max_ids AS (
-                        SELECT
-                            (SELECT MAX(id) FROM reservation) AS max_res_id,
-                            (SELECT MAX(id) FROM reservation_device) AS max_dev_id
-                    )
-                    SELECT setval(
-                        pg_get_serial_sequence('reservation', 'id'),
-                        COALESCE(t1.max_res_id, 1),
-                        CASE 
-                            WHEN t1.max_res_id IS NULL THEN FALSE  
-                            ELSE TRUE
-                        END
-                    ) AS res_reset_value,
-            
-                   setval(
-                        pg_get_serial_sequence('reservation_device', 'id'),
-                        COALESCE(t1.max_dev_id, 1),
-                        CASE 
-                            WHEN t1.max_dev_id IS NULL THEN FALSE
-                            ELSE TRUE
-                        END
-                    ) AS dev_reset_value
-                    FROM max_ids AS t1;
-                """)
-        db.session.execute(reset_sql)
-        db.session.commit()
         return jsonify({"message": "Reservation deleted successfully"}), 200
 
     except Exception as e:

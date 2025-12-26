@@ -727,4 +727,4 @@ def rollback():
 if __name__ == '__main__':
 
     # host 0.0.0.0 often necessary in virtual environments or containers.
-    app.run(debug=True, host='0.0.0.0', port=5002)
+    app.run(debug=True, host='0.0.0.0', port=5002, use_reloader=False)

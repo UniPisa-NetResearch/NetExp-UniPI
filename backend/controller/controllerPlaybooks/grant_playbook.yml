@@ -104,6 +104,29 @@
         name: "{{ res_group }}"
         state: present
 
+    - name: Ensure clean state - remove existing user and sudoers if present
+      block:
+        - name: Remove existing user
+          ansible.builtin.user:
+            name: "{{ username }}"
+            state: absent
+            remove: yes
+            force: yes
+          ignore_errors: yes
+
+        - name: Remove existing sudoers file
+          ansible.builtin.file:
+            path: "/etc/sudoers.d/{{ username }}"
+            state: absent
+          ignore_errors: yes
+
+        - name: Remove existing SSH Match block
+          ansible.builtin.lineinfile:
+            path: /etc/ssh/sshd_config
+            regexp: "^Match User {{ username }}$"
+            state: absent
+          ignore_errors: yes
+
     # create the reservation user, it cannot log in with password (ssh key only)
     - name: Create user account {{ username }}
       ansible.builtin.user:
