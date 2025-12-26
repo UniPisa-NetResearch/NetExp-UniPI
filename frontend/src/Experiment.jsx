@@ -289,7 +289,7 @@ export default function Experiment({username, reservation_id}) {
         setWaitOperation(true);
         const payload = {reservation_id};
         try {
-            const response = await fetch(`http://localhost:5004/api/experimenter/template`, {
+            const response = await fetch(`http://localhost:5004/api/experimenter/downloadTemplate`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/x-yaml'},
                 body: JSON.stringify(payload)

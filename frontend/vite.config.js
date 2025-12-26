@@ -25,6 +25,11 @@ export default defineConfig({
         target: 'http://localhost:5003',
         changeOrigin: true,
         secure: false,
+      },
+      '/api/experimenter': {
+        target: 'http://localhost:5004',
+        changeOrigin: true,
+        secure: false,
       }
     },
   },
