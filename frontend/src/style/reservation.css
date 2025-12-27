@@ -28,6 +28,7 @@
   flex-direction: column;
   gap: 8px;
   padding-top: 8px;
+  min-width:100%;
 }
 .device-legend {
   display: inline-flex;
@@ -66,6 +67,8 @@
   cursor: pointer;
   border: 1px solid #e9ecef;
   transition: background-color 0.15s, transform 0.08s;
+  width: 90%;
+  font-size: 17px;
 }
 /* selectable input - visually hidden but accessible, or show checkbox */
 .device-item .device-checkbox {

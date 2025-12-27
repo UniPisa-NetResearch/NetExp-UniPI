@@ -8,22 +8,22 @@ import Reservation from './Reservation.jsx';
 import Configuration from './Configuration.jsx';
 import Experiment from "./Experiment.jsx";
 
-const ConfigurationGuard = ({ isReservationPermitted, children }) => {
+const ProtectedPageGuard = ({ isReservationActive, isAccessGranted, children }) => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (!isReservationPermitted) {
-      // go back in the chronology
-      // if chronology miss, go back to home
-      if (window.history.length > 1) {
-        navigate(-1);
-      } else {
-        navigate('/', { replace: true });
-      }
+    if (!isReservationActive || !isAccessGranted) {
+        // go back in the chronology
+        // if chronology miss, go back to home
+        if (window.history.length > 1) {
+            navigate(-1);
+        } else {
+            navigate('/', { replace: true });
+        }
     }
-  }, [isReservationPermitted, navigate]);
+  }, [isReservationActive, isAccessGranted, navigate]);
 
-  if (!isReservationPermitted) {
+  if (!isReservationActive || !isAccessGranted) {
     return null;
   }
   return children;
@@ -51,6 +51,9 @@ function App() {
     const [isReservationActive, setIsReservationActive] = useState(false);
     // stores the expiration time for the active reservation
     const [activeReservationExpiration, setActiveReservationExpiration] = useState(null);
+    // there is a small period in minute needed to create user accounts and install packages on devices
+    // the user must wait this period to access configuration and experiment pages
+    const [isAccessGranted, setIsAccessGranted] = useState(false);
 
     const socketRef = useRef(/** @type {any} */ (null));
 
@@ -79,6 +82,7 @@ function App() {
                     setIsReservationActive(false);
                     setReservationId(null)
                     setActiveReservationExpiration(null);
+                    setIsAccessGranted(false);
                 }
             } else {
                 console.error("Error checking reservation status: ", data.message);
@@ -89,8 +93,40 @@ function App() {
             console.error("API call failed to check reservation status: ", error);
             setIsReservationActive(false);
             setActiveReservationExpiration(null);
+            setIsAccessGranted(false);
         }
     }, []);
+
+    // check device availability after user account creation for reservation
+
+    const fetchAvailabilityStatus = useCallback(async (username, reservationId) => {
+        if (!username || !reservationId) return 'error';
+        try {
+            const response = await fetch(`/api/controller/checkAvailability?username=${username}&reservation_id=${reservationId}`);
+
+            if (!response.ok) {
+              console.error(`HTTP error! status: ${response.status}`);
+              return 'error';
+            }
+
+            const data = await response.json();
+
+            if (data.command === 'start_configuration') {
+              return 'start_configuration';
+            } else if (data.command === 'wait_configuration') {
+              return 'wait_configuration';
+            } else {
+              console.error('Unexpected API response:', data);
+              return 'error';
+            }
+
+        } catch (error) {
+            console.error('Error during checkAvailability call:', error);
+            return 'error';
+        }
+
+    }, []);
+
 
     // set authentication and username after success
     const handleLoginSuccess = (userData) => {
@@ -110,6 +146,7 @@ function App() {
         // reset all reservation states on logout
         setIsReservationActive(false);
         setActiveReservationExpiration(null);
+        setIsAccessGranted(false);
 
          if (socketRef.current) {
           socketRef.current.emit('logout', { user_id: currentUserId });
@@ -127,11 +164,13 @@ function App() {
             // event granted: start timer and permit access
             setIsReservationActive(true);
             setActiveReservationExpiration(payload.expires_at);
-            setReservationId(payload.reservation_id)
+            setReservationId(payload.reservation_id);
+            setIsAccessGranted(false);
         } else if (payload.type === "revoked") {
             // event revoked: stop timer and block access
             setIsReservationActive(false);
             setActiveReservationExpiration(null);
+            setIsAccessGranted(false);
         }
     }, []);
 
@@ -182,6 +221,53 @@ function App() {
         };
     }, [isAuthenticated, currentUser, currentUserId, handleReservationEvent]);
 
+    // polling to verify when access is granted
+    useEffect(() => {
+        const POLL_INTERVAL = 10000; // 10 seconds
+        let intervalId = null;
+        let mounted = true;
+
+        const checkStatus = async () => {
+            if (!currentUser || !reservationId) {
+              setIsAccessGranted(false);
+              return;
+            }
+
+            const command = await fetchAvailabilityStatus(currentUser, reservationId);
+
+            if (!mounted) return;
+
+            if (command === 'start_configuration') {
+                setIsAccessGranted(true);
+
+                if (intervalId) {
+                    clearInterval(intervalId);
+                    intervalId = null;
+                }
+
+            } else if (command === 'wait_configuration') {
+
+                setIsAccessGranted(false);
+                if (!intervalId) {
+                    intervalId = setInterval(checkStatus, POLL_INTERVAL);
+                }
+            }
+        };
+
+        if (isReservationActive && currentUser && reservationId) {
+            checkStatus();
+        } else {
+            setIsAccessGranted(false);
+        }
+
+        return () => {
+            mounted = false;
+            if (intervalId) {
+              clearInterval(intervalId);
+            }
+        };
+    }, [isReservationActive, currentUser, reservationId, fetchAvailabilityStatus]);
+
     // ensure we check reservation status whenever currentUser changes (in case of page reloads / restore)
     useEffect(() => {
         if (currentUser) checkActiveReservation(currentUser);
@@ -189,7 +275,7 @@ function App() {
 
     // wrapper component to show layout and content
     const NavbarWrapper = ({ children }) => (
-        <NavbarLayout onLogout={handleLogout} activeReservationExpiration={activeReservationExpiration} isReservationActive={isReservationActive}>
+        <NavbarLayout onLogout={handleLogout} activeReservationExpiration={activeReservationExpiration} isReservationActive={isReservationActive} isAccessGranted={isAccessGranted}>
             {children}
         </NavbarLayout>
     );
@@ -215,9 +301,8 @@ function App() {
                 {/* Home Page */}
                 <Route path="/" element={<NavbarWrapper><Home username={currentUser} isAdmin={isAdmin} userId={currentUserId}/></NavbarWrapper>} />
                 <Route path="/reservation" element={<NavbarWrapper><Reservation username={currentUser} isReservationActive={isReservationActive} /> </NavbarWrapper>} />
-                <Route path="/configuration" element={<NavbarWrapper><ConfigurationGuard isReservationPermitted={isReservationActive}><Configuration username={currentUser} reservation_id={reservationId}/> </ConfigurationGuard></NavbarWrapper>} />
-                <Route path="/experiment" element={<NavbarWrapper><Experiment username={currentUser} /> </NavbarWrapper>} />
-
+                <Route path="/configuration" element={<NavbarWrapper><ProtectedPageGuard isReservationActive={isReservationActive} isAccessGranted={isAccessGranted}><Configuration username={currentUser} reservation_id={reservationId}/> </ProtectedPageGuard></NavbarWrapper>} />
+                <Route path="/experiment" element={<NavbarWrapper><ProtectedPageGuard isReservationActive={isReservationActive} isAccessGranted={isAccessGranted}><Experiment username={currentUser} reservation_id={reservationId}/> </ProtectedPageGuard></NavbarWrapper>} />
             </Route>
 
             {/* default route for not found path */}

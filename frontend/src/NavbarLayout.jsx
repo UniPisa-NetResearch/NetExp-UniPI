@@ -20,7 +20,7 @@ const isLinkActive = (itemPath, currentPath) => {
 };
 
 // this component will receive teh children component to show (Home, Reservation, etc)
-const NavbarLayout = ({ children, onLogout, showLogoutButton = true,   isReservationActive = false, activeReservationExpiration = null }) => {
+const NavbarLayout = ({ children, onLogout, showLogoutButton = true, isReservationActive = false, activeReservationExpiration = null, isAccessGranted = false }) => {
     const location = useLocation();
     const navigate = useNavigate();
 
@@ -76,10 +76,17 @@ const NavbarLayout = ({ children, onLogout, showLogoutButton = true,   isReserva
 
     const handleNavClick = (e, item) => {
         // block navigation to configuration if there is no active reservation/token
-        if (item.path === '/configuration' && !isReservationActive) {
+        if ((item.path === '/configuration' || item.path === '/experiment') && !isReservationActive) {
             e.preventDefault();
             // give feedback and remain on current page
-            alert('Access denied: you do not have an active reservation token');
+            alert('⚠️ Access denied: you do not have an active reservation.');
+            return;
+        }
+
+        if ((item.path === '/configuration' || item.path === '/experiment') && !isAccessGranted) {
+            e.preventDefault();
+            // give feedback and remain on current page
+            alert('⏳ Account creation in progress on devices. Please wait before accessing this page.');
         }
     };
 

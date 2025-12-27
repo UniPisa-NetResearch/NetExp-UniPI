@@ -3,33 +3,6 @@ import React, {useState, useRef, useEffect} from 'react';
 import './style/style.css';
 import './style/configuration.css';
 
-const fetchAvailabilityStatus = async (username, reservation_id) => {
-    // check if the account creation is completed for each device after reservation start
-    try {
-        const response = await fetch(`/api/controller/checkAvailability?username=${username}&reservation_id=${reservation_id}`);
-
-        if (!response.ok) {
-            console.error(`HTTP error! status: ${response.status}`);
-            return 'error';
-        }
-
-        const data = await response.json();
-        // if start_configuration received stop polling to verify availability, otherwise continue polling
-        if (data.command === 'start_configuration') {
-            return 'start_configuration';
-        } else if (data.command === 'wait_configuration') {
-            return 'wait_configuration';
-        } else {
-            console.error('Unexpected API response:', data);
-            return 'error';
-        }
-
-    } catch (error) {
-        console.error('Error during checkAvailability call:', error);
-        return 'error';
-    }
-};
-
 function useFileInput(allowedExt = []) {
   // function called when the user loads a file
   const ref = useRef(null);
@@ -139,8 +112,6 @@ export default function Configuration({username, reservation_id}) {
   // result for rollback/delete
   const [actionResult, setActionResult] = useState('');
   const [actionResultType, setActionResultType] = useState(''); // 'success' | 'error' | 'wait'
-  // unlock functionalities when account creation is completed
-  const [isAccessGranted, setIsAccessGranted] = useState(false);
 
  // when true all buttons are disabled until operation completes
  const [waitOperation, setWaitOperation] = useState(false);
@@ -438,48 +409,11 @@ const getNextSnapshotIndex = (currentList) => {
 };
 
 useEffect(() => {
-    const POLL_INTERVAL = 10000; // 10 seconds
-    let intervalId = null;
-    let mounted = true;     // to avoid update of the status after component unmount
-    // check if user can start configure devices after reservation unlock
-    const checkStatus = async () => {
-        const command = await fetchAvailabilityStatus(username, reservation_id);
-
-        if (!mounted) return;
-        // if the reservation is started, set access and clear polling interval, otherwise continue polling
-        if (command === 'start_configuration') {
-            setIsAccessGranted(true);
-            if (intervalId) {
-              clearInterval(intervalId);
-              intervalId = null;
-            }
-        } else if (command === 'wait_configuration') {
-            setIsAccessGranted(false);
-            if (!intervalId) {
-              intervalId = setInterval(checkStatus, POLL_INTERVAL);
-            }
-        } else if (command === 'error') {
-            console.error("Error or API response not valid. Continue polling");
-        }
-    };
-    checkStatus();
-
-    return () => {
-        mounted = false;
-        if (intervalId) {
-          clearInterval(intervalId);
-          intervalId = null;
-        }
-    };
-}, [username]);
-
-useEffect(() => {
   // load snapshot list on page load and when reservation_id change
   // only when the creation of reservation is completed
-  if(isAccessGranted) {
-      fetchSnapshots();
-  }
-}, [reservation_id, isAccessGranted]);
+  fetchSnapshots();
+
+}, [reservation_id]);
 
 
 // character limit for description
@@ -787,11 +721,6 @@ const handlePlaybookFile = async () => {
 
   return (
     <div className="home-content-wrapper configuration-wrapper">
-      {/* Conditional message: can be hidden by passing showWait={false} */}
-      {!isAccessGranted && (
-        <div className="wait-message">Wait account creation on devices...</div>
-      )}
-
       <div className="card configuration-card">
         <h2 className="title">⚙️ Configure devices</h2>
 
@@ -800,13 +729,13 @@ const handlePlaybookFile = async () => {
           <div className="aligned-group">
             <label className="label-inline">Download running-config zip:</label>
             <button type="button" className="template-button configuration-button"
-                    onClick={() => downloadFile("template")} disabled={!isAccessGranted || waitOperation}>Download</button>
+                    onClick={() => downloadFile("template")} disabled={waitOperation}>Download</button>
             <label className="label-inline">Load running-config zip:</label>
-            <button type="button" className="template-button configuration-button choose-button" onClick={template.choose} disabled={!isAccessGranted || waitOperation}>Choose zip
+            <button type="button" className="template-button configuration-button choose-button" onClick={template.choose} disabled={waitOperation}>Choose zip
             </button>
             <div className={`selected-file-name file-status-${template.fileType}`}>{template.fileName}</div>
-            <input ref={template.ref} type="file" style={{display: 'none'}} onChange={template.onChange} disabled={!isAccessGranted || waitOperation}/>
-            <button type="button" className="send-button configuration-button" onClick={handleTemplateFile} disabled={!isAccessGranted || waitOperation}>Load file
+            <input ref={template.ref} type="file" style={{display: 'none'}} onChange={template.onChange} disabled={waitOperation}/>
+            <button type="button" className="send-button configuration-button" onClick={handleTemplateFile} disabled={waitOperation}>Load file
             </button>
           </div>
         </div>
@@ -825,14 +754,14 @@ const handlePlaybookFile = async () => {
           <div className="aligned-group">
             <label className="label-inline">Download playbook template:</label>
             <button type="button" className="playbook-button configuration-button"
-                    onClick={() => downloadFile("playbook")} disabled={!isAccessGranted || waitOperation}>Download</button>
+                    onClick={() => downloadFile("playbook")} disabled={waitOperation}>Download</button>
             <label className="label-inline">Load Ansible playbook:</label>
-            <button type="button" className="playbook-button configuration-button choose-button" onClick={playbook.choose} disabled={!isAccessGranted || waitOperation}>Choose
+            <button type="button" className="playbook-button configuration-button choose-button" onClick={playbook.choose} disabled={waitOperation}>Choose
               playbook
             </button>
             <div className={`selected-file-name file-status-${playbook.fileType}`}>{playbook.fileName}</div>
-            <input ref={playbook.ref} type="file" style={{display: 'none'}} onChange={playbook.onChange} disabled={!isAccessGranted || waitOperation}/>
-            <button type="button" className="send-button configuration-button" onClick={handlePlaybookFile} disabled={!isAccessGranted || waitOperation}>Run playbook
+            <input ref={playbook.ref} type="file" style={{display: 'none'}} onChange={playbook.onChange} disabled={waitOperation}/>
+            <button type="button" className="send-button configuration-button" onClick={handlePlaybookFile} disabled={waitOperation}>Run playbook
             </button>
           </div>
         </div>
@@ -850,7 +779,7 @@ const handlePlaybookFile = async () => {
         <div className="config-row main-actions-row">
           <div className="aligned-group">
             <label className="label-inline">Run ping all test:</label>
-            <button type="button" className="send-button configuration-button" onClick={runTest} disabled={!isAccessGranted || waitOperation}>Run test</button>
+            <button type="button" className="send-button configuration-button" onClick={runTest} disabled={waitOperation}>Run test</button>
           </div>
         </div>
 
@@ -875,9 +804,9 @@ const handlePlaybookFile = async () => {
               onChange={handleDescriptionChange}
               placeholder="Snapshot description"
               maxLength={MAX_CHARS}
-              disabled={!isAccessGranted || waitOperation}
+              disabled={waitOperation}
           />
-          <button type="button" className="send-button configuration-button" onClick={handleTakeSnapshot} disabled={!isAccessGranted || waitOperation}>Take
+          <button type="button" className="send-button configuration-button" onClick={handleTakeSnapshot} disabled={waitOperation}>Take
             snapshot
           </button>
         </div>
@@ -895,7 +824,7 @@ const handlePlaybookFile = async () => {
                 className="select-field"
                 value={selectedSnapshot}
                 onChange={(e) => setSelectedSnapshot(e.target.value)}
-                disabled={!isAccessGranted || waitOperation}
+                disabled={waitOperation}
             >
               {snapshotList.map((s) => (
                   <option key={s.name} value={s.name}>{s.name}</option>
@@ -909,13 +838,13 @@ const handlePlaybookFile = async () => {
           </div>
 
           <div className="snapshot-actions">
-            <button type="button" className="rollback-button configuration-button" onClick={handleRollback} disabled={!isAccessGranted || waitOperation}>Rollback
+            <button type="button" className="rollback-button configuration-button" onClick={handleRollback} disabled={waitOperation}>Rollback
             </button>
             <button
                 type="button"
                 className="delete-button delete configuration-button"
                 onClick={handleDeleteSnapshot}
-                disabled={!isAccessGranted || !selectedSnapshot || selectedSnapshot === 'snapshot0' || waitOperation}
+                disabled={!selectedSnapshot || selectedSnapshot === 'snapshot0' || waitOperation}
             >
               Delete snapshot
             </button>
