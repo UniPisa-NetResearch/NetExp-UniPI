@@ -21,7 +21,7 @@ export default function Experiment({username, reservation_id}) {
     const [experimentMessageType, setExperimentMessageType] = useState(''); // 'success' | 'error'
     // guided mode states
     const [guidedDuration, setGuidedDuration] = useState('');
-    const deviceList = ['sw1', 'sw2', 'sw3', 'sw4', 'h1', 'h2', 'h3', 'h4'];
+    const [deviceList, setDeviceList] = useState([]);
     const [iperfClients, setIperfClients] = useState([]);
     const [iperfServers, setIperfServers] = useState([]);
 
@@ -72,6 +72,35 @@ export default function Experiment({username, reservation_id}) {
     const [metricRows, setMetricRows] = useState([
       { id: 1, value: '' }
     ]);
+
+    // useEffect to load devices at the component start
+    useEffect(() => {
+        const fetchDevices = async () => {
+            try {
+                const response = await fetch('http://localhost:5004/api/experimenter/getDevices', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ reservation_id })
+                });
+
+                if (!response.ok) {
+                    console.error('Failed to fetch devices');
+                    return;
+                }
+
+                const data = await response.json();
+                setDeviceList(data.devices || []);
+            } catch (error) {
+                console.error('Error fetching devices:', error);
+            }
+        };
+
+        // load devices
+        fetchDevices();
+
+    }, [reservation_id]); //reload if reservation_id change
 
     // --------------------------------------
     function useFileInput(allowedExt = []) {

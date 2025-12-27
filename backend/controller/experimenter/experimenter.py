@@ -11,7 +11,8 @@ from ..controller import (
     CONTROLLER_PLAYBOOKS_DIR,
     CONTROLLER_CONFIGS_DIR,
     USER_PLAYBOOKS_DIR,
-    USER_CONFIGS_DIR
+    USER_CONFIGS_DIR,
+    INVENTORY_DIR
 )
 # true if development mode is active
 TEST = True
@@ -26,6 +27,55 @@ def ensure_experiment_dirs():
     EXPERIMENT_TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
     EXPERIMENT_PLAYBOOKS_DIR.mkdir(parents=True, exist_ok=True)
 
+
+@app.route('/api/experimenter/getDevices', methods=['POST'])
+def get_devices():
+    #read host names from inventory res_<reservation_id>_inventory and return them as list
+
+    try:
+        data = request.get_json()
+        reservation_id = data.get('reservation_id')
+
+        if not reservation_id:
+            return jsonify({'error': 'reservation_id is required'}), 400
+
+        safe_res = safe_filename(f"res-{reservation_id}-inventory")
+        inv_path = os.path.join(INVENTORY_DIR, f"{safe_res}.ini")
+
+        # verify file existence
+        if not os.path.exists(inv_path):
+            return jsonify({'error': f'Inventory file not found for reservation {reservation_id}'}), 404
+
+        # read inventory file
+        devices = []
+        with open(inv_path, 'r', encoding='utf-8') as f:
+            in_all_section = False
+            for line in f:
+                line = line.strip()
+
+                # skip comments and empty rows
+                if not line or line.startswith('#'):
+                    continue
+
+                # verify if we are in the section [all]
+                if line == '[all]':
+                    in_all_section = True
+                    continue
+                elif line.startswith('['):
+                    in_all_section = False
+                    continue
+
+                # if we are in the section [all], extract device name
+                if in_all_section:
+                    # device name is the first part before the space
+                    device_name = line.split()[0] if line else None
+                    if device_name:
+                        devices.append(device_name)
+
+        return jsonify({'devices': devices}), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/experimenter/downloadTemplate', methods=['POST'])
 def download_experiment_template():
