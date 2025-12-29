@@ -393,20 +393,23 @@ def revoke_access():
         return jsonify({"ok": False, "message": "Missing or invalid JSON body"}), 400
     # get fields of received data
     ssh_key = data.get("ssh_key")
-    user_id = data.get("user_id")
     username = data.get("username")
     reservation_id = data.get("reservation_id")
-    containerlab_test = data.get("containerlab_test")
+    run_rollback = data.get("rollback")
 
-    if ssh_key is None or user_id is None or username is None or reservation_id is None:
+    if ssh_key is None or username is None or reservation_id is None or run_rollback is None:
         print("revokeAccess: missing required fields")
-        return jsonify({"ok": False, "message": "Missing required fields (ssh_key, user_id, username, reservation_id)"}), 400
+        return jsonify({"ok": False, "message": "Missing required fields (ssh_key, username, reservation_id, rollback)"}), 400
 
     print("REVOKE ACCESS RECEIVED", data)
 
+    """
     if containerlab_test:
         del active_reservations[username]
+        remove_files(f"res{reservation_id}", "file")
+        print("Deleted generated files for reservation", reservation_id)
         return jsonify({"ok": True, "message": "Skip revoke operations for containerlab test"}), 200
+    """
 
     # get inventory path
     safe_res = safe_filename(f"res-{reservation_id}-inventory")
@@ -431,39 +434,35 @@ def revoke_access():
     safe_res_snapshots_dir = safe_filename(f"res_{reservation_id}_snapshots")
     res_snapshots_path = os.path.join(SNAPSHOTS_DIR, safe_res_snapshots_dir)
 
-    # execute revoke playbook
-    pb_path = get_playbook_template_path("revoke")
-    if not pb_path:
-        print("Revoke playbook template not found in", INVENTORY_DIR, "- aborting")
-        return jsonify({"ok": False, "message": "Revoke playbook template missing on controller"}), 500
-    print("Using revoke playbook:", pb_path)
+    out, err = None, None
+    # skip revoke and rollback playbook if
+    if run_rollback:
+        # execute revoke playbook
+        pb_path = get_playbook_template_path("revoke")
+        if not pb_path:
+            print("Revoke playbook template not found in", INVENTORY_DIR, "- aborting")
+            return jsonify({"ok": False, "message": "Revoke playbook template missing on controller"}), 500
+        print("Using revoke playbook:", pb_path)
 
-    extra_vars = {"username": username, "ssh_key": ssh_key}
-    rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars)
-    #print("Ansible revoke rc:", rc)
-    #print("Ansible revoke stdout:", out)
-    #print("Ansible revoke stderr:", err)
+        extra_vars = {"username": username, "ssh_key": ssh_key}
+        rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars)
 
-    if rc != 0:
-        return jsonify({"ok": False, "message": "Ansible revoke failed", "rc": rc, "stdout": out, "stderr": err}), 500
+        if rc != 0:
+            return jsonify({"ok": False, "message": "Ansible revoke failed", "rc": rc, "stdout": out, "stderr": err}), 500
 
-    print("Successful revoke playbook")
+        print("Successful revoke playbook")
 
-    pb_filename = "rollback_playbook.yml"
-    pb_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, pb_filename)
-    # run rollback playbook with extra_vars required by client
-    extra_vars = {"type": "rollback", "reservation_id": reservation_id, "name": "snapshot0"}
-    print(f"Running rollback playbook {pb_path} for snapshot0 (reservation {reservation_id})")
-    rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars)
+        pb_filename = "rollback_playbook.yml"
+        pb_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, pb_filename)
+        # run rollback playbook with extra_vars required by client
+        extra_vars = {"type": "rollback", "reservation_id": reservation_id, "name": "snapshot0"}
+        print(f"Running rollback playbook {pb_path} for snapshot0 (reservation {reservation_id})")
+        rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars)
 
-    #print("Rollback playbook rc:", rc)
-    #print("Rollback playbook stdout:", out)
-    #print("Rollback playbook stderr:", err)
+        if rc != 0:
+            return jsonify({"ok": False, "message": f"Rollback playbook failed (rc={rc}, stdout={out}, stderr={err})"}), 500
 
-    if rc != 0:
-        return jsonify({"ok": False, "message": f"Rollback playbook failed (rc={rc}, stdout={out}, stderr={err})"}), 500
-
-    print("Successful rollback playbook")
+        print("Successful rollback playbook")
 
     # delete inventory and playbook files
     # remove inventory file
@@ -492,7 +491,10 @@ def revoke_access():
         del active_reservations[username]  # remove reservation from active reservation list
         print(f"User {username} removed from active_reservations")
 
-    return jsonify({"ok": True, "message": "Revoke executed", "stdout": out, "stderr": err}), 200
+    if run_rollback:
+        return jsonify({"ok": True, "message": "Revoke with rollback executed", "stdout": out, "stderr": err}), 200
+    else:
+        return jsonify({"ok": True, "message": "Cleaning without revoke executed"}), 200
 
 @app.route('/api/controller/checkAvailability', methods=['GET'])
 def check_availability():

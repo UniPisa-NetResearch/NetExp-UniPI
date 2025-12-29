@@ -179,6 +179,21 @@ const AdminUserManager = ({ currentUserId, onUserDeleted }) => {
         }
 
         try {
+            // check if the user has an active reservation
+            const checkResponse = await fetch('/api/auth/admin/get_all_reservations');
+
+            if (checkResponse.ok) {
+                const reservationsData = await checkResponse.json();
+                const userActiveReservation = reservationsData.reservations.find(
+                    res => res.username === username && res.has_token
+                );
+
+                if (userActiveReservation) {
+                    setMessage(`Error: Cannot delete user "${username}" - user has an active reservation (ID: ${userActiveReservation.id})`);
+                    return;
+                }
+            }
+
             const response = await fetch('/api/auth/admin/delete_user', {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
@@ -324,6 +339,8 @@ const AdminReservationManager = () => {
     const [currentPage, setCurrentPage] = useState(0);
     const [message, setMessage] = useState('');
     const [loading, setLoading] = useState(true);
+    const [rollbackStates, setRollbackStates] = useState({});
+    const [deletingWithRollback, setDeletingWithRollback] = useState(false);    // waiting message for rollback
     const reservationsPerPage = 10;
 
     const fetchReservations = async () => {
@@ -346,44 +363,113 @@ const AdminReservationManager = () => {
         fetchReservations();
     }, []);
 
-    const handleDeleteReservation = async (reservationId, username) => {
+    const handleToggleRollback = (reservationId) => {
+        setRollbackStates(prev => ({
+            ...prev,
+            [reservationId]: !prev[reservationId]
+        }));
+    };
+
+
+    const handleDeleteReservation = async (reservationId, username, hasToken) => {
         if (!window.confirm(`Are you sure you want to delete reservation #${reservationId}?`)) {
             return;
         }
 
         try {
-            const response = await fetch('/api/auth/admin/delete_reservation', {
-                method: 'DELETE',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ reservation_id: reservationId }),
-            });
+            // if the reservation does not have the token, remove and clean only reservation info in memory and file
+            if (!hasToken) {
+                const response = await fetch('/api/auth/admin/delete_reservation', {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ reservation_id: reservationId }),
+                });
 
-            const data = await response.json();
+                const data = await response.json();
 
-            if (response.ok) {
-                // call the cleanup of in memory and file reservation active status
-                try {
-                    const cleanupResponse = await fetch('http://localhost:5002/api/controller/cleanupReservation', {
-                        method: 'POST',
+                if (response.ok) {
+                    // call the cleanup of in memory and file reservation active status
+                    try {
+                        const cleanupResponse = await fetch('http://localhost:5002/api/controller/cleanupReservation', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                reservation_id: reservationId,
+                                username: username
+                            }),
+                        });
+
+                        if (!cleanupResponse.ok) {
+                            console.warn(`Cleanup failed for reservation ${reservationId}`);
+                        }
+                    } catch (cleanupError) {
+                        console.error('Error calling controller cleanup:', cleanupError);
+                    }
+                    setMessage(`Success: ${data.message}`);
+                    await fetchReservations();
+                } else {
+                    setMessage(`Error: ${data.message}`);
+                }
+            } else{
+                // if there is token, call revoke_access
+                const rollback = rollbackStates[reservationId] || false;
+
+                // wait message for rollback
+                if (rollback) {
+                    setDeletingWithRollback(true);
+                    setMessage('Deleting reservation with rollback... This may take a few minutes.');
+                }
+                // get ssh_key from the user
+                const userResponse = await fetch('/api/auth/user/show_user', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: username }),
+                });
+
+                if (!userResponse.ok) {
+                    setDeletingWithRollback(false);
+                    setMessage('Error: Failed to retrieve user SSH key');
+                    return;
+                }
+
+                const userData = await userResponse.json();
+                const sshKey = userData.ssh_key;
+
+                // call revoke_access
+                const revokeResponse = await fetch('http://localhost:5002/api/controller/revokeAccess', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        reservation_id: reservationId,
+                        username: username,
+                        ssh_key: sshKey,
+                        rollback: rollback
+                    }),
+                });
+
+                const revokeData = await revokeResponse.json();
+
+                if (revokeResponse.ok) {
+                    // Dopo revoke con successo, elimina dal database
+                    const deleteResponse = await fetch('/api/auth/admin/delete_reservation', {
+                        method: 'DELETE',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            reservation_id: reservationId,
-                            username: username
-                        }),
+                        body: JSON.stringify({ reservation_id: reservationId }),
                     });
 
-                    if (!cleanupResponse.ok) {
-                        console.warn(`Cleanup failed for reservation ${reservationId}`);
+                    if (deleteResponse.ok) {
+                        setMessage(`Success: Reservation deleted ${rollback ? 'with rollback' : 'without rollback'}`);
+                        await fetchReservations();
+                    } else {
+                        setMessage('Error: Revoke succeeded but database deletion failed');
                     }
-                } catch (cleanupError) {
-                    console.error('Error calling controller cleanup:', cleanupError);
+                } else {
+                    setMessage(`Error: ${revokeData.message || 'Failed to revoke access'}`);
                 }
-                setMessage(`Success: ${data.message}`);
-                await fetchReservations();
-            } else {
-                setMessage(`Error: ${data.message}`);
+                setDeletingWithRollback(false);
             }
         } catch (error) {
+            setDeletingWithRollback(false);
             setMessage('Connection error to server');
         }
     };
@@ -397,7 +483,7 @@ const AdminReservationManager = () => {
             <h2 className="title">Admin Panel - Reservation Management</h2>
 
             {message && (
-                <p style={{ color: message.startsWith('Error') ? 'red' : 'green', marginBottom: '15px' }}>
+                <p style={{ color: message.startsWith('Error') ? 'red' : message.startsWith('Deleting') ? 'orange' :'green', marginBottom: '15px',  fontWeight: deletingWithRollback ? 'bold' : 'normal' }}>
                     {message}
                 </p>
             )}
@@ -415,6 +501,7 @@ const AdminReservationManager = () => {
                                     <th>Start</th>
                                     <th>End</th>
                                     <th>Token</th>
+                                    <th>Rollback</th>
                                     <th>Devices</th>
                                     <th>Actions</th>
                                 </tr>
@@ -436,13 +523,26 @@ const AdminReservationManager = () => {
                                             </span>
                                         </td>
                                         <td>
+                                            <button
+                                                onClick={() => handleToggleRollback(res.id)}
+                                                className={`toggle-btn ${rollbackStates[res.id] ? 'active' : 'inactive'}`}
+                                                disabled={!res.has_token}
+                                                style={{
+                                                    opacity: !res.has_token ? 0.5 : 1,
+                                                    cursor: !res.has_token ? 'not-allowed' : 'pointer'
+                                                }}
+                                            >
+                                                {rollbackStates[res.id] ? 'Yes' : 'No'}
+                                            </button>
+                                        </td>
+                                        <td>
                                             <div className="device-list">
                                                 {res.devices.length > 0 ? res.devices.join(', ') : 'None'}
                                             </div>
                                         </td>
                                         <td>
                                             <button
-                                                onClick={() => handleDeleteReservation(res.id, res.username)}
+                                                onClick={() => handleDeleteReservation(res.id, res.username, res.has_token)}
                                                 className="delete-btn"
                                             >
                                                 Delete
@@ -454,7 +554,7 @@ const AdminReservationManager = () => {
                         </table>
                     </div>
 
-                     <Pagination
+                    <Pagination
                         currentPage={currentPage}
                         totalPages={totalPages}
                         onPageChange={setCurrentPage}
@@ -465,7 +565,7 @@ const AdminReservationManager = () => {
     );
 };
 
-const Home = ({ username, isAdmin, userId}) => {
+const Home = ({username, isAdmin, userId}) => {
     const [refreshTrigger, setRefreshTrigger] = useState(0);
 
     return (

@@ -24,8 +24,8 @@ NETBOX_TOKEN = os.getenv("NETBOX_TOKEN", "6152fbb91529522c72307b194a690c4ca5253e
 
 MAX_HOURS = 72
 TEST = True                    #test mode, each reservation starts at current date + 2 min
-CONTAINERLAB_TEST = False       # useful to test pingall
-EXPERIMENT_DURATION = 55       #expressed in minutes
+CONTAINERLAB_TEST = False      # useful to test pingall
+EXPERIMENT_DURATION = 5       #expressed in minutes
 NETBOX_SITE = "testbed"        # useful to change site of netbox
 #NETBOX_SITE = "containerlab"
 nb = pynetbox.api(NETBOX_URL, token=NETBOX_TOKEN)
@@ -142,13 +142,19 @@ def send_to_controller(msg_type, user_id, reservation_id):
                     print(f"Error calling grantAccess for reservation {reservation_id}: {e}")
 
             elif msg_type == "revoked":
+                # run rollback if we do not use containerlab
+                if CONTAINERLAB_TEST:
+                    rollback = False
+                else:
+                    rollback = True
+
                 revoke_payload = {
                     "ssh_key": ssh_key,
-                    "user_id": user_id,
                     "username": username,
                     "reservation_id": reservation_id,
-                    "containerlab_test": CONTAINERLAB_TEST
+                    "rollback": rollback                       # always run rollback when reservation expires (if the admin revoke the reservation, can choose to run rollback or not)
                 }
+
                 try:
                     resp = requests.post("http://localhost:5002/api/controller/revokeAccess", json=revoke_payload, timeout=10)
                     if resp.status_code == 200:
