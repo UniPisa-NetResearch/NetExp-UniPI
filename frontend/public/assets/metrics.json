@@ -1,0 +1,64 @@
+{
+  "predefined_metrics": [
+    {
+      "id": "oc_interfaces_all",
+      "path": "/openconfig-interfaces:interfaces",
+      "type": "openconfig"
+    },
+    {
+      "id": "oc_interface_counters",
+      "path": "/openconfig-interfaces:interfaces/interface[name=Ethernet0]/state/counters",
+      "type": "openconfig"
+    },
+    {
+      "id": "oc_network_instances",
+      "path": "/openconfig-network-instance:network-instances",
+      "type": "openconfig"
+    },
+    {
+      "id": "oc_acl",
+      "path": "/openconfig-acl:acl",
+      "type": "openconfig"
+    },
+    {
+      "id": "oc_lldp",
+      "path": "/openconfig-lldp:lldp",
+      "type": "openconfig"
+    },
+    {
+      "id": "sonic_counters_all",
+      "path": "COUNTERS_DB:COUNTERS/Ethernet*",
+      "type": "sonic_db"
+    },
+    {
+      "id": "sonic_queues",
+      "path": "COUNTERS_DB:COUNTERS/Ethernet*/Queues",
+      "type": "sonic_db"
+    },
+    {
+      "id": "sonic_pfc",
+      "path": "COUNTERS_DB:COUNTERS/Ethernet*/SAI_PORT_STAT_PFC_*",
+      "type": "sonic_db"
+    },
+    {
+      "id": "sonic_watermarks",
+      "path": "COUNTERS_DB:PERIODIC_WATERMARKS",
+      "type": "sonic_db"
+    },
+    {
+      "id": "sonic_rates",
+      "path": "COUNTERS_DB:RATES",
+      "type": "sonic_db"
+    },
+    {
+      "id": "bgp_neighbors",
+      "path": "CONFIG_DB:BGP_NEIGHBOR",
+      "type": "sonic_db"
+    },
+    {
+      "id": "route_table",
+      "path": "STATE_DB:ROUTE_TABLE",
+      "type": "sonic_db"
+    }
+  ]
+}

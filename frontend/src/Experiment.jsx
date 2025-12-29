@@ -10,9 +10,6 @@ export default function Experiment({username, reservation_id}) {
     const experimentDescriptionThird = useFileInput(['.yml', '.yaml']);
     const [experimentDuration, setExperimentDuration] = useState('');   // experiment duration
     const [executionTime, setExecutionTime] = useState('');             // time to execute
-    const [newMetric, setNewMetric] = useState('');  //manual add of metric
-    const [selectedMetrics, setSelectedMetrics] = useState([]); // multiple selection
-    const [telemetryType, setTelemetryType] = useState(''); // radio button status
 
     // free mode states
     const [freePlaybookFiles, setFreePlaybookFiles] = useState([]);
@@ -24,15 +21,18 @@ export default function Experiment({username, reservation_id}) {
     const [deviceList, setDeviceList] = useState([]);
     const [iperfClients, setIperfClients] = useState([]);
     const [iperfServers, setIperfServers] = useState([]);
+    // metrics states
+    const [predefinedMetrics, setPredefinedMetrics] = useState([]);  // common metrics
+    const [customMetrics, setCustomMetrics] = useState([]);          //manual add of metric
+    const [selectedMetrics, setSelectedMetrics] = useState([]);
+    const [telemetryType, setTelemetryType] = useState('');         // radio button status
+    // Sampling
+    const [samplingMode, setSamplingMode] = useState('global');
+    const [globalInterval, setGlobalInterval] = useState('5');
+    const [metricIntervals, setMetricIntervals] = useState({});
 
-    // list of metrics
-    const metricOptions = [
-        'CPU Utilization',
-        'Memory Usage',
-        'Network Latency',
-        'Disk I/O',
-        'Process Count'
-    ];
+    // Validation in progress
+    const [validatingMetrics, setValidatingMetrics] = useState(false);
 
     // disable functionalities while experiment is running
     const [runningExperiment, setRunningExperiment] = useState(false);
@@ -70,7 +70,7 @@ export default function Experiment({username, reservation_id}) {
     const metricIdCounter = useRef(1);
 
     const [metricRows, setMetricRows] = useState([
-      { id: 1, value: '' }
+      { id: 1, path: '', status: '', message: '' }
     ]);
 
     // useEffect to load devices at the component start
@@ -101,6 +101,44 @@ export default function Experiment({username, reservation_id}) {
         fetchDevices();
 
     }, [reservation_id]); //reload if reservation_id change
+
+    // useEffect to load predefined + custom metrics at component start
+    useEffect(() => {
+        const fetchMetrics = async () => {
+            try {
+                // Load predefined metrics from JSON file
+                const predefinedResponse = await fetch('/assets/metrics.json');
+                if (predefinedResponse.ok) {
+                    const predefinedData = await predefinedResponse.json();
+                    setPredefinedMetrics(predefinedData.predefined_metrics || []);
+                } else {
+                    console.error('Failed to load predefined metrics');
+                }
+
+                // Load user custom metrics from database
+                const customResponse = await fetch('http://localhost:5004/api/experimenter/getUserMetrics', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ username })
+                });
+
+                if (customResponse.ok) {
+                    const customData = await customResponse.json();
+                    setCustomMetrics(customData.custom || []);
+                } else {
+                    console.error('Failed to fetch custom metrics');
+                }
+
+            } catch (error) {
+                console.error('Error loading metrics:', error);
+            }
+        };
+
+        fetchMetrics();
+    }, [username]); // Reload if username changes
+
 
     // --------------------------------------
     function useFileInput(allowedExt = []) {
@@ -208,14 +246,6 @@ export default function Experiment({username, reservation_id}) {
         }
     };
 
-    // function to manage + and - buttons
-    const handleAddRemove = (action) => {
-        console.log(`Action: ${action}`);
-    };
-    const handleAddMetrics = () => {
-        console.log("Adding selected metrics:", selectedMetrics);
-        // Logica futura per inviare le metriche al backend
-    };
     // ----------------------------------------------
     const allowedPlaybookExt = ['.yml', '.yaml', '.sh', '.bash'];
 
@@ -278,7 +308,7 @@ export default function Experiment({username, reservation_id}) {
         const newId = ++metricIdCounter.current;
         setMetricRows(prev => {
             const copy = [...prev];
-            copy.splice(index + 1, 0, { id: newId, value: '' });
+            copy.splice(index + 1, 0, { id: newId,  path: '', status: '', message: '' });
             return copy;
         });
     };
@@ -288,11 +318,109 @@ export default function Experiment({username, reservation_id}) {
         setMetricRows(prev => prev.filter((_, i) => i !== index));
     };
 
-    const handleMetricChange = (id, value) => {
+    // Update metric path
+    const handleMetricPathChange = (id, value) => {
+        // check if the metric is predefined
+        const isPredefined = predefinedMetrics.some(metric => metric.path === value.trim());
         setMetricRows(prev =>
-            prev.map(m => m.id === id ? { ...m, value } : m)
+            prev.map(r => r.id === id ? { ...r, path: value, status: isPredefined ? 'predefined' : '',  message: isPredefined ? 'predefined' : '' } : r)
         );
     };
+
+    const handleAddMetrics = async () => {
+        // Check for empty fields
+        const hasEmpty = metricRows.some(row => !row.path.trim());
+
+        if (hasEmpty) {
+            // Mark empty fields in red
+            setMetricRows(prev =>
+                prev.map(r => ({
+                    ...r,
+                    status: !r.path.trim() ? 'empty' : r.status,
+                    message: !r.path.trim() ? 'empty' : r.message
+                }))
+            );
+            return;
+        }
+        // create a map of the metrics to send with their original indexes
+        const metricsToSendWithIndex = [];
+        const predefinedIndices = [];
+        // filter all predefined metrics
+        metricRows.forEach((row, idx) => {
+            const isPredefined = predefinedMetrics.some(metric => metric.path === row.path.trim());
+            if (isPredefined) {
+                predefinedIndices.push(idx);
+            } else {
+                metricsToSendWithIndex.push({ row, originalIndex: idx });
+            }
+        });
+
+        // if all the metrics are predefined, do not send anything
+        if (metricsToSendWithIndex.length === 0) {
+            alert('All metrics are predefined. No custom metrics to add.');
+            return;
+        }
+
+        setValidatingMetrics(true);
+
+        try {
+            const response = await fetch('http://localhost:5004/api/experimenter/addMetrics', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    username,
+                    metrics: metricsToSendWithIndex.map(item=> ({path: item.row.path.trim()}))
+                })
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                // Update rows with validation results
+                setMetricRows(prev => {
+                    const newRows = [...prev];
+                    // Mappa i risultati del server agli indici originali
+                    metricsToSendWithIndex.forEach((item, resultIdx) => {
+                        newRows[item.originalIndex] = {
+                            ...newRows[item.originalIndex],
+                            status: data.results[resultIdx].status,
+                            message: data.results[resultIdx].message
+                        };
+                    });
+
+                    predefinedIndices.forEach(idx => {
+                        newRows[idx] = {
+                            ...newRows[idx],
+                            status: 'predefined',
+                            message: 'predefined'
+                        };
+                    });
+
+                    return newRows;
+                });
+
+                // Reload custom metrics to update the selection list
+                const metricsResponse = await fetch('http://localhost:5004/api/experimenter/getUserMetrics', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({username})
+                });
+
+                const metricsData = await metricsResponse.json();
+                setCustomMetrics(metricsData.custom || []);
+
+            } else {
+                alert(`Error: ${data.error}`);
+            }
+
+        } catch (error) {
+            console.error('Error adding metrics:', error);
+            alert('Error validating metrics');
+        } finally {
+            setValidatingMetrics(false);
+        }
+    };
+
     // Free mode ---------------------------------------------------------------------------
     const handleFreePlaybookFiles = (e) => {
         const files = Array.from(e.target.files || []);
@@ -631,57 +759,169 @@ export default function Experiment({username, reservation_id}) {
                         {/* choose metric row */}
                         <div className="config-row">
                             <label className="label-inline label-fixed-width label-output">Choose metrics:</label>
-                            <select
-                                className="select-field"
-                                disabled={runningExperiment}
-                                multiple={true}                 // multiple selection
-                                value={selectedMetrics}
-                                onChange={(e) => {
-                                    // multiple selection logic
-                                    const options = Array.from(e.target.options);
-                                    const value = options.filter(option => option.selected).map(option => option.value);
-                                    setSelectedMetrics(value);
-                                }}
-                            >
-                                {/* select fill with metricOptions */}
-                                {metricOptions.map((metric) => (
-                                    <option key={metric} value={metric}>
-                                        {metric}
-                                    </option>
-                                ))}
-                            </select>
-
-                            <button type="button"
-                                    className="send-button configuration-button choose-button additional-margin"
-                                    onClick={handleAddMetrics} disabled={runningExperiment}>Add metrics
-                            </button>
                         </div>
 
-                        {/* add metric row */}
-                        {metricRows.map((m, idx) => (
-                            <div key={m.id} className="config-row">
-                                <label className="label-inline label-fixed-width">Add metric:</label>
+                        <div className="metrics-selection-container">
+                            {/* Predefined metrics */}
+                            {predefinedMetrics.length > 0 && (
+                                <div className="metric-category">
+                                    <h4 className="category-title">Predefined Metrics</h4>
+                                    {predefinedMetrics.map((metric) => (
+                                        <label key={metric.id} className="metric-checkbox-label">
+                                            <input
+                                                type="checkbox"
+                                                checked={selectedMetrics.includes(metric.path)}
+                                                onChange={() => {
+                                                    if (selectedMetrics.includes(metric.path)) {
+                                                        setSelectedMetrics(selectedMetrics.filter(m => m !== metric.path));
+                                                    } else {
+                                                        setSelectedMetrics([...selectedMetrics, metric.path]);
+                                                    }
+                                                }}
+                                                disabled={runningExperiment}
+                                            />
+                                            <span className="metric-path">{metric.path}</span>
+                                        </label>
+                                    ))}
+                                </div>
+                            )}
 
+                            {/* Custom metrics */}
+                            {customMetrics.length > 0 && (
+                                <div className="metric-category">
+                                    <h4 className="category-title">Your Custom Metrics</h4>
+                                    {customMetrics.map((metric) => (
+                                        <label key={metric.id} className="metric-checkbox-label">
+                                            <input
+                                                type="checkbox"
+                                                checked={selectedMetrics.includes(metric.path)}
+                                                onChange={() => {
+                                                    if (selectedMetrics.includes(metric.path)) {
+                                                        setSelectedMetrics(selectedMetrics.filter(m => m !== metric.path));
+                                                    } else {
+                                                        setSelectedMetrics([...selectedMetrics, metric.path]);
+                                                    }
+                                                }}
+                                                disabled={runningExperiment}
+                                            />
+                                            <span className="metric-path">{metric.path}</span>
+                                        </label>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Add custom metrics */}
+                        <div className="config-row">
+                            <label className="label-inline label-fixed-width">Add custom metrics:</label>
+                        </div>
+
+                        {metricRows.map((row, idx) => (
+                            <div key={row.id} className="config-row metric-add-row">
                                 <input
-                                    type={"text"}
-                                    className="add-metric-field"
-                                    value={m.value}
-                                    onChange={(e) => handleMetricChange(m.id, e.target.value)}
-                                    readOnly={runningExperiment}
+                                    type="text"
+                                    className={`metric-path-input ${row.status === 'empty' || row.status === 'error' || row.status === 'predefined' ? 'input-error' : row.status === 'success' ? 'input-success' : ''}`}
+                                    placeholder="e.g., COUNTERS_DB:COUNTERS/Ethernet8 or /openconfig-..."
+                                    value={row.path}
+                                    onChange={(e) => handleMetricPathChange(row.id, e.target.value)}
+                                    disabled={runningExperiment || validatingMetrics}
                                 />
-
-                                <label className="label-inline add-remove-label" onClick={() => handleAddMetricRow(idx)}>+</label>
 
                                 <label
                                     className="label-inline add-remove-label"
-                                    onClick={() => handleRemoveMetricRow(idx)}
+                                    onClick={() => !runningExperiment && !validatingMetrics && handleAddMetricRow(idx)}
+                                    style={{ pointerEvents: runningExperiment || validatingMetrics ? 'none' : 'auto' }}
+                                >+</label>
+
+                                <label
+                                    className="label-inline add-remove-label"
+                                    onClick={() => !runningExperiment && !validatingMetrics && handleRemoveMetricRow(idx)}
                                     style={{
                                         opacity: idx === 0 ? 0.3 : 1,
-                                        pointerEvents: idx === 0 ? 'none' : 'auto'
+                                        pointerEvents: idx === 0 || runningExperiment || validatingMetrics ? 'none' : 'auto'
                                     }}
                                 >-</label>
+
+                                {row.message && (
+                                    <span className={`metric-validation-message ${row.status}`}>
+                                        {row.status === 'success' && '✓ New metric added in the collection'}
+                                        {row.status === 'warning' && '⚠ Metric already inside the collection'}
+                                        {row.status === 'error' && '✗ Not available on devices'}
+                                        {row.status === 'predefined' && '⊘ This is a predefined metric'}
+                                        {row.status === 'empty' && '✗ Path is required'}
+                                    </span>
+                                )}
                             </div>
                         ))}
+
+                        <div className="config-row">
+                            <button type="button" className="send-button configuration-button" onClick={handleAddMetrics} disabled={runningExperiment || validatingMetrics}> Add Metrics</button>
+                        </div>
+
+                        {/* Sampling configuration */}
+                        <div className="config-row">
+                            <label className="label-inline label-fixed-width">Sampling interval:</label>
+                            <div className="radio-group">
+                                <input
+                                    type="radio"
+                                    id="globalSampling"
+                                    value="global"
+                                    checked={samplingMode === 'global'}
+                                    onChange={(e) => setSamplingMode(e.target.value)}
+                                    disabled={runningExperiment}
+                                />
+                                <label className="label-inline label-radio" htmlFor="globalSampling">Global</label>
+                                <input
+                                    type="radio"
+                                    id="perMetricSampling"
+                                    value="per-metric"
+                                    checked={samplingMode === 'per-metric'}
+                                    onChange={(e) => setSamplingMode(e.target.value)}
+                                    disabled={runningExperiment}
+                                />
+                                <label className="label-inline label-radio" htmlFor="perMetricSampling">Per-metric</label>
+                            </div>
+                        </div>
+
+                        {samplingMode === 'global' && (
+                            <div className="config-row">
+                                <label className="label-inline label-fixed-width">Interval (seconds):</label>
+                                <input
+                                    type="text"
+                                    className="duration-field"
+                                    value={globalInterval}
+                                    onChange={handleNumericChange(setGlobalInterval)}
+                                    disabled={runningExperiment}
+                                />
+                            </div>
+                        )}
+
+                        {samplingMode === 'per-metric' && selectedMetrics.length > 0 && (
+                            <div className="per-metric-intervals">
+                                <h4>Interval for each metric:</h4>
+                                {selectedMetrics.map((metricPath) => (
+                                    <div key={metricPath} className="metric-interval-row">
+                                        <span className="metric-path-small">{metricPath}</span>
+                                        <input
+                                            type="text"
+                                            className="interval-field-small"
+                                            value={metricIntervals[metricPath] || '5'}
+                                            onChange={(e) => {
+                                                const value = e.target.value;
+                                                if (value === '' || /^\d+$/.test(value)) {
+                                                    setMetricIntervals({
+                                                        ...metricIntervals,
+                                                        [metricPath]: value
+                                                    });
+                                                }
+                                            }}
+                                            disabled={runningExperiment}
+                                        />
+                                        <span>s</span>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
 
                         {/* Telemetry type row */}
                         <div className="config-row">

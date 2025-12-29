@@ -1,10 +1,14 @@
 import os
+import subprocess
+import re
 
 from flask import request, send_file, jsonify
-from pathlib import Path
+
 import yaml
 from datetime import datetime
 from werkzeug.utils import secure_filename
+from ...database.db import db, UserMetrics
+from pygnmi.client import gNMIclient
 from ...app import app
 from ..controller import (
     ensure_inventory_dir, safe_filename, run_ansible_playbook, win_to_wsl_path,
@@ -198,7 +202,211 @@ def create_experiment():
         print(f"Error creating experiment: {e}")
         return jsonify({'error': str(e)}), 500
 
+
+@app.route('/api/experimenter/getUserMetrics', methods=['POST'])
+def get_user_metrics():
+    # returns user's custom metrics from database
+
+    data = request.get_json()
+    username = data.get('username')
+
+    if not username:
+        return jsonify({
+            'success': False,
+            'error': 'Username is required'
+        }), 400
+
+    try:
+        user_metrics = UserMetrics.query.filter_by(username=username).all()
+
+        custom_metrics = []
+        for metric in user_metrics:
+            custom_metrics.append({
+                'id': f'custom_{metric.id}',
+                'path': metric.metric,
+                'type': metric.type
+            })
+
+        return jsonify({
+            'success': True,
+            'custom': custom_metrics
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Database error: {str(e)}'
+        }), 500
+
+
+@app.route('/api/experimenter/addMetrics', methods=['POST'])
+def add_metrics():
+    # validates and adds multiple metrics in one call
+
+    data = request.get_json()
+    username = data.get('username')
+    metrics = data.get('metrics')  # list of metrics with paths
+
+    if not username or not metrics or not isinstance(metrics, list):
+        return jsonify({
+            'success': False,
+            'error': 'Missing required fields'
+        }), 400
+
+    results = []
+    device_ip = '192.168.1.151'
+
+    print(f"\n{'=' * 80}", flush=True)
+    print(f"[ADD METRICS] User: {username}, Total metrics: {len(metrics)}", flush=True)
+    print(f"{'=' * 80}\n", flush=True)
+
+    for idx, metric_data in enumerate(metrics, 1):
+        metric_path = metric_data.get('path', '').strip()
+
+        print(f"\n[METRIC {idx}/{len(metrics)}] Processing: {metric_path}", flush=True)
+
+        result = {
+            'path': metric_path,
+            'status': 'error',
+            'message': ''
+        }
+
+        metric_type = None
+
+        # Validate metric on device
+        try:
+            if ':' in metric_path:
+                # SONiC DB format
+                parts = metric_path.split(':', 1)
+                if len(parts) != 2:
+                    result['message'] = 'Invalid SONiC DB format'
+                    print(f"  ✗ ERROR: {result['message']}", flush=True)
+                    results.append(result)
+                    continue
+
+                db_name = parts[0]
+                path = parts[1]
+
+                valid_dbs = ['COUNTERS_DB', 'CONFIG_DB', 'STATE_DB', 'APPL_DB', 'FLEX_COUNTER_DB', 'ASIC_DB']
+                if db_name not in valid_dbs:
+                    result['message'] = f'Invalid database name'
+                    results.append(result)
+                    continue
+
+                metric_type = 'sonic_db'
+                print(f"  📝 Type: SONiC DB ({db_name})", flush=True)
+
+                try:
+                    with gNMIclient(
+                            target=('192.168.1.151', 8080),
+                            username='admin',
+                            password='YourPaSsWoRd',
+                            insecure=True,
+                            skip_verify=True
+                    ) as gc:
+                        get_result = gc.get(path=[path], target=db_name, encoding='json')
+
+                        if not get_result or 'notification' not in get_result:
+                            raise Exception("Empty response")
+
+                        print(f"  ✅ Valid response received", flush=True)
+
+                except Exception as e:
+                    result['message'] = f'Not available: {str(e)[:100]}'
+                    print(f"  ❌ ERROR: {str(e)}", flush=True)
+                    results.append(result)
+                    continue
+
+
+            elif metric_path.startswith('/openconfig-'):
+                # OpenConfig format
+                match = re.match(r'^(/openconfig-[^:]+):(.+)$', metric_path)
+                if not match:
+                    result['message'] = 'Invalid OpenConfig format'
+                    print(f"  ✗ ERROR: {result['message']}", flush=True)
+                    results.append(result)
+                    continue
+
+                print(f"  📝 Type: OpenConfig", flush=True)
+                metric_type = 'openconfig'
+
+                try:
+                    with gNMIclient(
+                            target=('192.168.1.151', 8080),
+                            username='admin',
+                            password='YourPaSsWoRd',
+                            insecure=True,
+                            skip_verify=True
+                    ) as gc:
+                        get_result = gc.get(path=[metric_path], encoding='json')
+
+                        if not get_result or 'notification' not in get_result:
+                            raise Exception("Empty response")
+
+                        print(f"  ✅ Valid response received", flush=True)
+
+                except Exception as e:
+                    result['message'] = f'Not available: {str(e)[:100]}'
+                    print(f"  ❌ ERROR: {str(e)}", flush=True)
+                    results.append(result)
+                    continue
+
+            else:
+                result['message'] = 'Invalid format. Must be OpenConfig or SONiC DB'
+                print(f"  ✗ ERROR: {result['message']}", flush=True)
+                results.append(result)
+                continue
+
+            existing = UserMetrics.query.filter_by(
+                username=username,
+                metric=metric_path
+            ).first()
+
+            if existing:
+                result['status'] = 'warning'
+                result['message'] = 'Already exists in your collection'
+                print(f"  ⚠️  WARNING: Already exists", flush=True)
+            else:
+                new_metric = UserMetrics(
+                    username=username,
+                    metric=metric_path,
+                    type=metric_type,
+                )
+                db.session.add(new_metric)
+                result['status'] = 'success'
+                result['message'] = 'Validated and added'
+                print(f"  ✅ SUCCESS: Added to database", flush=True)
+
+        except Exception as e:
+            result['message'] = f'Error: {str(e)}'
+            print(f"  ❌ EXCEPTION: {str(e)}", flush=True)
+
+        results.append(result)
+
+    # Commit all successful additions
+    print(f"\n{'=' * 80}", flush=True)
+    print(f"[DATABASE COMMIT] Attempting to commit changes...", flush=True)
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        print(f"❌ Commit failed: {str(e)}", flush=True)
+        print(f"{'=' * 80}\n", flush=True)
+        return jsonify({
+            'success': False,
+            'error': f'Database error: {str(e)}'
+        }), 500
+
+    print(f"{'=' * 80}\n", flush=True)
+
+    return jsonify({
+        'success': True,
+        'results': results
+    }), 200
+
+
 if __name__ == '__main__':
 
     # host 0.0.0.0 often necessary in virtual environments or containers.
+    #app.run(debug=True, host='0.0.0.0', port=5004)#, use_reloader=False)
     app.run(debug=False, host='0.0.0.0', port=5004, use_reloader=False)

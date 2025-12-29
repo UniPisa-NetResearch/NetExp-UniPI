@@ -346,7 +346,7 @@ const AdminReservationManager = () => {
         fetchReservations();
     }, []);
 
-    const handleDeleteReservation = async (reservationId) => {
+    const handleDeleteReservation = async (reservationId, username) => {
         if (!window.confirm(`Are you sure you want to delete reservation #${reservationId}?`)) {
             return;
         }
@@ -361,6 +361,23 @@ const AdminReservationManager = () => {
             const data = await response.json();
 
             if (response.ok) {
+                // call the cleanup of in memory and file reservation active status
+                try {
+                    const cleanupResponse = await fetch('http://localhost:5002/api/controller/cleanupReservation', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            reservation_id: reservationId,
+                            username: username
+                        }),
+                    });
+
+                    if (!cleanupResponse.ok) {
+                        console.warn(`Cleanup failed for reservation ${reservationId}`);
+                    }
+                } catch (cleanupError) {
+                    console.error('Error calling controller cleanup:', cleanupError);
+                }
                 setMessage(`Success: ${data.message}`);
                 await fetchReservations();
             } else {
@@ -425,7 +442,7 @@ const AdminReservationManager = () => {
                                         </td>
                                         <td>
                                             <button
-                                                onClick={() => handleDeleteReservation(res.id)}
+                                                onClick={() => handleDeleteReservation(res.id, res.username)}
                                                 className="delete-btn"
                                             >
                                                 Delete

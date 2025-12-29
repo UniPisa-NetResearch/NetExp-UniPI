@@ -483,3 +483,158 @@
   color: #007bff;
   font-weight: 600;
 }
+
+/* Metrics selection container */
+.metrics-selection-container {
+  max-height: 300px;
+  width: 98%;
+  overflow-y: auto;
+  padding: 12px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background-color: rgba(255, 255, 255, 0.8);
+  margin-bottom: 16px;
+}
+
+.metric-category {
+  margin-bottom: 16px;
+}
+
+.category-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #007bff;
+  margin-bottom: 8px;
+  border-bottom: 1px solid #007bff;
+  padding-bottom: 4px;
+}
+
+.metric-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  margin-bottom: 4px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background-color 0.2s;
+}
+
+.metric-checkbox-label:hover {
+  background-color: rgba(0, 123, 255, 0.05);
+}
+
+.metric-checkbox-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.metric-path {
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+  color: #495057;
+}
+
+/* Metric add row */
+.metric-add-row {
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+
+.metric-path-input {
+  flex: 2;
+  min-width: 300px;
+  padding: 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+}
+
+.metric-path-input.input-error {
+  border-color: #dc3545;
+  background-color: rgba(220, 53, 69, 0.05);
+}
+
+.metric-path-input.input-success {
+  border-color: #28a745;
+  background-color: rgba(40, 167, 69, 0.05);
+}
+
+.metric-display-name-input {
+  flex: 1;
+  min-width: 150px;
+  padding: 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.metric-validation-message {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.metric-validation-message.success {
+  color: #1e7e34;
+  background-color: rgba(40, 167, 69, 0.1);
+}
+
+.metric-validation-message.error,
+.metric-validation-message.empty,
+.metric-validation-message.predefined {
+  color: #dc3545;
+  background-color: rgba(220, 53, 69, 0.1);
+}
+
+.metric-validation-message.warning {
+  color: #856404;
+  background-color: rgba(255, 193, 7, 0.1);
+}
+
+/* Per-metric intervals */
+.per-metric-intervals {
+  padding: 12px;
+  background-color: rgba(248, 249, 250, 0.6);
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  margin-top: 8px;
+  width: 98%;
+  text-align: left;
+}
+
+.per-metric-intervals h4 {
+  font-size: 13px;
+  margin-bottom: 10px;
+  color: #495057;
+}
+
+.metric-interval-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+  padding: 6px;
+  background-color: white;
+  border-radius: 4px;
+}
+
+.metric-path-small {
+  flex: 1;
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+  color: #495057;
+}
+
+.interval-field-small {
+  width: 60px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  padding: 4px;
+  text-align: center;
+}

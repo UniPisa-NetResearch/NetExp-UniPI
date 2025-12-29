@@ -514,6 +514,37 @@ def check_availability():
         print(f"User {username} not found in active reservations, reservation id: {reservation_id}")
         return jsonify({"ok": True, "command": "wait_configuration"}), 200
 
+
+@app.route('/api/controller/cleanupReservation', methods=['POST'])
+def cleanup_reservation():
+    # remove reservation data from memory and filesystem, when admin remove the reservation
+    data = request.get_json()
+    reservation_id = data.get('reservation_id')
+    username = data.get('username')
+
+    if not reservation_id:
+        return jsonify({"ok": False, "message": "Missing reservation_id parameter"}), 400
+
+    print(f"Cleaning up reservation {reservation_id} for user {username}")
+
+    # remove from active_reservations dictionary
+    if username and username in active_reservations:
+        if active_reservations[username] == reservation_id:
+            del active_reservations[username]
+            print(f"Removed {username} from active_reservations")
+
+    # remove file if exists
+    file_path = f"res{reservation_id}"
+    if os.path.exists(file_path):
+        try:
+            os.remove(file_path)
+            print(f"Removed file {file_path}")
+        except Exception as e:
+            print(f"Error removing file {file_path}: {e}")
+            return jsonify({"ok": False, "message": f"Error removing file: {str(e)}"}), 500
+
+    return jsonify({"ok": True, "message": "Reservation cleaned up successfully"}), 200
+
 @app.route('/api/controller/getSnapshots', methods=['GET'])
 def get_snapshots():
     # function to create current snapshot of the network

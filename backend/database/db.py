@@ -50,5 +50,24 @@ class ReservationDevice(db.Model):
     )
     asset_tag = db.Column(db.String(255), nullable=False)
 
+# User custom metrics table
+class UserMetrics(db.Model):
+    __table_name__ = 'user_metrics'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    username = db.Column(
+        db.String(80),
+        db.ForeignKey('user.username', ondelete='CASCADE'),
+        nullable=False,
+        index=True
+    )
+    metric = db.Column(db.String(500), nullable=False)  # metric path
+    type = db.Column(db.String(50), nullable=False)  # 'openconfig' or 'sonic_db'
+
+    # Unique constraint: user cannot add same metric twice
+    __table_args__ = (
+        db.UniqueConstraint('username', 'metric', name='uq_username_metric'),
+    )
+
     def __repr__(self):
         return f'<ReservationDevice id={self.id} reservation_id={self.reservation_id} asset_tag={self.asset_tag}>'
