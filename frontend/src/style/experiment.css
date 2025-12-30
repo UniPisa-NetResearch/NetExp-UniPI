@@ -563,6 +563,11 @@
   background-color: rgba(40, 167, 69, 0.05);
 }
 
+.metric-path-input.input-warning {
+  border-color: #d8ad30;
+  background-color: rgba(255, 193, 7, 0.1);
+}
+
 .metric-display-name-input {
   flex: 1;
   min-width: 150px;

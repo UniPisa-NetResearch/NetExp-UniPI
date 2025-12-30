@@ -31,6 +31,9 @@ export default function Experiment({username, reservation_id}) {
     const [globalInterval, setGlobalInterval] = useState('5');
     const [metricIntervals, setMetricIntervals] = useState({});
 
+    const [globalDevices, setGlobalDevices] = useState([]);  // device for global mode
+    const [metricDevices, setMetricDevices] = useState({});    // device for per-metric mode {metricPath: [device1, device2, ...]}
+
     // Validation in progress
     const [validatingMetrics, setValidatingMetrics] = useState(false);
 
@@ -342,6 +345,18 @@ export default function Experiment({username, reservation_id}) {
             );
             return;
         }
+
+        // find first device with role different from "host"
+        const switchDevice = deviceList.find(device =>
+            device.role && device.role.toLowerCase() !== 'host'
+        );
+
+        // if every device is host, show error
+        if (!switchDevice) {
+            alert('Error: No switch device (leaf/spine) found. At least one non-host device is required to validate metrics.');
+            return;
+        }
+
         // create a map of the metrics to send with their original indexes
         const metricsToSendWithIndex = [];
         const predefinedIndices = [];
@@ -363,12 +378,15 @@ export default function Experiment({username, reservation_id}) {
 
         setValidatingMetrics(true);
 
+        console.log("Check metrics on switch: ", switchDevice.ip);
+
         try {
             const response = await fetch('http://localhost:5004/api/experimenter/addMetrics', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
                     username,
+                    switch_ip: switchDevice.ip,
                     metrics: metricsToSendWithIndex.map(item=> ({path: item.row.path.trim()}))
                 })
             });
@@ -562,6 +580,36 @@ export default function Experiment({username, reservation_id}) {
         }
     };
 
+    // Handler for device toggle in global mode
+    const handleGlobalDeviceToggle = (deviceName) => {
+        setGlobalDevices(prev =>
+            prev.includes(deviceName)
+                ? prev.filter(d => d !== deviceName)
+                : [...prev, deviceName]
+        );
+    };
+
+    // Handler for device toggle in per-metric mode
+    const handleMetricDeviceToggle = (metricPath, deviceName) => {
+        setMetricDevices(prev => {
+            const currentDevices = prev[metricPath] || [];
+            const isSelected = currentDevices.includes(deviceName);
+
+            return {
+                ...prev,
+                [metricPath]: isSelected
+                    ? currentDevices.filter(d => d !== deviceName)
+                    : [...currentDevices, deviceName]
+            };
+        });
+    };
+
+    // variable for non-host devices
+    const nonHostDevices = deviceList.filter(device =>
+        device.role && device.role.toLowerCase() !== 'host'
+    ).sort((a, b) => a.name.localeCompare(b.name));
+
+
     // ----------------------------------------------
     return (
         <div className="home-content-wrapper experiment-wrapper">
@@ -671,15 +719,15 @@ export default function Experiment({username, reservation_id}) {
                                 />
                                 <label className="label-inline label-devices">Devices:</label>
                                 <div className="device-checkboxes">
-                                    {deviceList.map(device => (
-                                        <label key={device} className="device-checkbox-label">
+                                    {[...deviceList].sort((a, b) => a.name.localeCompare(b.name)).map(device => (
+                                        <label key={device.name} className="device-checkbox-label">
                                             <input
                                                 type="checkbox"
-                                                checked={row.selectedDevices.includes(device)}
-                                                onChange={() => handleDeviceToggle(row.id, device)}
+                                                checked={row.selectedDevices.includes(device.name)}
+                                                onChange={() => handleDeviceToggle(row.id, device.name)}
                                                 disabled={runningExperiment}
                                             />
-                                            <span>{device}</span>
+                                            <span>{device.name}</span>
                                         </label>
                                     ))}
                                 </div>
@@ -726,22 +774,22 @@ export default function Experiment({username, reservation_id}) {
                                         <span className="role-col">Client</span>
                                         <span className="role-col">Server</span>
                                     </div>
-                                    {deviceList.map(device => (
-                                        <div key={device} className="device-table-row">
-                                            <span className="device-col">{device}</span>
+                                    {[...deviceList].sort((a, b) => a.name.localeCompare(b.name)).map(device => (
+                                        <div key={device.name} className="device-table-row">
+                                            <span className="device-col">{device.name}</span>
                                             <span className="role-col">
                                                 <input
                                                     type="checkbox"
-                                                    checked={iperfClients.includes(device)}
-                                                    onChange={() => handleDeviceSelect(device, 'client')}
+                                                    checked={iperfClients.includes(device.name)}
+                                                    onChange={() => handleDeviceSelect(device.name, 'client')}
                                                     disabled={runningExperiment}
                                                 />
                                             </span>
                                             <span className="role-col">
                                                 <input
                                                     type="checkbox"
-                                                    checked={iperfServers.includes(device)}
-                                                    onChange={() => handleDeviceSelect(device, 'server')}
+                                                    checked={iperfServers.includes(device.name)}
+                                                    onChange={() => handleDeviceSelect(device.name, 'server')}
                                                     disabled={runningExperiment}
                                                 />
                                             </span>
@@ -820,7 +868,7 @@ export default function Experiment({username, reservation_id}) {
                             <div key={row.id} className="config-row metric-add-row">
                                 <input
                                     type="text"
-                                    className={`metric-path-input ${row.status === 'empty' || row.status === 'error' || row.status === 'predefined' ? 'input-error' : row.status === 'success' ? 'input-success' : ''}`}
+                                    className={`metric-path-input ${row.status === 'empty' || row.status === 'error' || row.status === 'predefined' ? 'input-error' : row.status === 'success' ? 'input-success' : row.status === 'warning' ? 'input-warning': ''}`}
                                     placeholder="e.g., COUNTERS_DB:COUNTERS/Ethernet8 or /openconfig-..."
                                     value={row.path}
                                     onChange={(e) => handleMetricPathChange(row.id, e.target.value)}
@@ -884,21 +932,39 @@ export default function Experiment({username, reservation_id}) {
                         </div>
 
                         {samplingMode === 'global' && (
-                            <div className="config-row">
-                                <label className="label-inline label-fixed-width">Interval (seconds):</label>
-                                <input
-                                    type="text"
-                                    className="duration-field"
-                                    value={globalInterval}
-                                    onChange={handleNumericChange(setGlobalInterval)}
-                                    disabled={runningExperiment}
-                                />
-                            </div>
+                            <>
+                                <div className="config-row">
+                                    <label className="label-inline label-fixed-width">Interval (seconds):</label>
+                                    <input
+                                        type="text"
+                                        className="duration-field"
+                                        value={globalInterval}
+                                        onChange={handleNumericChange(setGlobalInterval)}
+                                        disabled={runningExperiment}
+                                    />
+                                </div>
+                                <div className="config-row">
+                                    <label className="label-inline label-fixed-width">Select devices:</label>
+                                    <div className="device-checkboxes">
+                                        {nonHostDevices.map(device => (
+                                            <label key={device.name} className="device-checkbox-label">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={globalDevices.includes(device.name)}
+                                                    onChange={() => handleGlobalDeviceToggle(device.name)}
+                                                    disabled={runningExperiment}
+                                                />
+                                                <span>{device.name}</span>
+                                            </label>
+                                        ))}
+                                    </div>
+                                </div>
+                            </>
                         )}
 
                         {samplingMode === 'per-metric' && selectedMetrics.length > 0 && (
                             <div className="per-metric-intervals">
-                                <h4>Interval for each metric:</h4>
+                                <h4>Interval and devices for each metric:</h4>
                                 {selectedMetrics.map((metricPath) => (
                                     <div key={metricPath} className="metric-interval-row">
                                         <span className="metric-path-small">{metricPath}</span>
@@ -918,6 +984,19 @@ export default function Experiment({username, reservation_id}) {
                                             disabled={runningExperiment}
                                         />
                                         <span>s</span>
+                                        <div className="device-checkboxes">
+                                            {nonHostDevices.map(device => (
+                                                <label key={device.name} className="device-checkbox-label">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={(metricDevices[metricPath] || []).includes(device.name)}
+                                                        onChange={() => handleMetricDeviceToggle(metricPath, device.name)}
+                                                        disabled={runningExperiment}
+                                                    />
+                                                    <span>{device.name}</span>
+                                                </label>
+                                            ))}
+                                        </div>
                                     </div>
                                 ))}
                             </div>

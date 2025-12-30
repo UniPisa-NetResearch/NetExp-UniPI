@@ -71,10 +71,27 @@ def get_devices():
 
                 # if we are in the section [all], extract device name
                 if in_all_section:
-                    # device name is the first part before the space
-                    device_name = line.split()[0] if line else None
-                    if device_name:
-                        devices.append(device_name)
+                    # parse the line to extract device_name, ip, and role
+                    parts = line.split()
+                    if not parts:
+                        continue
+
+                    device_name = parts[0]
+                    ip_address = None
+                    role = None
+
+                    # extract ansible_host and role from the line
+                    for part in parts[1:]:
+                        if part.startswith('ansible_host='):
+                            ip_address = part.split('=', 1)[1]
+                        elif part.startswith('role='):
+                            role = part.split('=', 1)[1]
+
+                    devices.append({
+                        'name': device_name,
+                        'ip': ip_address,
+                        'role': role
+                    })
 
         return jsonify({'devices': devices}), 200
 
@@ -245,20 +262,16 @@ def add_metrics():
 
     data = request.get_json()
     username = data.get('username')
+    switch_ip = data.get('switch_ip')
     metrics = data.get('metrics')  # list of metrics with paths
 
-    if not username or not metrics or not isinstance(metrics, list):
+    if not username or not switch_ip or not metrics or not isinstance(metrics, list):
         return jsonify({
             'success': False,
             'error': 'Missing required fields'
         }), 400
 
     results = []
-    device_ip = '192.168.1.151'
-
-    print(f"\n{'=' * 80}", flush=True)
-    print(f"[ADD METRICS] User: {username}, Total metrics: {len(metrics)}", flush=True)
-    print(f"{'=' * 80}\n", flush=True)
 
     for idx, metric_data in enumerate(metrics, 1):
         metric_path = metric_data.get('path', '').strip()
@@ -272,15 +285,60 @@ def add_metrics():
         }
 
         metric_type = None
+        original_path = None
 
         # Validate metric on device
         try:
-            if ':' in metric_path:
+            if metric_path.startswith('/openconfig-'):
+                # OpenConfig format
+                match = re.match(r'^(/openconfig-[^:]+):(.+)$', metric_path)
+                if not match:
+                    result['message'] = 'Invalid OpenConfig format'
+                    results.append(result)
+                    continue
+
+                metric_type = 'openconfig'
+
+                # copy the original string
+                original_path = metric_path
+
+                # create path for the test
+                prefix = match.group(1)  # es. /openconfig-interfaces
+                path_after_colon = match.group(2)  # es. openconfig-interfaces:interfaces/interface[name=Ethernet1]
+
+                # add, if there is not the double prefix
+                prefix_without_slash = prefix[1:]  # es. openconfig-interfaces
+
+                if not path_after_colon.startswith(prefix_without_slash + ':'):
+                    # Add the same prefix
+                    path_for_validation = prefix + ':' + prefix_without_slash + ':' + path_after_colon
+                else:
+                    # double prefix present, use the original one
+                    path_for_validation = original_path
+
+                try:
+                    with gNMIclient(
+                            target=(switch_ip, 8080),
+                            username='admin',
+                            password='YourPaSsWoRd',
+                            insecure=True,
+                            skip_verify=True
+                    ) as gc:
+                        get_result = gc.get(path=[path_for_validation], encoding='json')
+
+                        if not get_result or 'notification' not in get_result:
+                            raise Exception("Empty response")
+
+                except Exception as e:
+                    result['message'] = f'Not available: {str(e)[:100]}'
+                    results.append(result)
+                    continue
+
+            elif ':' in metric_path:
                 # SONiC DB format
                 parts = metric_path.split(':', 1)
                 if len(parts) != 2:
                     result['message'] = 'Invalid SONiC DB format'
-                    print(f"  ✗ ERROR: {result['message']}", flush=True)
                     results.append(result)
                     continue
 
@@ -294,11 +352,10 @@ def add_metrics():
                     continue
 
                 metric_type = 'sonic_db'
-                print(f"  📝 Type: SONiC DB ({db_name})", flush=True)
 
                 try:
                     with gNMIclient(
-                            target=('192.168.1.151', 8080),
+                            target=(switch_ip, 8080),
                             username='admin',
                             password='YourPaSsWoRd',
                             insecure=True,
@@ -309,89 +366,48 @@ def add_metrics():
                         if not get_result or 'notification' not in get_result:
                             raise Exception("Empty response")
 
-                        print(f"  ✅ Valid response received", flush=True)
-
                 except Exception as e:
                     result['message'] = f'Not available: {str(e)[:100]}'
-                    print(f"  ❌ ERROR: {str(e)}", flush=True)
-                    results.append(result)
-                    continue
-
-
-            elif metric_path.startswith('/openconfig-'):
-                # OpenConfig format
-                match = re.match(r'^(/openconfig-[^:]+):(.+)$', metric_path)
-                if not match:
-                    result['message'] = 'Invalid OpenConfig format'
-                    print(f"  ✗ ERROR: {result['message']}", flush=True)
-                    results.append(result)
-                    continue
-
-                print(f"  📝 Type: OpenConfig", flush=True)
-                metric_type = 'openconfig'
-
-                try:
-                    with gNMIclient(
-                            target=('192.168.1.151', 8080),
-                            username='admin',
-                            password='YourPaSsWoRd',
-                            insecure=True,
-                            skip_verify=True
-                    ) as gc:
-                        get_result = gc.get(path=[metric_path], encoding='json')
-
-                        if not get_result or 'notification' not in get_result:
-                            raise Exception("Empty response")
-
-                        print(f"  ✅ Valid response received", flush=True)
-
-                except Exception as e:
-                    result['message'] = f'Not available: {str(e)[:100]}'
-                    print(f"  ❌ ERROR: {str(e)}", flush=True)
                     results.append(result)
                     continue
 
             else:
                 result['message'] = 'Invalid format. Must be OpenConfig or SONiC DB'
-                print(f"  ✗ ERROR: {result['message']}", flush=True)
                 results.append(result)
                 continue
 
+            # existence check in database (use original_path for OpenConfig, metric_path for SONiC)
+            path_to_save = original_path if metric_type == 'openconfig' else metric_path
+
             existing = UserMetrics.query.filter_by(
                 username=username,
-                metric=metric_path
+                metric=path_to_save
             ).first()
 
             if existing:
                 result['status'] = 'warning'
                 result['message'] = 'Already exists in your collection'
-                print(f"  ⚠️  WARNING: Already exists", flush=True)
             else:
                 new_metric = UserMetrics(
                     username=username,
-                    metric=metric_path,
+                    metric=path_to_save,
                     type=metric_type,
                 )
                 db.session.add(new_metric)
                 result['status'] = 'success'
                 result['message'] = 'Validated and added'
-                print(f"  ✅ SUCCESS: Added to database", flush=True)
 
         except Exception as e:
             result['message'] = f'Error: {str(e)}'
-            print(f"  ❌ EXCEPTION: {str(e)}", flush=True)
 
         results.append(result)
 
     # Commit all successful additions
-    print(f"\n{'=' * 80}", flush=True)
-    print(f"[DATABASE COMMIT] Attempting to commit changes...", flush=True)
     try:
         db.session.commit()
     except Exception as e:
         db.session.rollback()
-        print(f"❌ Commit failed: {str(e)}", flush=True)
-        print(f"{'=' * 80}\n", flush=True)
+
         return jsonify({
             'success': False,
             'error': f'Database error: {str(e)}'

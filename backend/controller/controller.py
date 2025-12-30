@@ -319,9 +319,6 @@ def grant_access():
     # run ansible-playbook
     extra_vars = {"username": username, "ssh_key": ssh_key, "full_user": bool(full_user)}
     rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars)
-    #print("Ansible rc:", rc)
-    #print("Ansible stdout:", out)
-    #print("Ansible stderr:", err)
 
     if rc == 0:
         # user account creation completed
@@ -350,10 +347,6 @@ def grant_access():
             print(f"Running playbook {playbook_path} for snapshot0 (reservation {reservation_id})")
 
             rc, out, err = run_ansible_playbook(inv_path, playbook_path, extra_vars=extra_vars)
-
-            #print("Playbook rc:", rc)
-            #print("Playbook stdout:", out)
-            #print("Playbook stderr:", err)
 
             if rc == 0:
                 return jsonify({"ok": True, "message": "Grant executed", "inventory": inv_path, "stdout": out, "stderr": err}), 200
@@ -402,14 +395,6 @@ def revoke_access():
         return jsonify({"ok": False, "message": "Missing required fields (ssh_key, username, reservation_id, rollback)"}), 400
 
     print("REVOKE ACCESS RECEIVED", data)
-
-    """
-    if containerlab_test:
-        del active_reservations[username]
-        remove_files(f"res{reservation_id}", "file")
-        print("Deleted generated files for reservation", reservation_id)
-        return jsonify({"ok": True, "message": "Skip revoke operations for containerlab test"}), 200
-    """
 
     # get inventory path
     safe_res = safe_filename(f"res-{reservation_id}-inventory")
