@@ -33,9 +33,11 @@ export default function Experiment({username, reservation_id}) {
 
     const [globalDevices, setGlobalDevices] = useState([]);  // device for global mode
     const [metricDevices, setMetricDevices] = useState({});    // device for per-metric mode {metricPath: [device1, device2, ...]}
-
     // Validation in progress
     const [validatingMetrics, setValidatingMetrics] = useState(false);
+
+    // experiment mode selected by user
+    const [selectedMode, setSelectedMode] = useState('free'); // 'free' | 'interactive' | 'guided'
 
     // disable functionalities while experiment is running
     const [runningExperiment, setRunningExperiment] = useState(false);
@@ -609,198 +611,222 @@ export default function Experiment({username, reservation_id}) {
         device.role && device.role.toLowerCase() !== 'host'
     ).sort((a, b) => a.name.localeCompare(b.name));
 
-
     // ----------------------------------------------
     return (
         <div className="home-content-wrapper experiment-wrapper">
-
             <div className="card experiment-card">
                 <h2 className="title">🧪 Setup and run experiment</h2>
-
-                {/* Row for type 1 of experiment */}
-                <div className="experiment-section">
-                    <h3 className="section-title">Free Mode</h3>
-                    <div className="section-content">
-                        <div className="config-row">
-                            <label className="label-inline label-fixed-width">Download description template:</label>
-                            <button type="button" className="template-button configuration-button"
-                                    onClick={downloadTemplate} disabled={runningExperiment || waitOperation}>Download
-                            </button>
-                            <label className="label-inline label-fixed-width additional-margin">Load experiment description:</label>
-                            <button type="button" className="template-button configuration-button choose-button"
-                                    onClick={experimentDescription.choose} disabled={runningExperiment}>Choose
-                                description
-                            </button>
-                            <div
-                                className={`selected-file-name file-status-${experimentDescription.fileType} additional-margin`}>{experimentDescription.fileName}</div>
-                            <input ref={experimentDescription.ref} type="file" style={{display: 'none'}}
-                                   onChange={experimentDescription.onChange}
-                                   disabled={runningExperiment}/>
-                        </div>
-
-                        <div className="config-row">
-                            <label className="label-inline label-fixed-width">Load playbooks:</label>
-                            <button type="button" className="playbook-button configuration-button choose-button"
-                                    onClick={chooseFreePlaybooks} disabled={runningExperiment}>Choose playbooks
-                            </button>
-                            <input ref={freeModeFileRef} type="file" multiple accept=".yml,.yaml"
-                                   style={{display: 'none'}} onChange={handleFreePlaybookFiles}
-                                   disabled={runningExperiment}/>
-                        </div>
-
-                        {freePlaybookFiles.length > 0 && (
-                            <div className="config-row">
-                                <div className="playbook-files-list">
-                                    {freePlaybookFiles.map((file, idx) => (
-                                        <div key={idx} className="playbook-file-item">
-                                            <span className="file-name-text">{file.name}</span>
-                                            <button
-                                                type="button"
-                                                className="remove-file-btn"
-                                                onClick={() => removeFreePlaybookFile(idx)}
-                                                disabled={runningExperiment}
-                                            >×</button>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
-                    </div>
+                {/* Mode selector tabs */}
+                <div className="mode-selector">
+                    <button
+                        className={`mode-tab ${selectedMode === 'free' ? 'active' : ''}`}
+                        onClick={() => setSelectedMode('free')}
+                        disabled={runningExperiment}
+                    >
+                        Free Mode
+                    </button>
+                    <button
+                        className={`mode-tab ${selectedMode === 'interactive' ? 'active' : ''}`}
+                        onClick={() => setSelectedMode('interactive')}
+                        disabled={runningExperiment}
+                    >
+                        Interactive Mode
+                    </button>
+                    <button
+                        className={`mode-tab ${selectedMode === 'guided' ? 'active' : ''}`}
+                        onClick={() => setSelectedMode('guided')}
+                        disabled={runningExperiment}
+                    >
+                        Guided Mode
+                    </button>
                 </div>
 
-                <div className="experiment-section">
-                    <h3 className="section-title">Interactive Mode</h3>
-                    <div className="section-content">
-                        <div className="config-row">
-                            {/* Experiment duration line */}
-                            <label className="label-inline label-fixed-width label-output">Insert experiment duration
-                                (seconds):</label>
-                            <input
-                                type={"text"}
-                                className={`duration-field`}
-                                value={experimentDuration}
-                                onChange={handleNumericChange(setExperimentDuration)}
-                                readOnly={runningExperiment}
-                            />
-                            <button type="button" className="send-button experiment-button additional-margin"
-                                    onClick={handleCreateExperiment}
-                                    disabled={runningExperiment}>Create experiment
-                            </button>
-                            <div className={`experiment-created-message ${experimentMessageType}`}>{experimentMessage}</div>
-                        </div>
-                        {/* Row for second mode of experiment definition */}
-                        {playbookRows.map((row, idx) => (
-                            <div key={row.id} className="config-row config-row-nowrap  playbook-row-container">
-                                <label className="label-inline label-time">Time of execution(seconds):</label>
-                                <input
-                                    type={"text"}
-                                    className="time-field-short"
-                                    value={row.executionTime}
-                                    onChange={(e) => handleExecutionTimeChange(row.id, e.target.value)}
-                                    readOnly={runningExperiment}
-                                />
-                                <label className="label-inline label-playbook">Load playbook:</label>
-                                <button
-                                    type="button"
-                                    className="playbook-button configuration-button"
-                                    onClick={() => choosePlaybookFile(row.id)}
-                                    disabled={runningExperiment}
-                                >
-                                    Choose file
+                {/* Free Mode Section */}
+                {selectedMode === 'free' && (
+                    <div className="experiment-section mode-content">
+                        <div className="section-content">
+                            <div className="config-row">
+                                <label className="label-inline label-fixed-width">Download description template:</label>
+                                <button type="button" className="template-button configuration-button"
+                                        onClick={downloadTemplate} disabled={runningExperiment || waitOperation}>Download
+                                </button>
+                                <label className="label-inline label-fixed-width additional-margin">Load experiment description:</label>
+                                <button type="button" className="template-button configuration-button choose-button"
+                                        onClick={experimentDescription.choose} disabled={runningExperiment}>Choose
+                                    description
                                 </button>
                                 <div
-                                    className={`selected-file-name-compact file-status-${row.fileType}`}>{row.fileName}</div>
-                                <input
-                                    type="file"
-                                    ref={(el) => (playbookFileRefs.current[row.id] = el)}
-                                    style={{display: 'none'}}
-                                    onChange={(e) => onPlaybookFileChange(e, row.id)}
-                                    disabled={runningExperiment}
-                                />
-                                <label className="label-inline label-devices">Devices:</label>
-                                <div className="device-checkboxes">
-                                    {[...deviceList].sort((a, b) => a.name.localeCompare(b.name)).map(device => (
-                                        <label key={device.name} className="device-checkbox-label">
-                                            <input
-                                                type="checkbox"
-                                                checked={row.selectedDevices.includes(device.name)}
-                                                onChange={() => handleDeviceToggle(row.id, device.name)}
-                                                disabled={runningExperiment}
-                                            />
-                                            <span>{device.name}</span>
-                                        </label>
-                                    ))}
-                                </div>
-                                <label
-                                    className="label-inline add-remove-label"
-                                    onClick={() => handleAddPlaybookRow(idx)}
-                                >+</label>
-                                <label
-                                    className="label-inline add-remove-label"
-                                    onClick={() => handleRemovePlaybookRow(idx)}
-                                    style={{
-                                        opacity: idx === 0 ? 0.3 : 1,
-                                        pointerEvents: idx === 0 ? 'none' : 'auto'
-                                    }}
-                                >-</label>
+                                    className={`selected-file-name file-status-${experimentDescription.fileType} additional-margin`}>{experimentDescription.fileName}</div>
+                                <input ref={experimentDescription.ref} type="file" style={{display: 'none'}}
+                                       onChange={experimentDescription.onChange}
+                                       disabled={runningExperiment}/>
                             </div>
-                        ))}
-                    </div>
-                </div>
 
-                <div className="experiment-section">
-                    <h3 className="section-title">Guided Mode</h3>
-                    <div className="section-content">
-                        {/* Row for third type of experiment */}
-                        <div className="config-row">
-                            <label className="label-inline label-fixed-width">Experiment duration (seconds):</label>
-                            <input
-                                type="text"
-                                className="duration-field"
-                                value={guidedDuration}
-                                onChange={handleNumericChange(setGuidedDuration)}
-                                readOnly={runningExperiment}
-                            />
-                        </div>
+                            <div className="config-row">
+                                <label className="label-inline label-fixed-width">Load playbooks:</label>
+                                <button type="button" className="playbook-button configuration-button choose-button"
+                                        onClick={chooseFreePlaybooks} disabled={runningExperiment}>Choose playbooks
+                                </button>
+                                <input ref={freeModeFileRef} type="file" multiple accept=".yml,.yaml"
+                                       style={{display: 'none'}} onChange={handleFreePlaybookFiles}
+                                       disabled={runningExperiment}/>
+                            </div>
 
-                        <div className="config-row guided-row">
-                            <label className="label-inline label-fixed-width">Select iperf configuration:</label>
-
-                            <div className="guided-right">
-                                {/* Device selection table */}
-                                <div className="device-selection-table">
-                                    <div className="device-table-header">
-                                        <span className="device-col">Device</span>
-                                        <span className="role-col">Client</span>
-                                        <span className="role-col">Server</span>
+                            {freePlaybookFiles.length > 0 && (
+                                <div className="config-row">
+                                    <div className="playbook-files-list">
+                                        {freePlaybookFiles.map((file, idx) => (
+                                            <div key={idx} className="playbook-file-item">
+                                                <span className="file-name-text">{file.name}</span>
+                                                <button
+                                                    type="button"
+                                                    className="remove-file-btn"
+                                                    onClick={() => removeFreePlaybookFile(idx)}
+                                                    disabled={runningExperiment}
+                                                >×</button>
+                                            </div>
+                                        ))}
                                     </div>
-                                    {[...deviceList].sort((a, b) => a.name.localeCompare(b.name)).map(device => (
-                                        <div key={device.name} className="device-table-row">
-                                            <span className="device-col">{device.name}</span>
-                                            <span className="role-col">
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )}
+                {/* Interactive Mode Section */}
+                {selectedMode === 'interactive' && (
+                    <div className="experiment-section mode-content">
+                        <div className="section-content">
+                            <div className="config-row">
+                                {/* Experiment duration line */}
+                                <label className="label-inline label-fixed-width label-output">Insert experiment duration
+                                    (seconds):</label>
+                                <input
+                                    type={"text"}
+                                    className={`duration-field`}
+                                    value={experimentDuration}
+                                    onChange={handleNumericChange(setExperimentDuration)}
+                                    readOnly={runningExperiment}
+                                />
+                                <button type="button" className="send-button experiment-button additional-margin"
+                                        onClick={handleCreateExperiment}
+                                        disabled={runningExperiment}>Create experiment
+                                </button>
+                                <div className={`experiment-created-message ${experimentMessageType}`}>{experimentMessage}</div>
+                            </div>
+                            {/* Row for second mode of experiment definition */}
+                            {playbookRows.map((row, idx) => (
+                                <div key={row.id} className="config-row config-row-nowrap  playbook-row-container">
+                                    <label className="label-inline label-time">Time of execution(seconds):</label>
+                                    <input
+                                        type={"text"}
+                                        className="time-field-short"
+                                        value={row.executionTime}
+                                        onChange={(e) => handleExecutionTimeChange(row.id, e.target.value)}
+                                        readOnly={runningExperiment}
+                                    />
+                                    <label className="label-inline label-playbook">Load playbook:</label>
+                                    <button
+                                        type="button"
+                                        className="playbook-button configuration-button"
+                                        onClick={() => choosePlaybookFile(row.id)}
+                                        disabled={runningExperiment}
+                                    >
+                                        Choose file
+                                    </button>
+                                    <div
+                                        className={`selected-file-name-compact file-status-${row.fileType}`}>{row.fileName}</div>
+                                    <input
+                                        type="file"
+                                        ref={(el) => (playbookFileRefs.current[row.id] = el)}
+                                        style={{display: 'none'}}
+                                        onChange={(e) => onPlaybookFileChange(e, row.id)}
+                                        disabled={runningExperiment}
+                                    />
+                                    <label className="label-inline label-devices">Devices:</label>
+                                    <div className="device-checkboxes">
+                                        {[...deviceList].sort((a, b) => a.name.localeCompare(b.name)).map(device => (
+                                            <label key={device.name} className="device-checkbox-label">
                                                 <input
                                                     type="checkbox"
-                                                    checked={iperfClients.includes(device.name)}
-                                                    onChange={() => handleDeviceSelect(device.name, 'client')}
+                                                    checked={row.selectedDevices.includes(device.name)}
+                                                    onChange={() => handleDeviceToggle(row.id, device.name)}
                                                     disabled={runningExperiment}
                                                 />
-                                            </span>
-                                            <span className="role-col">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={iperfServers.includes(device.name)}
-                                                    onChange={() => handleDeviceSelect(device.name, 'server')}
-                                                    disabled={runningExperiment}
-                                                />
-                                            </span>
+                                                <span>{device.name}</span>
+                                            </label>
+                                        ))}
+                                    </div>
+                                    <label
+                                        className="label-inline add-remove-label"
+                                        onClick={() => handleAddPlaybookRow(idx)}
+                                    >+</label>
+                                    <label
+                                        className="label-inline add-remove-label"
+                                        onClick={() => handleRemovePlaybookRow(idx)}
+                                        style={{
+                                            opacity: idx === 0 ? 0.3 : 1,
+                                            pointerEvents: idx === 0 ? 'none' : 'auto'
+                                        }}
+                                    >-</label>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+                {/* Guided Mode Section */}
+                {selectedMode === 'guided' && (
+                    <div className="experiment-section mode-content">
+                        <div className="section-content">
+                            {/* Row for third type of experiment */}
+                            <div className="config-row">
+                                <label className="label-inline label-fixed-width">Experiment duration (seconds):</label>
+                                <input
+                                    type="text"
+                                    className="duration-field"
+                                    value={guidedDuration}
+                                    onChange={handleNumericChange(setGuidedDuration)}
+                                    readOnly={runningExperiment}
+                                />
+                            </div>
+
+                            <div className="config-row guided-row">
+                                <label className="label-inline label-fixed-width">Select iperf configuration:</label>
+
+                                <div className="guided-right">
+                                    {/* Device selection table */}
+                                    <div className="device-selection-table">
+                                        <div className="device-table-header">
+                                            <span className="device-col">Device</span>
+                                            <span className="role-col">Client</span>
+                                            <span className="role-col">Server</span>
                                         </div>
-                                    ))}
+                                        {[...deviceList].sort((a, b) => a.name.localeCompare(b.name)).map(device => (
+                                            <div key={device.name} className="device-table-row">
+                                                <span className="device-col">{device.name}</span>
+                                                <span className="role-col">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={iperfClients.includes(device.name)}
+                                                        onChange={() => handleDeviceSelect(device.name, 'client')}
+                                                        disabled={runningExperiment}
+                                                    />
+                                                </span>
+                                                <span className="role-col">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={iperfServers.includes(device.name)}
+                                                        onChange={() => handleDeviceSelect(device.name, 'server')}
+                                                        disabled={runningExperiment}
+                                                    />
+                                                </span>
+                                            </div>
+                                        ))}
+                                    </div>
                                 </div>
                             </div>
                         </div>
                     </div>
-                </div>
-
+                )}
                 <div className="experiment-section">
                     <h3 className="section-title">Telemetry</h3>
                     <div className="section-content">
