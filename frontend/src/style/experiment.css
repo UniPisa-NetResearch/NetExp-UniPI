@@ -352,6 +352,15 @@
   background-color: #c82333;
 }
 
+.validation-message {
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  margin-left: 12px;
+  white-space: nowrap;
+}
+
 /* Interactive Mode - Experiment created message */
 .experiment-created-message {
   padding: 8px 12px;
@@ -361,13 +370,15 @@
 
 }
 
-.experiment-created-message.success {
+.experiment-created-message.success,
+.validation-message.success {
   color: #1e7e34;
   background-color: rgba(40, 167, 69, 0.1);
   border: 1px solid #28a745;
 }
 
-.experiment-created-message.error {
+.experiment-created-message.error,
+.validation-message.error {
   color: #dc3545;
   background-color: rgba(220, 53, 69, 0.1);
   border: 1px solid #dc3545;

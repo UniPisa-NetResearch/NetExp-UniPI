@@ -1,7 +1,8 @@
 import os
 import subprocess
 import re
-
+from io import BytesIO
+import traceback
 from flask import request, send_file, jsonify
 
 import yaml
@@ -28,8 +29,8 @@ EXPERIMENT_PLAYBOOKS_DIR = os.path.join(BASE_DIR, "experimentPlaybooks")
 
 def ensure_experiment_dirs():
     # Create directories when don't exist
-    EXPERIMENT_TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
-    EXPERIMENT_PLAYBOOKS_DIR.mkdir(parents=True, exist_ok=True)
+    os.makedirs(EXPERIMENT_TEMPLATES_DIR, exist_ok=True)
+    os.makedirs(EXPERIMENT_PLAYBOOKS_DIR, exist_ok=True)
 
 
 @app.route('/api/experimenter/getDevices', methods=['POST'])
@@ -98,6 +99,11 @@ def get_devices():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+# function to indent yaml file
+class IndentedDumper(yaml.Dumper):
+    def increase_indent(self, flow=False, indentless=False):
+        return super(IndentedDumper, self).increase_indent(flow, False)
+
 @app.route('/api/experimenter/downloadTemplate', methods=['POST'])
 def download_experiment_template():
     # return experiment template
@@ -108,7 +114,7 @@ def download_experiment_template():
         'reservation_id': reservation_id,
         'schedule': [
             {
-                'time_offset': 0,
+                'time_offset_s': 0,
                 'name': 'INITIAL_CHECK',
                 'playbook': 'initial_check.yml',
                 'targets': ['sw1', 'sw2']
@@ -123,10 +129,9 @@ def download_experiment_template():
     }
 
     # convert in YAML
-    yaml_content = yaml.dump(template, default_flow_style=False, sort_keys=False)
+    yaml_content = yaml.dump(template, Dumper=IndentedDumper, default_flow_style=False, sort_keys=False, indent=2, width=1000)
 
     # create temporary file
-    from io import BytesIO
     buffer = BytesIO()
     buffer.write(yaml_content.encode('utf-8'))
     buffer.seek(0)
@@ -138,6 +143,167 @@ def download_experiment_template():
         download_name='experiment_template.yml'
     )
 
+
+def validate_experiment_template_schema(yaml_data):
+
+    # validate root fields exist
+    for field in ['experiment_id', 'duration_s', 'reservation_id', 'schedule']:
+        if field not in yaml_data:
+            return False, f'Missing field: {field}'
+
+    # validate root field types
+    if not isinstance(yaml_data['experiment_id'], str):
+        return False, 'Field "experiment_id" must be string'
+
+    if not isinstance(yaml_data['duration_s'], int):
+        return False, 'Field "duration_s" must be integer'
+
+    if not isinstance(yaml_data['reservation_id'], (str, type(None))):
+        return False, 'Field "reservation_id" must be str or null'
+
+    # validate schedule
+    if not isinstance(yaml_data['schedule'], list):
+        return False, 'Field "schedule" must be list'
+
+    if len(yaml_data['schedule']) == 0:
+        return False, 'Field "schedule" cannot be empty'
+
+    # validate each schedule item
+    for idx, step in enumerate(yaml_data['schedule']):
+        if not isinstance(step, dict):
+            return False, f'schedule[{idx}] must be dict'
+
+        # check required fields
+        for field in ['time_offset_s', 'name', 'playbook', 'targets']:
+            if field not in step:
+                return False, f'schedule[{idx}] missing field: {field}'
+
+        # check field types
+        if not isinstance(step['time_offset_s'], int):
+            return False, f'schedule[{idx}].time_offset_s must be integer'
+
+        if not isinstance(step['name'], str):
+            return False, f'schedule[{idx}].name must be string'
+
+        if not isinstance(step['playbook'], str):
+            return False, f'schedule[{idx}].playbook must be string'
+
+        if not isinstance(step['targets'], list):
+            return False, f'schedule[{idx}].targets must be list'
+
+        if len(step['targets']) == 0:
+            return False, f'schedule[{idx}].targets cannot be empty'
+
+        # check all targets are strings
+        for t_idx, target in enumerate(step['targets']):
+            if not isinstance(target, str):
+                return False, f'schedule[{idx}].targets[{t_idx}] must be string'
+
+    return True, None
+
+@app.route('/api/experimenter/validateTemplate', methods=['POST'])
+def validate_experiment_template():
+    # validate experiment template, load playbooks nd check their presence
+    try:
+        ensure_experiment_dirs()
+
+        experiment_file = request.files.get('experiment_description')
+        reservation_id = request.form.get('reservation_id')
+        playbook_files = request.files.getlist('playbooks')
+
+        if not experiment_file or not reservation_id:
+            return jsonify({
+                'success': False,
+                'error': 'invalid_request',
+                'details': 'Missing experiment_description or reservation_id'
+            }), 400
+
+        # Parse YAML
+        try:
+            yaml_content = yaml.safe_load(experiment_file.stream)
+        except yaml.YAMLError as e:
+            return jsonify({
+                'success': False,
+                'error': 'invalid_format',
+                'details': f'YAML parsing error: {str(e)}'
+            }), 400
+
+        # validate against schema
+        is_valid, error_msg = validate_experiment_template_schema(yaml_content)
+        if not is_valid:
+            return jsonify({
+                'success': False,
+                'error': 'invalid_format',
+                'details': error_msg
+            }), 400
+
+        # create reservation dir inside playbooks dir
+        playbooks_dir = os.path.join(EXPERIMENT_PLAYBOOKS_DIR, f'res_{reservation_id}')
+        os.makedirs(playbooks_dir, exist_ok=True)
+
+        # save loaded playbooks
+        uploaded_playbooks = []
+        if playbook_files:
+            for playbook_file in playbook_files:
+                if playbook_file.filename:
+                    filename = secure_filename(playbook_file.filename)
+                    filepath = os.path.join(playbooks_dir, filename)
+                    playbook_file.save(filepath)
+                    uploaded_playbooks.append(filename)
+
+        # check presence of all needed playbooks
+        required_playbooks = [step['playbook'] for step in yaml_content['schedule']]
+        missing_playbooks = []
+
+        for playbook_name in required_playbooks:
+            playbook_path = os.path.join(playbooks_dir, playbook_name)
+            if not os.path.exists(playbook_path):
+                missing_playbooks.append(playbook_name)
+
+        if missing_playbooks:
+            return jsonify({
+                'success': False,
+                'error': 'missing_playbooks',
+                'missing': missing_playbooks,
+                'uploaded': uploaded_playbooks,
+                'details': f'Missing {len(missing_playbooks)} playbook(s): {", ".join(missing_playbooks)}'
+            }), 400
+
+        # update reservation_id in template with actual value
+        yaml_content['reservation_id'] = reservation_id
+
+        # save validated template
+        templates_dir = os.path.join(EXPERIMENT_TEMPLATES_DIR, f'res_{reservation_id}')
+        os.makedirs(templates_dir, exist_ok=True)
+
+        experiment_name = secure_filename(experiment_file.filename)
+        template_path = os.path.join(templates_dir, experiment_name)
+
+        # Write modified YAML content
+        with open(template_path, 'w', encoding='utf-8') as f:
+            yaml.dump(yaml_content, f, Dumper=IndentedDumper, default_flow_style=False, sort_keys=False, indent=2, width=1000)
+
+        print(f"[VALIDATE TEMPLATE] Success for reservation {reservation_id}", flush=True)
+        print(f"  - Template: {experiment_name}", flush=True)
+        print(f"  - Uploaded playbooks: {len(uploaded_playbooks)}", flush=True)
+        print(f"  - Required playbooks: {len(required_playbooks)}", flush=True)
+
+        return jsonify({
+            'success': True,
+            'message': 'Template validated and saved successfully',
+            'experiment_name': experiment_name,
+            'uploaded_playbooks': uploaded_playbooks,
+            'required_playbooks': required_playbooks
+        }), 200
+
+    except Exception as e:
+        print(f"[VALIDATE TEMPLATE ERROR] {str(e)}", flush=True)
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': 'server_error',
+            'details': str(e)
+        }), 500
 
 @app.route('/api/experimenter/createExperiment', methods=['POST'])
 def create_experiment():
@@ -219,7 +385,6 @@ def create_experiment():
         print(f"Error creating experiment: {e}")
         return jsonify({'error': str(e)}), 500
 
-
 @app.route('/api/experimenter/getUserMetrics', methods=['POST'])
 def get_user_metrics():
     # returns user's custom metrics from database
@@ -254,7 +419,6 @@ def get_user_metrics():
             'success': False,
             'error': f'Database error: {str(e)}'
         }), 500
-
 
 @app.route('/api/experimenter/addMetrics', methods=['POST'])
 def add_metrics():
@@ -424,5 +588,5 @@ def add_metrics():
 if __name__ == '__main__':
 
     # host 0.0.0.0 often necessary in virtual environments or containers.
-    #app.run(debug=True, host='0.0.0.0', port=5004)#, use_reloader=False)
+    #app.run(debug=True, host='0.0.0.0', port=5004 #, use_reloader=False)
     app.run(debug=False, host='0.0.0.0', port=5004, use_reloader=False)

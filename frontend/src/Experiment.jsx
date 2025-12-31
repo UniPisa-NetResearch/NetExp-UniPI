@@ -16,6 +16,7 @@ export default function Experiment({username, reservation_id}) {
     const freeModeFileRef = useRef(null);
     const [experimentMessage, setExperimentMessage] = useState('');
     const [experimentMessageType, setExperimentMessageType] = useState(''); // 'success' | 'error'
+    const [templateValidation, setTemplateValidation] = useState({ message: '', type: '' }); // 'success' | 'error
     // guided mode states
     const [guidedDuration, setGuidedDuration] = useState('');
     const [deviceList, setDeviceList] = useState([]);
@@ -229,19 +230,6 @@ export default function Experiment({username, reservation_id}) {
         window.URL.revokeObjectURL(url);
     }
 
-    const downloadFile= async (experiment_type) =>{
-        // executed when user press download button
-        if (experiment_type === "first") {
-            setWaitOperation(true);
-            setWaitOperation(false);
-
-        } else if (experiment_type === "third") {
-            setWaitOperation(true);
-            setWaitOperation(false);
-        }
-    }
-
-
     // function for numeric input
     const handleNumericChange = (setter) => (e) => {
         const value = e.target.value;
@@ -452,10 +440,21 @@ export default function Experiment({username, reservation_id}) {
 
         setFreePlaybookFiles(prev => [...prev, ...validFiles]);
         e.target.value = null;
+
+        // validation reset if it was a loaded template
+        if (experimentDescription.file) {
+            setTemplateValidation({ message: 'Playbooks changed - please reload template', type: 'error' });
+            experimentDescription.reset();
+        }
     };
 
     const removeFreePlaybookFile = (index) => {
         setFreePlaybookFiles(prev => prev.filter((_, i) => i !== index));
+        // validation reset if it was a loaded template
+        if (experimentDescription.file) {
+            setTemplateValidation({ message: 'Playbooks changed - please reload template', type: 'error' });
+            experimentDescription.reset();
+        }
     };
 
     const chooseFreePlaybooks = () => {
@@ -480,6 +479,70 @@ export default function Experiment({username, reservation_id}) {
             createDownload(blob, 'experiment_template.yml');
         } catch (error) {
             console.error('Error downloading template:', error);
+        } finally {
+            setWaitOperation(false);
+        }
+    };
+
+    const handleExperimentDescriptionChange = async (e) => {
+        const f = e.target.files[0] || null;
+        experimentDescription.onChange(e);
+
+        if (!f) {
+            setTemplateValidation({ message: '', type: '' });
+            return;
+        }
+
+        const nameLower = f.name.toLowerCase();
+        const isValid = ['.yml', '.yaml'].some(ext => nameLower.endsWith(ext));
+
+        if (isValid) {
+            await validateExperimentTemplate(f);
+        } else {
+            setTemplateValidation({ message: '', type: '' });
+        }
+    };
+
+
+    const validateExperimentTemplate = async (templateFile) => {
+        const formData = new FormData();
+        formData.append('experiment_description', templateFile);
+        formData.append('reservation_id', reservation_id);
+
+        // add every selected playbook
+        freePlaybookFiles.forEach(file => {
+            formData.append('playbooks', file);
+        });
+
+        setWaitOperation(true);
+        setTemplateValidation({ message: 'Validating...', type: '' });
+
+        try {
+            const response = await fetch('http://localhost:5004/api/experimenter/validateTemplate', {
+                method: 'POST',
+                body: formData
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                setTemplateValidation({ message: '✓ Template valid', type: 'success' });
+            } else {
+                let errorMsg = 'Invalid format';
+                if (data.error === 'missing_playbooks') {
+                    errorMsg = `Missing playbooks: ${data.missing.join(', ')}`;
+                } else if (data.details) {
+                    errorMsg = data.details;
+                }
+
+                setTemplateValidation({ message: errorMsg, type: 'error' });
+                // reset file if not valid
+                experimentDescription.reset();
+            }
+        } catch (error) {
+            console.error('Error validating template:', error);
+            setTemplateValidation({ message: 'Validation error', type: 'error' });
+            experimentDescription.reset();
         } finally {
             setWaitOperation(false);
         }
@@ -652,20 +715,25 @@ export default function Experiment({username, reservation_id}) {
                                 </button>
                                 <label className="label-inline label-fixed-width additional-margin">Load experiment description:</label>
                                 <button type="button" className="template-button configuration-button choose-button"
-                                        onClick={experimentDescription.choose} disabled={runningExperiment}>Choose
+                                        onClick={experimentDescription.choose} disabled={runningExperiment || waitOperation}>Choose
                                     description
                                 </button>
                                 <div
                                     className={`selected-file-name file-status-${experimentDescription.fileType} additional-margin`}>{experimentDescription.fileName}</div>
                                 <input ref={experimentDescription.ref} type="file" style={{display: 'none'}}
-                                       onChange={experimentDescription.onChange}
+                                       onChange={handleExperimentDescriptionChange}
                                        disabled={runningExperiment}/>
+                                {templateValidation.message && (
+                                    <div className={`validation-message ${templateValidation.type}`}>
+                                        {templateValidation.message}
+                                    </div>
+                                )}
                             </div>
 
                             <div className="config-row">
                                 <label className="label-inline label-fixed-width">Load playbooks:</label>
                                 <button type="button" className="playbook-button configuration-button choose-button"
-                                        onClick={chooseFreePlaybooks} disabled={runningExperiment}>Choose playbooks
+                                        onClick={chooseFreePlaybooks} disabled={runningExperiment || waitOperation}>Choose playbooks
                                 </button>
                                 <input ref={freeModeFileRef} type="file" multiple accept=".yml,.yaml"
                                        style={{display: 'none'}} onChange={handleFreePlaybookFiles}
@@ -682,7 +750,7 @@ export default function Experiment({username, reservation_id}) {
                                                     type="button"
                                                     className="remove-file-btn"
                                                     onClick={() => removeFreePlaybookFile(idx)}
-                                                    disabled={runningExperiment}
+                                                    disabled={runningExperiment || waitOperation}
                                                 >×</button>
                                             </div>
                                         ))}
