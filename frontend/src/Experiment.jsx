@@ -17,6 +17,8 @@ export default function Experiment({username, reservation_id}) {
     const [experimentMessage, setExperimentMessage] = useState('');
     const [experimentMessageType, setExperimentMessageType] = useState(''); // 'success' | 'error'
     const [templateValidation, setTemplateValidation] = useState({ message: '', type: '' }); // 'success' | 'error
+    // interactive mode
+    const [experimentName, setExperimentName] = useState('');       // name of the experiment
     // guided mode states
     const [guidedDuration, setGuidedDuration] = useState('');
     const [deviceList, setDeviceList] = useState([]);
@@ -526,7 +528,7 @@ export default function Experiment({username, reservation_id}) {
             const data = await response.json();
 
             if (data.success) {
-                setTemplateValidation({ message: '✓ Template valid', type: 'success' });
+                setTemplateValidation({ message: 'valid', type: 'success' });
             } else {
                 let errorMsg = 'Invalid format';
                 if (data.error === 'missing_playbooks') {
@@ -553,6 +555,12 @@ export default function Experiment({username, reservation_id}) {
         // check each field is not empty
         const allRowsFilled = playbookRows.every(row => row.executionTime && row.file);
 
+        if (!experimentName || !experimentName.trim()) {
+            setExperimentMessage('Experiment name is required');
+            setExperimentMessageType('error');
+            return;
+        }
+
         if (!experimentDuration || experimentDuration === '0') {
             setExperimentMessage('Experiment duration is required');
             setExperimentMessageType('error');
@@ -560,7 +568,7 @@ export default function Experiment({username, reservation_id}) {
         }
 
         if (!allRowsFilled) {
-            setExperimentMessage('Following rows must have execution time and file selected');
+            setExperimentMessage('Following rows must have each field selected');
             setExperimentMessageType('error');
             return;
         }
@@ -574,7 +582,16 @@ export default function Experiment({username, reservation_id}) {
             return;
         }
 
+        const hasRowsWithoutDevices = playbookRows.some(row => row.selectedDevices.length === 0);
+
+        if (hasRowsWithoutDevices) {
+            setExperimentMessage('Each playbook must have at least one device selected');
+            setExperimentMessageType('error');
+            return;
+        }
+
         const formData = new FormData();
+        formData.append('experiment_name', experimentName.trim());
         formData.append('duration', experimentDuration);
         formData.append('reservation_id', reservation_id);
 
@@ -603,10 +620,20 @@ export default function Experiment({username, reservation_id}) {
 
             if (!response.ok) {
                 console.error('Failed to create experiment');
+                return;
             }
 
             const blob = await response.blob();
-            const filename = `res_${reservation_id}_exp_description.yml`;
+            const contentDisposition = response.headers.get('Content-Disposition');
+            let filename = `res_${reservation_id}_exp_description.yml`; // fallback name
+
+            if (contentDisposition) {
+                const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+                if (filenameMatch && filenameMatch[1]) {
+                    filename = filenameMatch[1].replace(/['"]/g, '');
+                }
+            }
+
             createDownload(blob, filename);
 
             setExperimentMessage(filename);
@@ -718,16 +745,27 @@ export default function Experiment({username, reservation_id}) {
                                         onClick={experimentDescription.choose} disabled={runningExperiment || waitOperation}>Choose
                                     description
                                 </button>
-                                <div
-                                    className={`selected-file-name file-status-${experimentDescription.fileType} additional-margin`}>{experimentDescription.fileName}</div>
                                 <input ref={experimentDescription.ref} type="file" style={{display: 'none'}}
                                        onChange={handleExperimentDescriptionChange}
                                        disabled={runningExperiment}/>
-                                {templateValidation.message && (
-                                    <div className={`validation-message ${templateValidation.type}`}>
-                                        {templateValidation.message}
+
+                                {(experimentDescription.fileName || templateValidation.message) && (
+                                    <div className={`validation-message ${
+                                        experimentDescription.fileType === 'valid' && templateValidation.type === 'success' 
+                                            ? 'success' 
+                                            : experimentDescription.fileType === 'invalid' || templateValidation.type === 'error' 
+                                                ? 'error' 
+                                                : ''
+                                    } additional-margin`}>
+                                        {experimentDescription.fileType === 'valid' && templateValidation.type === 'success'
+                                            ? `✓ ${experimentDescription.fileName} ${templateValidation.message}`
+                                            : experimentDescription.fileType === 'invalid'
+                                                ? `${experimentDescription.fileName} invalid format`
+                                                : templateValidation.message
+                                        }
                                     </div>
                                 )}
+
                             </div>
 
                             <div className="config-row">
@@ -765,8 +803,21 @@ export default function Experiment({username, reservation_id}) {
                     <div className="experiment-section mode-content">
                         <div className="section-content">
                             <div className="config-row">
+                                <label className="label-inline label-fixed-width label-output">Insert experiment
+                                    name:</label>
+                                <input
+                                    type="text"
+                                    className="duration-field"
+                                    value={experimentName}
+                                    onChange={(e) => setExperimentName(e.target.value)}
+                                    readOnly={runningExperiment}
+                                    placeholder="e.g., My Experiment"
+                                />
+                            </div>
+                            <div className="config-row">
                                 {/* Experiment duration line */}
-                                <label className="label-inline label-fixed-width label-output">Insert experiment duration
+                                <label className="label-inline label-fixed-width label-output">Insert experiment
+                                    duration
                                     (seconds):</label>
                                 <input
                                     type={"text"}
@@ -779,7 +830,8 @@ export default function Experiment({username, reservation_id}) {
                                         onClick={handleCreateExperiment}
                                         disabled={runningExperiment}>Create experiment
                                 </button>
-                                <div className={`experiment-created-message ${experimentMessageType}`}>{experimentMessage}</div>
+                                <div
+                                    className={`experiment-created-message ${experimentMessageType}`}>{experimentMessage}</div>
                             </div>
                             {/* Row for second mode of experiment definition */}
                             {playbookRows.map((row, idx) => (

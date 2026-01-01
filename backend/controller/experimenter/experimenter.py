@@ -4,7 +4,7 @@ import re
 from io import BytesIO
 import traceback
 from flask import request, send_file, jsonify
-
+import json
 import yaml
 from datetime import datetime
 from werkzeug.utils import secure_filename
@@ -312,20 +312,26 @@ def create_experiment():
         ensure_experiment_dirs()
 
         # get form data
+        experiment_name = request.form.get('experiment_name')
         duration = request.form.get('duration')
         reservation_id = request.form.get('reservation_id')
         playbooks_data = request.form.get('playbooks_data')
 
-        if not duration or not reservation_id or not playbooks_data:
+        if not experiment_name or not duration or not reservation_id or not playbooks_data:
             return jsonify({'error': 'Missing required fields'}), 400
 
         # parse playbooks data
-        import json
         playbooks = json.loads(playbooks_data)
 
+        # sanitize experiment name for filename (lowercase, spaces -> underscores)
+        experiment_name_clean = experiment_name.strip().lower().replace(' ', '_')
+
+        # sanitize for folder creation
+        safe_exp_name = secure_filename(experiment_name_clean)
+
         # create playbook directory for the reservation
-        playbooks_dir = EXPERIMENT_PLAYBOOKS_DIR / f'res_{reservation_id}_playbooks'
-        playbooks_dir.mkdir(parents=True, exist_ok=True)
+        playbooks_dir = os.path.join(EXPERIMENT_PLAYBOOKS_DIR, f'res_{reservation_id}', safe_exp_name)
+        os.makedirs(playbooks_dir, exist_ok=True)
 
         # save playbooks
         schedule = []
@@ -336,53 +342,75 @@ def create_experiment():
                 if file and file.filename:
                     # save the file
                     filename = secure_filename(file.filename)
-                    file_path = playbooks_dir / filename
-                    file.save(str(file_path))
+                    file_path = os.path.join(playbooks_dir, filename)
+                    file.save(file_path)
+
+                    # extract playbook name without extension for the 'name' field
+                    playbook_name_base = os.path.splitext(filename)[0].upper()
 
                     # add to the schedule
                     schedule.append({
-                        'time_offset': int(playbook_data['execution_time']),
-                        'name': f'STEP_{index + 1}',
-                        'playbook': f'{filename}',
-                        'targets': playbook_data['devices'],
-                        'vars': {}
+                        'time_offset_s': int(playbook_data['execution_time']),
+                        'name': playbook_name_base,
+                        'playbook': filename,
+                        'targets': playbook_data['devices']
                     })
 
-        # Ordina per tempo di esecuzione
+        # sort by execution time
         schedule.sort(key=lambda x: x['time_offset_s'])
 
-        # Crea il documento YAML
+        # create YAML document with correct structure
         experiment_doc = {
-            'experiment_id': f'EXP_{reservation_id}_{datetime.now().strftime("%Y%m%d_%H%M%S")}',
-            'duration': int(duration),
-            'reservation_id': reservation_id,
+            'experiment_id': experiment_name.strip().upper(),  # uppercase
+            'duration_s': int(duration),
+            'reservation_id': int(reservation_id),
             'schedule': schedule
         }
 
-        # convert in YAML
-        yaml_content = yaml.dump(experiment_doc, default_flow_style=False, sort_keys=False)
+        # convert to YAML with custom dumper for proper indentation
+        yaml_content = yaml.dump(
+            experiment_doc,
+            Dumper=IndentedDumper,
+            default_flow_style=False,
+            sort_keys=False,
+            indent=2,
+            width=1000
+        )
 
-        # save the file
-        exp_filename = f'res_{reservation_id}_exp_description.yml'
-        exp_path = EXPERIMENT_TEMPLATES_DIR / exp_filename
-        with open(exp_path, 'w') as f:
+        # save template file
+        templates_dir = os.path.join(EXPERIMENT_TEMPLATES_DIR, f'res_{reservation_id}')
+        os.makedirs(templates_dir, exist_ok=True)
+
+        exp_filename = f'{safe_exp_name}.yml'
+        exp_path = os.path.join(templates_dir, exp_filename)
+
+        with open(exp_path, 'w', encoding='utf-8') as f:
             f.write(yaml_content)
 
+        print(f"[CREATE EXPERIMENT] Created experiment '{experiment_name}' for reservation {reservation_id}",
+              flush=True)
+        print(f"  - Template saved: {exp_path}", flush=True)
+        print(f"  - Playbooks dir: {playbooks_dir}", flush=True)
+
         # return file for download
-        from io import BytesIO
         buffer = BytesIO()
         buffer.write(yaml_content.encode('utf-8'))
         buffer.seek(0)
 
-        return send_file(
+        response = send_file(
             buffer,
             mimetype='application/x-yaml',
             as_attachment=True,
             download_name=exp_filename
         )
+        # expose headers to let client read file name
+        response.headers['Access-Control-Expose-Headers'] = 'Content-Disposition'
+
+        return response
 
     except Exception as e:
-        print(f"Error creating experiment: {e}")
+        print(f"[CREATE EXPERIMENT ERROR] {str(e)}", flush=True)
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/experimenter/getUserMetrics', methods=['POST'])
