@@ -6,10 +6,7 @@ import './style/experiment.css';
 export default function Experiment({username, reservation_id}) {
     // files: experiment_description and configuration files
     const experimentDescription = useFileInput(['.yml', '.yaml']);
-    const experimentStep = useFileInput(['.yml', '.yaml', 'sh', 'bash']);
-    const experimentDescriptionThird = useFileInput(['.yml', '.yaml']);
     const [experimentDuration, setExperimentDuration] = useState('');   // experiment duration
-    const [executionTime, setExecutionTime] = useState('');             // time to execute
 
     // free mode states
     const [freePlaybookFiles, setFreePlaybookFiles] = useState([]);
@@ -21,6 +18,9 @@ export default function Experiment({username, reservation_id}) {
     const [experimentName, setExperimentName] = useState('');       // name of the experiment
     // guided mode states
     const [guidedDuration, setGuidedDuration] = useState('');
+    const [guidedExperimentName, setGuidedExperimentName] = useState('');
+    const [guidedMessage, setGuidedMessage] = useState('');
+    const [guidedMessageType, setGuidedMessageType] = useState('');  // 'success' | 'error'
     const [deviceList, setDeviceList] = useState([]);
     const [iperfClients, setIperfClients] = useState([]);
     const [iperfServers, setIperfServers] = useState([]);
@@ -29,6 +29,11 @@ export default function Experiment({username, reservation_id}) {
     const [customMetrics, setCustomMetrics] = useState([]);          //manual add of metric
     const [selectedMetrics, setSelectedMetrics] = useState([]);
     const [telemetryType, setTelemetryType] = useState('');         // radio button status
+    // dynamic iperf flows
+    const [iperfFlows, setIperfFlows] = useState([
+        {id: 1, client: '', server: '', bandwidth: '', protocol: 'tcp', /*parallelStreams: '1',*/ startOffset: '', duration: ''}
+    ]);
+    const iperfFlowIdCounter = useRef(1);
     // Sampling
     const [samplingMode, setSamplingMode] = useState('global');
     const [globalInterval, setGlobalInterval] = useState('5');
@@ -174,47 +179,6 @@ export default function Experiment({username, reservation_id}) {
             setFileType('');
         }
         return { ref, file, fileType, choose, onChange, fileName: file ? file.name : '', reset };
-    }
-
-    function handleUpload({ descriptors, setOutput, setOutputType, requireAny = true }) {
-        // manages the behavior when a file is uploaded
-        const errors = [];
-        let errorMessage
-        // set error messages depending on file type
-        descriptors.forEach((d) => {
-            if (d.fileType === 'invalid') {
-                errors.push(`${d.label} has wrong format.`);
-                if(d.label === "Playbook"){
-                    errorMessage = errors + " File must be in 'yml' or 'yaml' format"
-                }else{
-                    errorMessage = errors + " File must be in 'zip' format"
-                }
-            }
-        });
-        // set errors if any
-        if (errors.length > 0) {
-            setOutput(errorMessage);
-            setOutputType('error');
-            return false;
-        }
-        // error if the user press button to execute a file, but there are not selected files
-        // vedere cosa succede se c'è un experiment_description selezionato e l'utente preme run experiment_step
-        const anySelected = descriptors.some(d => d.file);
-        if (requireAny && !anySelected) {
-            setOutput('No files selected');
-            setOutputType('error');
-            return false;
-        }
-        // add name to uploaded files list
-        const names = descriptors.reduce((acc, d) => {
-            if (d.file) acc.push(`${d.label}: ${d.file.name}`);
-            return acc;
-        }, []);
-        // add to the output timestamp of upload
-        const time = new Date().toLocaleString();
-        setOutput(`File uploaded (${time}) — ${names.join(' | ')}`);
-        setOutputType('success');
-        return true;
     }
 
     function createDownload(blob, filename){
@@ -653,22 +617,146 @@ export default function Experiment({username, reservation_id}) {
             // deselect, if client selected
             if (iperfClients.includes(device)) {
                 setIperfClients(prev => prev.filter(d => d !== device));
-                setIperfServers(prev => prev.filter(d => d !== device)); // remove from server
+                //setIperfServers(prev => prev.filter(d => d !== device)); // remove from server
             } else {
                 // select as client, remove from server
                 setIperfClients(prev => [...prev, device]);
-                setIperfServers(prev => prev.filter(d => d !== device));
+                //setIperfServers(prev => prev.filter(d => d !== device));
             }
         } else {
             // deselect, if server selected
             if (iperfServers.includes(device)) {
                 setIperfServers(prev => prev.filter(d => d !== device));
-                setIperfClients(prev => prev.filter(d => d !== device)); // // remove from client
+                //setIperfClients(prev => prev.filter(d => d !== device)); // // remove from client
             } else {
                 // // select as server, remove from  client
                 setIperfServers(prev => [...prev, device]);
-                setIperfClients(prev => prev.filter(d => d !== device));
+                //setIperfClients(prev => prev.filter(d => d !== device));
             }
+        }
+    };
+
+    // iperf flows management
+    const handleAddIperfFlow = (index) => {
+        const newId = ++iperfFlowIdCounter.current;
+        setIperfFlows(prev => {
+            const copy = [...prev];
+            copy.splice(index + 1, 0, {
+                id: newId,
+                client: '',
+                server: '',
+                bandwidth: '',
+                protocol: 'tcp',
+                //parallelStreams: '1',
+                startOffset: '',
+                duration: ''
+            });
+            return copy;
+        });
+    };
+
+    const handleRemoveIperfFlow = (index) => {
+        if (index === 0) return;
+        setIperfFlows(prev => prev.filter((_, i) => i !== index));
+    };
+
+    const handleIperfFlowChange = (flowId, field, value) => {
+        // numeric fields validation
+        if (['bandwidth', 'startOffset', 'duration'/*, 'parallelStreams'*/].includes(field)) {
+            if (value !== '' && !/^\d+$/.test(value)) return;
+        }
+
+        setIperfFlows(prev =>
+            prev.map(flow =>
+                flow.id === flowId ? { ...flow, [field]: value } : flow
+            )
+        );
+    };
+
+    // create iperf experiment
+    const handleCreateIperfExperiment = async () => {
+        if (!guidedExperimentName || !guidedExperimentName.trim()) {
+            setGuidedMessage('Experiment name is required');
+            setGuidedMessageType('error');
+            return;
+        }
+
+        if (!guidedDuration || guidedDuration === '0') {
+            setGuidedMessage('Experiment duration is required');
+            setGuidedMessageType('error');
+            return;
+        }
+        // at least one flow defined
+        if (iperfFlows.length === 0) {
+            setGuidedMessage('At least one traffic flow must be defined');
+            setGuidedMessageType('error');
+            return;
+        }
+        // each flow must have client and server
+        const hasIncompleteFlows = iperfFlows.some(flow => !flow.client || !flow.server);
+        if (hasIncompleteFlows) {
+            setGuidedMessage('All flows must have client and server selected');
+            setGuidedMessageType('error');
+            return;
+        }
+        // client and server in a flow can't be in the same device
+        const hasSelfLoopFlows = iperfFlows.some(flow => flow.client === flow.server);
+        if (hasSelfLoopFlows) {
+            setGuidedMessage('Client and server cannot be the same device in a flow');
+            setGuidedMessageType('error');
+            return;
+        }
+        // start offset cannot be greater than experiment duration
+        const invalidTiming = iperfFlows.some(flow =>
+        flow.startOffset && parseInt(flow.startOffset) >= parseInt(guidedDuration)
+        );
+        if (invalidTiming) {
+            setGuidedMessage('Flow start time cannot exceed experiment duration');
+            setGuidedMessageType('error');
+            return;
+        }
+
+        setWaitOperation(true);
+        try {
+            const response = await fetch('http://localhost:5004/api/experimenter/createIperfExperiment', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    experiment_name: guidedExperimentName.trim(),
+                    duration: guidedDuration,
+                    reservation_id: reservation_id,
+                    flows: iperfFlows
+                })
+            });
+
+            if (!response.ok) {
+                console.error('Failed to create iperf experiment');
+                setGuidedMessage('Failed to create experiment');
+                setGuidedMessageType('error');
+                return;
+            }
+
+            const blob = await response.blob();
+            const contentDisposition = response.headers.get('Content-Disposition');
+            let filename = 'iperf_experiment.yml'; // fallback name
+
+            if (contentDisposition) {
+                const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+                if (filenameMatch && filenameMatch[1]) {
+                    filename = filenameMatch[1].replace(/['"]/g, '');
+                }
+            }
+
+            createDownload(blob, filename);
+
+            setGuidedMessage(filename);
+            setGuidedMessageType('success');
+        } catch (error) {
+            console.error('Error creating iperf experiment:', error);
+            setGuidedMessage('Error creating experiment');
+            setGuidedMessageType('error');
+        } finally {
+            setWaitOperation(false);
         }
     };
 
@@ -897,7 +985,17 @@ export default function Experiment({username, reservation_id}) {
                 {selectedMode === 'guided' && (
                     <div className="experiment-section mode-content">
                         <div className="section-content">
-                            {/* Row for third type of experiment */}
+                            <div className="config-row">
+                                <label className="label-inline label-fixed-width">Experiment name:</label>
+                                <input
+                                    type="text"
+                                    className="duration-field"
+                                    value={guidedExperimentName}
+                                    onChange={(e) => setGuidedExperimentName(e.target.value)}
+                                    readOnly={runningExperiment}
+                                    placeholder="e.g., Iperf Test"
+                                />
+                            </div>
                             <div className="config-row">
                                 <label className="label-inline label-fixed-width">Experiment duration (seconds):</label>
                                 <input
@@ -907,10 +1005,21 @@ export default function Experiment({username, reservation_id}) {
                                     onChange={handleNumericChange(setGuidedDuration)}
                                     readOnly={runningExperiment}
                                 />
+                                <button
+                                    type="button"
+                                    className="send-button experiment-button additional-margin"
+                                    onClick={handleCreateIperfExperiment}
+                                    disabled={runningExperiment || waitOperation}
+                                >
+                                    Create iperf experiment
+                                </button>
+                                <div className={`experiment-created-message ${guidedMessageType}`}>
+                                    {guidedMessage}
+                                </div>
                             </div>
 
                             <div className="config-row guided-row">
-                                <label className="label-inline label-fixed-width">Select iperf configuration:</label>
+                                <label className="label-inline label-fixed-width">Select iperf roles:</label>
 
                                 <div className="guided-right">
                                     {/* Device selection table */}
@@ -944,6 +1053,103 @@ export default function Experiment({username, reservation_id}) {
                                     </div>
                                 </div>
                             </div>
+                            <div className="config-row">
+                                <label className="label-inline label-fixed-width">Define traffic flows:</label>
+                            </div>
+
+                            {iperfFlows.map((flow, idx) => (
+                                <div key={flow.id} className="config-row config-row-nowrap iperf-flow-container">
+                                    {/* Client dropdown */}
+                                    <label className="label-inline label-flow">Client:</label>
+                                    <select
+                                        className={`flow-select ${flow.client && flow.server === flow.client ? 'flow-select-error' : ''}`}
+                                        value={flow.client}
+                                        onChange={(e) => handleIperfFlowChange(flow.id, 'client', e.target.value)}
+                                        disabled={runningExperiment}
+                                    >
+                                        <option value="">Select</option>
+                                        {iperfClients.map(client => (
+                                            <option key={client} value={client} disabled={client === flow.server}>{client}{client === flow.server? ' (same as server' : ''}</option>
+                                        ))}
+                                    </select>
+
+                                    <span className="flow-arrow">→</span>
+
+                                    {/* Server dropdown */}
+                                    <label className="label-inline label-flow">Server:</label>
+                                    <select
+                                        className={`flow-select ${flow.client && flow.server === flow.client ? 'flow-select-error' : ''}`}
+                                        value={flow.server}
+                                        onChange={(e) => handleIperfFlowChange(flow.id, 'server', e.target.value)}
+                                        disabled={runningExperiment}
+                                    >
+                                        <option value="">Select</option>
+                                        {iperfServers.map(server => (
+                                            <option key={server} value={server} disabled={server === flow.client}>{server}{server === flow.client ? ' (same as client)' : ''}</option>
+                                        ))}
+                                    </select>
+
+                                    {/* Bandwidth */}
+                                    <label className="label-inline label-flow">BW(Mbps):</label>
+                                    <input
+                                        type="text"
+                                        className="flow-field"
+                                        value={flow.bandwidth}
+                                        onChange={(e) => handleIperfFlowChange(flow.id, 'bandwidth', e.target.value)}
+                                        placeholder="1000"
+                                        disabled={runningExperiment}
+                                    />
+
+                                    {/* Protocol */}
+                                    <label className="label-inline label-flow">Protocol:</label>
+                                    <select
+                                        className="flow-select-short"
+                                        value={flow.protocol}
+                                        onChange={(e) => handleIperfFlowChange(flow.id, 'protocol', e.target.value)}
+                                        disabled={runningExperiment}
+                                    >
+                                        <option value="tcp">TCP</option>
+                                        <option value="udp">UDP</option>
+                                    </select>
+
+                                    {/* Start offset */}
+                                    <label className="label-inline label-flow">Start(s):</label>
+                                    <input
+                                        type="text"
+                                        className="flow-field"
+                                        value={flow.startOffset}
+                                        onChange={(e) => handleIperfFlowChange(flow.id, 'startOffset', e.target.value)}
+                                         placeholder="5"
+                                        disabled={runningExperiment}
+                                    />
+
+                                    {/* Duration */}
+                                    <label className="label-inline label-flow">Duration(s):</label>
+                                    <input
+                                        type="text"
+                                        className="flow-field"
+                                        value={flow.duration}
+                                        onChange={(e) => handleIperfFlowChange(flow.id, 'duration', e.target.value)}
+                                        placeholder="Auto"
+                                        disabled={runningExperiment}
+                                    />
+
+                                    {/* + and - buttons*/}
+                                    <label
+                                        className="label-inline add-remove-label"
+                                        onClick={() => handleAddIperfFlow(idx)}
+                                        style={{ pointerEvents: runningExperiment ? 'none' : 'auto' }}
+                                    >+</label>
+                                    <label
+                                        className="label-inline add-remove-label"
+                                        onClick={() => handleRemoveIperfFlow(idx)}
+                                        style={{
+                                            opacity: idx === 0 ? 0.3 : 1,
+                                            pointerEvents: (idx === 0 || runningExperiment) ? 'none' : 'auto'
+                                        }}
+                                    >-</label>
+                                </div>
+                            ))}
                         </div>
                     </div>
                 )}

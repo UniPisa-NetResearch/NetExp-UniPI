@@ -104,6 +104,9 @@ class IndentedDumper(yaml.Dumper):
     def increase_indent(self, flow=False, indentless=False):
         return super(IndentedDumper, self).increase_indent(flow, False)
 
+    def ignore_aliases(self, data):
+        return True
+
 @app.route('/api/experimenter/downloadTemplate', methods=['POST'])
 def download_experiment_template():
     # return experiment template
@@ -158,8 +161,8 @@ def validate_experiment_template_schema(yaml_data):
     if not isinstance(yaml_data['duration_s'], int):
         return False, 'Field "duration_s" must be integer'
 
-    if not isinstance(yaml_data['reservation_id'], (str, type(None))):
-        return False, 'Field "reservation_id" must be str or null'
+    if not isinstance(yaml_data['reservation_id'], (int, str, type(None))):
+        return False, 'Field "reservation_id" must be int, str or null'
 
     # validate schedule
     if not isinstance(yaml_data['schedule'], list):
@@ -237,8 +240,13 @@ def validate_experiment_template():
                 'details': error_msg
             }), 400
 
+        experiment_id = yaml_content.get('experiment_id', 'EXPERIMENT')
+        # sanitize experiment_id to create directory valid
+        experiment_name_clean = experiment_id.strip().lower().replace(' ', '_')
+        safe_exp_name = secure_filename(experiment_name_clean)
+
         # create reservation dir inside playbooks dir
-        playbooks_dir = os.path.join(EXPERIMENT_PLAYBOOKS_DIR, f'res_{reservation_id}')
+        playbooks_dir = os.path.join(EXPERIMENT_PLAYBOOKS_DIR, f'res_{reservation_id}', safe_exp_name)
         os.makedirs(playbooks_dir, exist_ok=True)
 
         # save loaded playbooks
@@ -270,7 +278,7 @@ def validate_experiment_template():
             }), 400
 
         # update reservation_id in template with actual value
-        yaml_content['reservation_id'] = reservation_id
+        yaml_content['reservation_id'] = int(reservation_id)
 
         # save validated template
         templates_dir = os.path.join(EXPERIMENT_TEMPLATES_DIR, f'res_{reservation_id}')
@@ -410,6 +418,133 @@ def create_experiment():
 
     except Exception as e:
         print(f"[CREATE EXPERIMENT ERROR] {str(e)}", flush=True)
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/experimenter/createIperfExperiment', methods=['POST'])
+def create_iperf_experiment():
+    #create iperf experiment YAML file for guided mode with flow-based configuration
+    try:
+        ensure_experiment_dirs()
+
+        data = request.get_json()
+        experiment_name = data.get('experiment_name')
+        duration = data.get('duration')
+        reservation_id = data.get('reservation_id')
+        flows = data.get('flows', [])  # MODIFICATO: riceve lista di flussi
+
+        if not experiment_name or not duration or not reservation_id:
+            return jsonify({'error': 'Missing required fields'}), 400
+
+        if not flows or len(flows) == 0:
+            return jsonify({'error': 'At least one traffic flow required'}), 400
+
+        # sanitize experiment name
+        experiment_name_clean = experiment_name.strip().lower().replace(' ', '_')
+        safe_exp_name = secure_filename(experiment_name_clean)
+
+        # collect each unique server and client
+        all_flow_ids = [idx for idx in range(1, len(flows) + 1)]
+
+        # paths to the common playbooks
+        iperf_playbooks_base = 'iperf_common'
+
+        # build schedule
+        schedule=[]
+
+        # start each iperf server at the beginning
+        schedule.append({
+            'time_offset_s': 0,
+            'action': 'start_iperf_servers',
+            'flow_ids': list(all_flow_ids)
+        })
+
+        # add action for each client flow
+        for idx, flow in enumerate(flows, 1):
+            start_time = int(flow.get('startOffset')) if flow.get('startOffset') else 5
+
+            schedule.append({
+                'time_offset_s': start_time,
+                'action': 'start_iperf_client',
+                'flow_id': idx
+            })
+
+        # stop at the end
+        schedule.append({
+            'time_offset_s': int(duration) - 5,
+            'action': 'stop_iperf',
+            'flow_ids': list(all_flow_ids)
+        })
+
+        schedule.sort(key=lambda x: x['time_offset_s'])
+
+        # iperf_flows section creation
+        iperf_flows = []
+        for idx, flow in enumerate(flows, 1):
+            start_offset = int(flow.get('startOffset')) if flow.get('startOffset') else 5
+            flow_duration = int(flow.get('duration')) if flow.get('duration') else int(duration) - start_offset - 5
+
+            iperf_flows.append({
+                'flow_id': idx,
+                'client': flow['client'],
+                'server': flow['server'],
+                'bandwidth_mbps': int(flow['bandwidth']) if flow.get('bandwidth') else 1000,
+                'protocol': flow.get('protocol', 'tcp'),
+                #'parallel_streams': int(flow.get('parallelStreams', 1)),
+                'start_offset_s': start_offset,
+                'duration_s': flow_duration,
+                'port': 5201
+            })
+
+        experiment_doc = {
+            'experiment_id': experiment_name.strip().upper(),
+            'duration_s': int(duration),
+            'reservation_id': int(reservation_id),
+            'playbooks_base_path': iperf_playbooks_base,
+            'iperf_flows': iperf_flows,
+            'schedule': schedule
+        }
+
+        yaml_content = yaml.dump(
+            experiment_doc,
+            Dumper=IndentedDumper,
+            default_flow_style=False,
+            sort_keys=False,
+            indent=2,
+            width=1000
+        )
+
+        templates_dir = os.path.join(EXPERIMENT_TEMPLATES_DIR, f'res_{reservation_id}')
+        os.makedirs(templates_dir, exist_ok=True)
+
+        exp_filename = f'{safe_exp_name}.yml'
+        exp_path = os.path.join(templates_dir, exp_filename)
+
+        with open(exp_path, 'w', encoding='utf-8') as f:
+            f.write(yaml_content)
+
+        print(f"[CREATE IPERF EXPERIMENT] Created experiment '{experiment_name}' for reservation {reservation_id}", flush=True)
+        print(f"  - Template saved: {exp_path}", flush=True)
+        print(f"  - Flows: {len(flows)}", flush=True)
+        print(f"  - Schedule steps: {len(schedule)}", flush=True)
+
+        buffer = BytesIO()
+        buffer.write(yaml_content.encode('utf-8'))
+        buffer.seek(0)
+
+        response = send_file(
+            buffer,
+            mimetype='application/x-yaml',
+            as_attachment=True,
+            download_name=exp_filename
+        )
+        response.headers['Access-Control-Expose-Headers'] = 'Content-Disposition'
+
+        return response
+
+    except Exception as e:
+        print(f"[CREATE IPERF EXPERIMENT ERROR] {str(e)}", flush=True)
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 

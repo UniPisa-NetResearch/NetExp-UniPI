@@ -1,0 +1,40 @@
+---
+- name: Start iperf3 server on target hosts
+  hosts: all
+  gather_facts: no
+  become: yes
+  tasks:
+    - name: Check if iperf3 is installed
+      command: which iperf3
+      register: iperf3_check
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Fail if iperf3 is not installed
+      fail:
+        msg: "iperf3 is not installed on {{ inventory_hostname }}"
+      when: iperf3_check.rc != 0
+
+    - name: Kill existing iperf3 server processes
+      shell: pkill -9 iperf3 || true
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Start iperf3 server
+      shell: |
+        nohup iperf3 -s -p {{ port | default(5201) }} -D > /dev/null 2>&1 &
+      args:
+        executable: /bin/bash
+      async: 2
+      poll: 0
+
+    - name: Wait for iperf3 server to start
+      wait_for:
+        port: "{{ port | default(5201) }}"
+        delay: 1
+        timeout: 10
+      ignore_errors: yes
+
+    - name: Log server start
+      debug:
+        msg: "iperf3 server started on {{ inventory_hostname }} at port {{ port | default(5201) }}"

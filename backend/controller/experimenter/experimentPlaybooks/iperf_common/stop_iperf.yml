@@ -1,0 +1,63 @@
+---
+- name: Stop all iperf3 processes on target hosts
+  hosts: all
+  gather_facts: no
+  become: yes
+  tasks:
+    - name: Get list of iperf3 processes
+      shell: ps aux | grep iperf3 | grep -v grep || true
+      register: iperf_processes
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Kill all iperf3 server processes
+      shell: pkill -9 'iperf3 -s' || true
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Kill all iperf3 client processes
+      shell: pkill -9 'iperf3 -c' || true
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Kill any remaining iperf3 processes
+      shell: pkill -9 iperf3 || true
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Wait for processes to terminate
+      pause:
+        seconds: 2
+
+    - name: Verify all iperf3 processes are stopped
+      shell: ps aux | grep iperf3 | grep -v grep || true
+      register: remaining_processes
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Log stop status
+      debug:
+        msg: |
+          iperf3 processes stopped on {{ inventory_hostname }}
+          {% if remaining_processes.stdout %}
+          WARNING: Some processes may still be running:
+          {{ remaining_processes.stdout }}
+          {% else %}
+          All iperf3 processes stopped successfully
+          {% endif %}
+
+    - name: Archive iperf3 results (optional)
+      archive:
+        path: /tmp/iperf3_results
+        dest: "/tmp/iperf3_results_{{ ansible_date_time.iso8601_basic_short }}.tar.gz"
+        format: gz
+        remove: no
+      ignore_errors: yes
+      when: archive_results | default(false) | bool
+
+    - name: Clean up temporary files (optional)
+      file:
+        path: /tmp/iperf3_results
+        state: absent
+      when: cleanup_results | default(false) | bool
+      ignore_errors: yes

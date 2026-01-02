@@ -703,3 +703,61 @@
   padding: 4px;
   text-align: center;
 }
+
+/* Iperf flows container */
+.iperf-flow-container {
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  background-color: rgba(248, 249, 250, 0.6);
+  border-radius: 6px;
+  margin-bottom: 8px;
+}
+
+.label-flow {
+  font-size: 13px;
+  font-weight: 600;
+  min-width: auto;
+  white-space: nowrap;
+  margin-right: 4px;
+}
+
+.flow-select {
+  padding: 4px 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 13px;
+  min-width: 100px;
+  cursor: pointer;
+}
+
+.flow-select-short {
+  padding: 4px 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 13px;
+  width: 70px;
+  cursor: pointer;
+}
+
+.flow-field {
+  padding: 4px 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 13px;
+  width: 80px;
+  text-align: center;
+}
+
+.flow-arrow {
+  font-size: 18px;
+  font-weight: bold;
+  color: #007bff;
+  margin: 0 6px;
+}
+
+.flow-select-error {
+  border-color: #dc3545 !important;
+  background-color: rgba(220, 53, 69, 0.05);
+}

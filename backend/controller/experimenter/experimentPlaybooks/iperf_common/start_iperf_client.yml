@@ -1,0 +1,60 @@
+---
+- name: Start iperf3 client on target hosts
+  hosts: all
+  gather_facts: yes
+  become: yes
+  tasks:
+    - name: Check if iperf3 is installed
+      command: which iperf3
+      register: iperf3_check
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Fail if iperf3 is not installed
+      fail:
+        msg: "iperf3 is not installed on {{ inventory_hostname }}"
+      when: iperf3_check.rc != 0
+
+    - name: Resolve server IP from inventory
+      set_fact:
+        server_ip: "{{ hostvars[server_host]['ansible_host'] | default(server_host) }}"
+
+    - name: Create results directory
+      file:
+        path: /tmp/iperf3_results
+        state: directory
+        mode: '0755'
+
+    - name: Generate unique result filename
+      set_fact:
+        result_file: "/tmp/iperf3_results/flow_{{ flow_id }}_{{ inventory_hostname }}_{{ ansible_date_time.epoch }}.json"
+
+    - name: Build iperf3 command
+      set_fact:
+        iperf_cmd: >-
+          iperf3 -c {{ server_ip }}
+          -p {{ port | default(5201) }}
+          -t {{ duration }}
+          {% if bandwidth_mbps != 'unlimited' and bandwidth_mbps != '' %}-b {{ bandwidth_mbps }}M{% endif %}
+          {% if protocol == 'udp' %}-u{% endif %}
+          -P {{ parallel_streams | default(1) }}
+          -J > {{ result_file }} 2>&1
+
+    - name: Start iperf3 client test
+      shell: "{{ iperf_cmd }} &"
+      args:
+        executable: /bin/bash
+      async: "{{ (duration | int) + 15 }}"
+      poll: 0
+      register: iperf_job
+
+    - name: Log client start
+      debug:
+        msg: |
+          iperf3 client started on {{ inventory_hostname }}
+          Server: {{ server_ip }}:{{ port | default(5201) }}
+          Duration: {{ duration }}s
+          Bandwidth: {{ bandwidth_mbps | default('unlimited') }}
+          Protocol: {{ protocol | upper }}
+          Parallel streams: {{ parallel_streams | default(1) }}
+          Result file: {{ result_file }}
