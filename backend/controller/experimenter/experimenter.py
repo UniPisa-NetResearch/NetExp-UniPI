@@ -23,15 +23,15 @@ from ..controller import (
 TEST = True
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-EXPERIMENT_TEMPLATES_DIR =  os.path.join(BASE_DIR, "experimentTemplates")
+EXPERIMENT_TEMPLATES_DIR = os.path.join(BASE_DIR, "experimentTemplates")
 EXPERIMENT_PLAYBOOKS_DIR = os.path.join(BASE_DIR, "experimentPlaybooks")
-
+EXPERIMENT_TELEMETRY_DIR = os.path.join(BASE_DIR, "experimentTelemetry")
 
 def ensure_experiment_dirs():
     # Create directories when don't exist
     os.makedirs(EXPERIMENT_TEMPLATES_DIR, exist_ok=True)
     os.makedirs(EXPERIMENT_PLAYBOOKS_DIR, exist_ok=True)
-
+    os.makedirs(EXPERIMENT_TELEMETRY_DIR, exist_ok=True)
 
 @app.route('/api/experimenter/getDevices', methods=['POST'])
 def get_devices():
@@ -746,6 +746,139 @@ def add_metrics():
         'success': True,
         'results': results
     }), 200
+
+@app.route('/api/experimenter/showExperiments', methods=['POST'])
+def show_experiments():
+    try:
+        ensure_experiment_dirs()
+
+        data = request.get_json() or {}
+        reservation_id = data.get('reservation_id')
+
+        if not reservation_id:
+            return jsonify({'success': False, 'error': 'reservation_id is required'}), 400
+
+        templates_dir = os.path.join(EXPERIMENT_TEMPLATES_DIR, f"res_{reservation_id}")
+
+        # if the directory does not exist => empty list
+        if not os.path.isdir(templates_dir):
+            return jsonify({'success': True, 'experiments': []}), 200
+
+        allowed_ext = {'.yml', '.yaml'}
+        experiments = []
+
+        for fn in os.listdir(templates_dir):
+            full_path = os.path.join(templates_dir, fn)
+            if not os.path.isfile(full_path):
+                continue
+
+            base, ext = os.path.splitext(fn)
+            if ext.lower() not in allowed_ext:
+                continue
+
+            experiments.append({
+                'label': base,      # in select no extension is shown
+                'filename': fn      # complete value (useful for run)
+            })
+
+        experiments.sort(key=lambda x: x['label'].lower())
+
+        return jsonify({'success': True, 'experiments': experiments}), 200
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/experimenter/createTelemetryFile', methods=['POST'])
+def create_telemetry_file():
+    try:
+        ensure_experiment_dirs()
+
+        data = request.get_json() or {}
+        reservation_id = data.get('reservation_id')
+        file_base = data.get('telemetry_filename_base')   # es: "<exp>_telemetry"
+        experiment_name = data.get('experiment_name')     # es: "<exp>"
+        telemetry_type = data.get('telemetry_type')       # 0 = real time, 1 = after experiment
+        metrics = data.get('metrics', [])                 # lista di dict
+
+        if not reservation_id:
+            return jsonify({'success': False, 'error': 'reservation_id is required'}), 400
+        if not file_base or not str(file_base).strip():
+            return jsonify({'success': False, 'error': 'telemetry_filename_base is required'}), 400
+        if not experiment_name or not str(experiment_name).strip():
+            return jsonify({'success': False, 'error': 'experiment_name is required'}), 400
+        if telemetry_type not in (0, 1):
+            return jsonify({'success': False, 'error': 'telemetry_type must be 0 or 1'}), 400
+        if not isinstance(metrics, list) or len(metrics) == 0:
+            return jsonify({'success': False, 'error': 'metrics must be a non-empty list'}), 400
+
+        # minimal metrics validation
+        for idx, m in enumerate(metrics):
+            if not isinstance(m, dict):
+                return jsonify({'success': False, 'error': f'metrics[{idx}] must be an object'}), 400
+
+            name = m.get('name')
+            sampling_period = m.get('sampling_period')
+            targets = m.get('targets')
+
+            if not name or not str(name).strip():
+                return jsonify({'success': False, 'error': f'metrics[{idx}].name is required'}), 400
+            if sampling_period is None or str(sampling_period).strip() == '':
+                return jsonify({'success': False, 'error': f'metrics[{idx}].sampling_period is required'}), 400
+            if not isinstance(targets, list) or len(targets) == 0:
+                return jsonify({'success': False, 'error': f'metrics[{idx}].targets must be a non-empty list'}), 400
+
+        # yaml creation
+        telemetry_doc = {
+            'experiment_id': str(experiment_name).strip().upper(),
+            'reservation_id': int(reservation_id),
+            'telemetry_type': int(telemetry_type),
+            'metric': [
+                {
+                    'name': str(m['name']).strip(),
+                    'sampling_period': int(m['sampling_period']),
+                    'targets': [str(t).strip() for t in m['targets']]
+                } for m in metrics
+            ]
+        }
+
+        yaml_content = yaml.dump(
+            telemetry_doc,
+            Dumper=IndentedDumper,
+            default_flow_style=False,
+            sort_keys=False,
+            indent=2,
+            width=1000
+        )
+
+        # save file in experimentTelemetry/res_<reservation_id>/
+        telemetry_dir = os.path.join(EXPERIMENT_TELEMETRY_DIR, f"res_{reservation_id}")
+        os.makedirs(telemetry_dir, exist_ok=True)
+
+        safe_base = secure_filename(str(file_base).strip())
+        filename = f"{safe_base}.yaml"
+        out_path = os.path.join(telemetry_dir, filename)
+
+        with open(out_path, 'w', encoding='utf-8') as f:
+            f.write(yaml_content)
+
+        # return file for download
+        buffer = BytesIO()
+        buffer.write(yaml_content.encode('utf-8'))
+        buffer.seek(0)
+
+        response = send_file(
+            buffer,
+            mimetype='application/x-yaml',
+            as_attachment=True,
+            download_name=filename
+        )
+        response.headers['Access-Control-Expose-Headers'] = 'Content-Disposition'
+        return response
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 if __name__ == '__main__':

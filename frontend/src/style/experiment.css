@@ -761,3 +761,30 @@
   border-color: #dc3545 !important;
   background-color: rgba(220, 53, 69, 0.05);
 }
+
+.experiment-definition-select {
+  min-width: 240px;
+  height: 30px;
+  padding: 6px 10px;
+  border: 1px solid #cfcfcf;
+  border-radius: 6px;
+  background: #fff;
+  color: #222;
+  font-size: 14px;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.experiment-definition-select:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25);
+}
+
+.experiment-definition-select:disabled {
+  background: #f3f4f6;
+  color: #9ca3af;
+  border-color: #e5e7eb;
+  cursor: not-allowed;
+}

@@ -29,6 +29,8 @@ export default function Experiment({username, reservation_id}) {
     const [customMetrics, setCustomMetrics] = useState([]);          //manual add of metric
     const [selectedMetrics, setSelectedMetrics] = useState([]);
     const [telemetryType, setTelemetryType] = useState('');         // radio button status
+    const [telemetryCreateMessage, setTelemetryCreateMessage] = useState('');
+    const [telemetryCreateMessageType, setTelemetryCreateMessageType] = useState(''); // 'success' | 'error'
     // dynamic iperf flows
     const [iperfFlows, setIperfFlows] = useState([
         {id: 1, client: '', server: '', bandwidth: '', protocol: 'tcp', /*parallelStreams: '1',*/ startOffset: '', duration: ''}
@@ -52,7 +54,11 @@ export default function Experiment({username, reservation_id}) {
 
     // when true all buttons are disabled until operation completes
     const [waitOperation, setWaitOperation] = useState(false);
-    // -----------------------------------
+    // experiment name list and selected experiment for create telemetry file and run
+    const [experimentDefinitions, setExperimentDefinitions] = useState([]);
+    const [selectedExperimentDefinitionTelemetry, setSelectedExperimentDefinitionTelemetry] = useState('');
+    const [selectedExperimentDefinitionRun, setSelectedExperimentDefinitionRun] = useState('');
+
     // dynamic experiment definition
     const idCounter = useRef(1);
 
@@ -152,7 +158,6 @@ export default function Experiment({username, reservation_id}) {
         fetchMetrics();
     }, [username]); // Reload if username changes
 
-
     // --------------------------------------
     function useFileInput(allowedExt = []) {
         // function called when the user loads a file
@@ -206,7 +211,7 @@ export default function Experiment({username, reservation_id}) {
     };
 
     // ----------------------------------------------
-    const allowedPlaybookExt = ['.yml', '.yaml', '.sh', '.bash'];
+    const allowedPlaybookExt = ['.yml', '.yaml'];
 
     const handleAddPlaybookRow = (index) => {
         const newId = ++idCounter.current;
@@ -394,6 +399,40 @@ export default function Experiment({username, reservation_id}) {
             setValidatingMetrics(false);
         }
     };
+    // refresh experiment list
+    const refreshExperiments = async () => {
+          if (!reservation_id) return;
+
+          try {
+            const res = await fetch('http://localhost:5004/api/experimenter/showExperiments', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ reservation_id })
+            });
+
+            const data = await res.json();
+            const exps = (data && data.success && Array.isArray(data.experiments)) ? data.experiments : [];
+
+            setExperimentDefinitions(exps);
+
+            // se il value selezionato non esiste più, resettalo
+            if (selectedExperimentDefinitionTelemetry && !exps.some(e => e.filename === selectedExperimentDefinitionTelemetry)) {
+              setSelectedExperimentDefinitionTelemetry('');
+            }
+            if (selectedExperimentDefinitionRun && !exps.some(e => e.filename === selectedExperimentDefinitionRun)) {
+              setSelectedExperimentDefinitionRun('');
+            }
+          } catch (err) {
+            console.error('Error fetching experiments:', err);
+            setExperimentDefinitions([]);
+            setSelectedExperimentDefinitionTelemetry('');
+            setSelectedExperimentDefinitionRun('');
+          }
+    };
+
+    useEffect(() => {
+      refreshExperiments();
+    }, [reservation_id]);
 
     // Free mode ---------------------------------------------------------------------------
     const handleFreePlaybookFiles = (e) => {
@@ -469,7 +508,6 @@ export default function Experiment({username, reservation_id}) {
         }
     };
 
-
     const validateExperimentTemplate = async (templateFile) => {
         const formData = new FormData();
         formData.append('experiment_description', templateFile);
@@ -493,6 +531,7 @@ export default function Experiment({username, reservation_id}) {
 
             if (data.success) {
                 setTemplateValidation({ message: 'valid', type: 'success' });
+                 await refreshExperiments();
             } else {
                 let errorMsg = 'Invalid format';
                 if (data.error === 'missing_playbooks') {
@@ -602,6 +641,7 @@ export default function Experiment({username, reservation_id}) {
 
             setExperimentMessage(filename);
             setExperimentMessageType('success');
+            await refreshExperiments();
         } catch (error) {
             console.error('Error creating experiment:', error);
             setExperimentMessage('Error creating experiment');
@@ -751,6 +791,7 @@ export default function Experiment({username, reservation_id}) {
 
             setGuidedMessage(filename);
             setGuidedMessageType('success');
+            await refreshExperiments();
         } catch (error) {
             console.error('Error creating iperf experiment:', error);
             setGuidedMessage('Error creating experiment');
@@ -788,6 +829,145 @@ export default function Experiment({username, reservation_id}) {
     const nonHostDevices = deviceList.filter(device =>
         device.role && device.role.toLowerCase() !== 'host'
     ).sort((a, b) => a.name.localeCompare(b.name));
+
+    const handleCreateTelemetryFile = async () => {
+        setTelemetryCreateMessage('');
+        setTelemetryCreateMessageType('');
+
+        // at least one selected metric
+        if (!selectedMetrics || selectedMetrics.length === 0) {
+            setTelemetryCreateMessage('Error: select at least one metric');
+            setTelemetryCreateMessageType('error');
+            return;
+        }
+
+        // sampling validation
+        if (samplingMode === 'global') {
+            if (!globalInterval || !globalInterval.trim()) {
+                setTelemetryCreateMessage('Error: global interval is required');
+                setTelemetryCreateMessageType('error');
+                return;
+            }
+            if (!globalDevices || globalDevices.length === 0) {
+                setTelemetryCreateMessage('Error: select at least one device (global mode)');
+                setTelemetryCreateMessageType('error');
+                return;
+            }
+        } else if (samplingMode === 'per-metric') {
+            for (const metricPath of selectedMetrics) {
+                const interval = metricIntervals?.[metricPath];
+                const devices = metricDevices?.[metricPath] || [];
+
+                if (!interval || !String(interval).trim()) {
+                    setTelemetryCreateMessage(`Error: interval is required for ${metricPath}`);
+                    setTelemetryCreateMessageType('error');
+                    return;
+                }
+                if (!devices || devices.length === 0) {
+                    setTelemetryCreateMessage(`Error: select at least one device for ${metricPath}`);
+                    setTelemetryCreateMessageType('error');
+                    return;
+                }
+            }
+        } else {
+            setTelemetryCreateMessage('Error: sampling mode is required');
+            setTelemetryCreateMessageType('error');
+            return;
+        }
+
+        // mandatory telemetry type
+        if (!telemetryType || !telemetryType.trim()) {
+            setTelemetryCreateMessage('Error: telemetry type is required');
+            setTelemetryCreateMessageType('error');
+            return;
+        }
+
+        // at least one experiment must exist and selected (Telemetry select)
+        if (!experimentDefinitions || experimentDefinitions.length === 0) {
+            setTelemetryCreateMessage('Error: no experiment definitions');
+            setTelemetryCreateMessageType('error');
+            return;
+        }
+
+        if (!selectedExperimentDefinitionTelemetry) {
+            setTelemetryCreateMessage('Error: select an experiment definition');
+            setTelemetryCreateMessageType('error');
+            return;
+        }
+
+        // retrieve experiment name from select telemetry
+        const expName = experimentDefinitions.find(e => e.filename === selectedExperimentDefinitionTelemetry)?.label || selectedExperimentDefinitionTelemetry;
+        const telemetryBaseName = `${expName}_telemetry`;
+
+        // map telemetry type
+        const telemetryTypeNum = telemetryType === 'Real time mode' ? 0 : 1;
+
+        // create metrics list
+        const metricsPayload = selectedMetrics.map((metricPath) => {
+            if (samplingMode === 'global') {
+                return {
+                    name: metricPath,
+                    sampling_period: parseInt(globalInterval, 10),
+                    targets: globalDevices
+                };
+            }
+            // per-metric
+            return {
+                name: metricPath,
+                sampling_period: parseInt(metricIntervals[metricPath], 10),
+                targets: metricDevices[metricPath] || []
+            };
+        });
+
+        setWaitOperation(true);
+        try {
+            const res = await fetch('http://localhost:5004/api/experimenter/createTelemetryFile', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    reservation_id,
+                    telemetry_filename_base: telemetryBaseName,
+                    experiment_name: expName,
+                    telemetry_type: telemetryTypeNum,
+                    metrics: metricsPayload
+                })
+            });
+
+            const contentType = res.headers.get('Content-Type') || '';
+            if (!res.ok) {
+                if (contentType.includes('application/json')) {
+                    const errData = await res.json();
+                    setTelemetryCreateMessage(`Error: ${errData.error || 'server error'}`);
+                } else {
+                    setTelemetryCreateMessage('Error: failed to create telemetry file');
+                }
+                setTelemetryCreateMessageType('error');
+                return;
+            }
+
+            // download YAML
+            const blob = await res.blob();
+
+            const contentDisposition = res.headers.get('Content-Disposition');
+            let filename = `${telemetryBaseName}.yaml`;
+            if (contentDisposition) {
+                const m = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+                if (m && m[1]) filename = m[1].replace(/['"]/g, '');
+            }
+
+            createDownload(blob, filename);
+            //success message: "<selected_experiment_name>_telemetry created"
+            setTelemetryCreateMessage(`${telemetryBaseName} created`);
+            setTelemetryCreateMessageType('success');
+
+        } catch (e) {
+            console.error('Error creating telemetry file:', e);
+            setTelemetryCreateMessage('Error: network/server error');
+            setTelemetryCreateMessageType('error');
+        } finally {
+            setWaitOperation(false);
+        }
+    };
 
     // ----------------------------------------------
     return (
@@ -1220,7 +1400,7 @@ export default function Experiment({username, reservation_id}) {
                             <div key={row.id} className="config-row metric-add-row">
                                 <input
                                     type="text"
-                                    className={`metric-path-input ${row.status === 'empty' || row.status === 'error' || row.status === 'predefined' ? 'input-error' : row.status === 'success' ? 'input-success' : row.status === 'warning' ? 'input-warning': ''}`}
+                                    className={`metric-path-input ${row.status === 'empty' || row.status === 'error' || row.status === 'predefined' ? 'input-error' : row.status === 'success' ? 'input-success' : row.status === 'warning' ? 'input-warning' : ''}`}
                                     placeholder="e.g., COUNTERS_DB:COUNTERS/Ethernet8 or /openconfig-..."
                                     value={row.path}
                                     onChange={(e) => handleMetricPathChange(row.id, e.target.value)}
@@ -1230,7 +1410,7 @@ export default function Experiment({username, reservation_id}) {
                                 <label
                                     className="label-inline add-remove-label"
                                     onClick={() => !runningExperiment && !validatingMetrics && handleAddMetricRow(idx)}
-                                    style={{ pointerEvents: runningExperiment || validatingMetrics ? 'none' : 'auto' }}
+                                    style={{pointerEvents: runningExperiment || validatingMetrics ? 'none' : 'auto'}}
                                 >+</label>
 
                                 <label
@@ -1255,7 +1435,10 @@ export default function Experiment({username, reservation_id}) {
                         ))}
 
                         <div className="config-row">
-                            <button type="button" className="send-button configuration-button" onClick={handleAddMetrics} disabled={runningExperiment || validatingMetrics}> Add Metrics</button>
+                            <button type="button" className="send-button configuration-button"
+                                    onClick={handleAddMetrics} disabled={runningExperiment || validatingMetrics}> Add
+                                Metrics
+                            </button>
                         </div>
 
                         {/* Sampling configuration */}
@@ -1279,7 +1462,8 @@ export default function Experiment({username, reservation_id}) {
                                     onChange={(e) => setSamplingMode(e.target.value)}
                                     disabled={runningExperiment}
                                 />
-                                <label className="label-inline label-radio" htmlFor="perMetricSampling">Per-metric</label>
+                                <label className="label-inline label-radio"
+                                       htmlFor="perMetricSampling">Per-metric</label>
                             </div>
                         </div>
 
@@ -1323,7 +1507,8 @@ export default function Experiment({username, reservation_id}) {
                                         <input
                                             type="text"
                                             className="interval-field-small"
-                                            value={metricIntervals[metricPath] || '5'}
+                                            value={metricIntervals[metricPath] || ''}
+                                            placeholder={5}
                                             onChange={(e) => {
                                                 const value = e.target.value;
                                                 if (value === '' || /^\d+$/.test(value)) {
@@ -1381,6 +1566,40 @@ export default function Experiment({username, reservation_id}) {
                                     mode</label>
                             </div>
                         </div>
+                        <div className="config-row">
+                            <label className="label-inline label-fixed-width">Experiment definition:</label>
+                            <select
+                                className="duration-field"
+                                value={selectedExperimentDefinitionTelemetry}
+                                onChange={(e) => setSelectedExperimentDefinitionTelemetry(e.target.value)}
+                                disabled={runningExperiment || experimentDefinitions.length === 0}
+                            >
+                                {experimentDefinitions.length === 0 ? (
+                                    <option value="">no experiment definitions</option>
+                                ) : (
+                                    <>
+                                        <option value="">Select</option>
+                                        {experimentDefinitions.map((exp) => (
+                                            <option key={exp.filename} value={exp.filename}>
+                                                {exp.label}
+                                            </option>
+                                        ))}
+                                    </>
+                                )}
+                            </select>
+                            <button
+                                type="button"
+                                className="send-button configuration-button additional-margin"
+                                onClick={handleCreateTelemetryFile}
+                                disabled={runningExperiment || waitOperation}
+                            >
+                                Create telemetry file
+                            </button>
+
+                            <div className={`experiment-created-message ${telemetryCreateMessageType}`}>
+                                {telemetryCreateMessage}
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -1393,6 +1612,25 @@ export default function Experiment({username, reservation_id}) {
                         </div>
                         {/* Experiment buttons */}
                         <div className="experiment-buttons">
+                            <select
+                                className="experiment-definition-select"
+                                value={selectedExperimentDefinitionRun}
+                                onChange={(e) => setSelectedExperimentDefinitionRun(e.target.value)}
+                                disabled={runningExperiment || experimentDefinitions.length === 0}
+                            >
+                                {experimentDefinitions.length === 0 ? (
+                                    <option value="">no experiment definitions</option>
+                                ) : (
+                                    <>
+                                        <option value="">Select</option>
+                                        {experimentDefinitions.map((exp) => (
+                                            <option key={exp.filename} value={exp.filename}>
+                                                {exp.label}
+                                            </option>
+                                        ))}
+                                    </>
+                                )}
+                            </select>
                             <button type="button" className="start-button configuration-button"
                                     disabled={runningExperiment}>Run experiment
                             </button>
