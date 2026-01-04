@@ -6,9 +6,9 @@ import traceback
 from flask import request, send_file, jsonify
 import json
 import yaml
-from datetime import datetime
+from datetime import datetime, timedelta
 from werkzeug.utils import secure_filename
-from ...database.db import db, UserMetrics
+from ...database.db import db, UserMetrics, Reservation, Experiment
 from pygnmi.client import gNMIclient
 from ...app import app
 from ..controller import (
@@ -32,6 +32,26 @@ def ensure_experiment_dirs():
     os.makedirs(EXPERIMENT_TEMPLATES_DIR, exist_ok=True)
     os.makedirs(EXPERIMENT_PLAYBOOKS_DIR, exist_ok=True)
     os.makedirs(EXPERIMENT_TELEMETRY_DIR, exist_ok=True)
+
+
+def get_next_available_id():
+    # find first available ID in experiment table
+    try:
+        existing_ids = db.session.query(Experiment.id).order_by(Experiment.id).all()
+        existing_ids = [row[0] for row in existing_ids]
+
+        if not existing_ids:
+            return 1
+
+        for i in range(1, existing_ids[-1] + 1):
+            if i not in existing_ids:
+                return i
+
+        return existing_ids[-1] + 1
+
+    except Exception as e:
+        print(f"Error finding next available ID: {str(e)}")
+        return None
 
 @app.route('/api/experimenter/getDevices', methods=['POST'])
 def get_devices():
@@ -145,7 +165,6 @@ def download_experiment_template():
         as_attachment=True,
         download_name='experiment_template.yml'
     )
-
 
 def validate_experiment_template_schema(yaml_data):
 
@@ -420,7 +439,6 @@ def create_experiment():
         print(f"[CREATE EXPERIMENT ERROR] {str(e)}", flush=True)
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
-
 
 @app.route('/api/experimenter/createIperfExperiment', methods=['POST'])
 def create_iperf_experiment():
@@ -856,7 +874,7 @@ def create_telemetry_file():
         os.makedirs(telemetry_dir, exist_ok=True)
 
         safe_base = secure_filename(str(file_base).strip())
-        filename = f"{safe_base}.yaml"
+        filename = f"{safe_base}.yml"
         out_path = os.path.join(telemetry_dir, filename)
 
         with open(out_path, 'w', encoding='utf-8') as f:
@@ -880,9 +898,266 @@ def create_telemetry_file():
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@app.route('/api/experimenter/runExperiment', methods=['POST'])
+def run_experiment():
+    try:
+        data = request.json
+        experiment_name = data.get('experiment_name')
+        reservation_id = data.get('reservation_id')
+
+        if not experiment_name or not reservation_id:
+            return jsonify({'success': False, 'error': 'Missing experiment_name or reservation_id'}), 400
+
+        # check if there is a running experiment for that reservation
+        existing_run = Experiment.query.filter_by(reservation_id=reservation_id, status='running').first()
+
+        if existing_run:
+            return jsonify({
+                'success': False,
+                'error': f'An experiment is already running: {existing_run.experiment_name}'
+            }), 400
+
+        telemetry_file_path = os.path.join(EXPERIMENT_TELEMETRY_DIR, f'res_{reservation_id}', f'{experiment_name}_telemetry.yml')
+        # check if file exists
+        if not os.path.exists(telemetry_file_path):
+            return jsonify({
+                'success': False,
+                'error': f'Telemetry file not found: {experiment_name}_telemetry.yml'
+            }), 404
+
+        experiment_file_path = os.path.join(EXPERIMENT_TEMPLATES_DIR, f'res_{reservation_id}', f'{experiment_name}.yml')
+        # get duration_s
+        try:
+            with open(experiment_file_path, 'r') as f:
+                experiment_data = yaml.safe_load(f)
+                duration_s = experiment_data.get('duration_s')
+
+                if duration_s is None:
+                    return jsonify({
+                        'success': False,
+                        'error': 'duration_s field not found in telemetry file'
+                    }), 400
+
+                duration_s = int(duration_s)
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'error': f'Error reading telemetry file: {str(e)}'
+            }), 500
+
+        # find reservation
+        reservation = Reservation.query.filter_by(id=reservation_id).first()
+
+        if not reservation:
+            return jsonify({
+                'success': False,
+                'error': f'Reservation {reservation_id} not found'
+            }), 404
+
+        # compute reservation end
+        reservation_end = datetime.combine(reservation.endDate, reservation.endTime)
+
+        now = datetime.now()
+
+        # remaining time since reservation end
+        time_until_end = (reservation_end - now).total_seconds()
+
+        # 10 minutes (600 seconds)  margin
+        safety_margin = 600
+
+        # check if reservation duration exceeds
+        if duration_s > (time_until_end - safety_margin):
+            minutes_available = int((time_until_end - safety_margin) / 60)
+            return jsonify({
+                'success': False,
+                'error': f'Experiment duration ({duration_s}s) exceeds available time. Only {minutes_available} minutes available (10 min margin before reservation ends)'
+            }), 400
+
+        # create record in database
+        experiment_start = now
+        experiment_end = experiment_start + timedelta(seconds=duration_s)
+
+        # find next available id
+        next_id = get_next_available_id()
+
+        # find record inside the database
+        if next_id is not None:
+            new_experiment = Experiment(
+                id=next_id,
+                reservation_id=reservation_id,
+                experiment_name=experiment_name,
+                start_time=experiment_start,
+                end_time=experiment_end,
+                duration_s=duration_s,
+                status='running'
+            )
+        else:
+            new_experiment = Experiment(
+                reservation_id=reservation_id,
+                experiment_name=experiment_name,
+                start_time=experiment_start,
+                end_time=experiment_end,
+                duration_s=duration_s,
+                status='running'
+            )
+
+        db.session.add(new_experiment)
+        db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'duration_s': duration_s,
+            'start_time': experiment_start.isoformat(),
+            'end_time': experiment_end.isoformat(),
+            'experiment_id': new_experiment.id,
+            'message': 'Experiment started'
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error in runExperiment: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Server error: {str(e)}'
+        }), 500
+
+@app.route('/api/experimenter/getExperimentStatus', methods=['POST'])
+def get_experiment_status():
+    # check if there is an active experiment and return remaining time
+    try:
+        data = request.json
+        reservation_id = data.get('reservation_id')
+
+        if not reservation_id:
+            return jsonify({'success': False, 'error': 'Missing reservation_id'}), 400
+
+        # find running experiment for the current reservation
+        running_experiment = Experiment.query.filter_by(
+            reservation_id=reservation_id,
+            status='running'
+        ).first()
+
+        if not running_experiment:
+            return jsonify({
+                'success': True,
+                'running': False,
+                'message': 'No experiment running'
+            }), 200
+
+        now = datetime.now()
+
+        # check if the experiment is ended
+        if now >= running_experiment.end_time:
+            # update status to completed
+            running_experiment.status = 'completed'
+            db.session.commit()
+
+            return jsonify({
+                'success': True,
+                'running': False,
+                'just_completed': True,
+                'experiment_name': running_experiment.experiment_name,
+                'experiment_id': running_experiment.id,
+                'message': 'Experiment completed'
+            }), 200
+
+        # compute remaining time in seconds
+        remaining_seconds = int((running_experiment.end_time - now).total_seconds())
+
+        return jsonify({
+            'success': True,
+            'running': True,
+            'experiment_name': running_experiment.experiment_name,
+            'remaining_seconds': remaining_seconds,
+            'total_duration_s': running_experiment.duration_s,
+            'start_time': running_experiment.start_time.isoformat(),
+            'end_time': running_experiment.end_time.isoformat(),
+            'experiment_id': running_experiment.id
+        }), 200
+
+    except Exception as e:
+        print(f"Error in getExperimentStatus: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Server error: {str(e)}'
+        }), 500
+
+
+@app.route('/api/experimenter/finishExperiment', methods=['POST'])
+def finish_experiment():
+    # end manually an experiment
+    try:
+        data = request.json
+        reservation_id = data.get('reservation_id')
+
+        if not reservation_id:
+            return jsonify({'success': False, 'error': 'Missing reservation_id'}), 400
+
+        # find running experiment
+        running_experiment = Experiment.query.filter_by(
+            reservation_id=reservation_id,
+            status='running'
+        ).first()
+
+        if not running_experiment:
+            return jsonify({
+                'success': False,
+                'error': 'No experiment found for this reservation'
+            }), 404
+
+        # remove record from database
+        db.session.delete(running_experiment)
+        db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'message': 'Experiment finished and removed successfully'
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error in finishExperiment: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Server error: {str(e)}'
+        }), 500
+
+
+@app.route('/api/experimenter/updateExperimentStatus', methods=['POST'])
+def update_experiment_status():
+    # update status of a 'completed' experiment
+    try:
+        data = request.json
+        reservation_id = data.get('reservation_id')
+        experiment_id = data.get('experiment_id')
+
+        if not reservation_id:
+            return jsonify({'success': False, 'error': 'Missing reservation_id'}), 400
+
+        if experiment_id:
+            experiment = Experiment.query.filter_by(
+                id=experiment_id,
+                reservation_id=reservation_id
+            ).first()
+        else:
+            experiment = Experiment.query.filter_by(
+                reservation_id=reservation_id,
+                status='running'
+            ).first()
+
+        if not experiment:
+            return jsonify({'success': False, 'error': 'Experiment not found'}), 404
+
+        experiment.status = 'completed'
+        db.session.commit()
+
+        return jsonify({'success': True, 'message': 'Experiment status updated to completed'}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error updating experiment status: {str(e)}")
+        return jsonify({'success': False, 'error': f'Server error: {str(e)}'}), 500
+
 
 if __name__ == '__main__':
-
-    # host 0.0.0.0 often necessary in virtual environments or containers.
-    #app.run(debug=True, host='0.0.0.0', port=5004 #, use_reloader=False)
     app.run(debug=False, host='0.0.0.0', port=5004, use_reloader=False)

@@ -71,3 +71,26 @@ class UserMetrics(db.Model):
 
     def __repr__(self):
         return f'<ReservationDevice id={self.id} reservation_id={self.reservation_id} asset_tag={self.asset_tag}>'
+
+class Experiment(db.Model):
+    __table_name__ = 'experiment'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    reservation_id = db.Column(
+        db.Integer,
+        db.ForeignKey('reservation.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True
+    )
+    experiment_name = db.Column(db.String(255), nullable=False)
+
+    start_time = db.Column(db.DateTime, nullable=False)
+    end_time = db.Column(db.DateTime, nullable=False)
+
+    duration_s = db.Column(db.Integer, nullable=False)
+
+    # 'running', 'completed'
+    status = db.Column(db.String(20), default='running', nullable=False)
+
+    def __repr__(self):
+        return f'<ExperimentRun id={self.id} reservation={self.reservation_id} exp={self.experiment_name} status={self.status}>'

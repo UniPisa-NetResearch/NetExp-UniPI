@@ -233,6 +233,11 @@
   color: white;
 }
 
+.start-button[disabled], .start-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .duration-field {
   width: 25%;
   border: 1px solid #ddd;
