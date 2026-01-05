@@ -259,9 +259,10 @@ def validate_experiment_template():
                 'details': error_msg
             }), 400
 
-        experiment_id = yaml_content.get('experiment_id', 'EXPERIMENT')
+        experiment_filename = experiment_file.filename
+        experiment_name_base = os.path.splitext(experiment_filename)[0]
         # sanitize experiment_id to create directory valid
-        experiment_name_clean = experiment_id.strip().lower().replace(' ', '_')
+        experiment_name_clean = experiment_name_base.replace(' ', '_')
         safe_exp_name = secure_filename(experiment_name_clean)
 
         # create reservation dir inside playbooks dir
@@ -388,7 +389,7 @@ def create_experiment():
 
         # create YAML document with correct structure
         experiment_doc = {
-            'experiment_id': experiment_name.strip().upper(),  # uppercase
+            'experiment_id': experiment_name.strip().upper().replace(' ', '_'),  # uppercase
             'duration_s': int(duration),
             'reservation_id': int(reservation_id),
             'schedule': schedule
@@ -516,7 +517,7 @@ def create_iperf_experiment():
             })
 
         experiment_doc = {
-            'experiment_id': experiment_name.strip().upper(),
+            'experiment_id': experiment_name.strip().upper().replace(' ', '_'),
             'duration_s': int(duration),
             'reservation_id': int(reservation_id),
             'playbooks_base_path': iperf_playbooks_base,
