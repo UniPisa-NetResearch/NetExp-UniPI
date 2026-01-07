@@ -1,11 +1,13 @@
 import os
-import subprocess
 import re
 from io import BytesIO
 import traceback
 from flask import request, send_file, jsonify
 import json
 import yaml
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from werkzeug.utils import secure_filename
 from ...database.db import db, UserMetrics, Reservation, Experiment
@@ -26,13 +28,14 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 EXPERIMENT_TEMPLATES_DIR = os.path.join(BASE_DIR, "experimentTemplates")
 EXPERIMENT_PLAYBOOKS_DIR = os.path.join(BASE_DIR, "experimentPlaybooks")
 EXPERIMENT_TELEMETRY_DIR = os.path.join(BASE_DIR, "experimentTelemetry")
+EXPERIMENT_RESULTS_DIR = os.path.join(BASE_DIR, "experimentResults")
 
 def ensure_experiment_dirs():
-    # Create directories when don't exist
+    # create directories when don't exist
     os.makedirs(EXPERIMENT_TEMPLATES_DIR, exist_ok=True)
     os.makedirs(EXPERIMENT_PLAYBOOKS_DIR, exist_ok=True)
     os.makedirs(EXPERIMENT_TELEMETRY_DIR, exist_ok=True)
-
+    os.makedirs(EXPERIMENT_RESULTS_DIR, exist_ok=True)
 
 def get_next_available_id():
     # find first available ID in experiment table
@@ -52,6 +55,285 @@ def get_next_available_id():
     except Exception as e:
         print(f"Error finding next available ID: {str(e)}")
         return None
+
+def collect_telemetry_data(reservation_id, experiment_name, telemetry_config, inventory_path, duration_s):
+    # collect telemetry data during experiment
+    try:
+        results_dir = os.path.join(EXPERIMENT_RESULTS_DIR, f"res_{reservation_id}", experiment_name)
+        os.makedirs(results_dir, exist_ok=True)
+
+        print(f"[TELEMETRY] Starting collection for {experiment_name}", flush=True)
+        print(f"[TELEMETRY] Duration: {duration_s}s", flush=True)
+
+        # read device ips from inventory
+        device_ips = {}
+        with open(inventory_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('[') and not line.startswith('#'):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        device_name = parts[0]
+                        for part in parts[1:]:
+                            if part.startswith('ansible_host='):
+                                device_ips[device_name] = part.split('=')[1]
+
+        print(f"[TELEMETRY] Found devices: {list(device_ips.keys())}", flush=True)
+        # results structure: {metric_name: {target: [data_points]}}
+        telemetry_results = {}
+        results_lock = threading.Lock()
+
+        start_time = time.time()
+        end_time = start_time + duration_s
+
+        def collect_metric_from_target(metric_name, metric_path, target, target_ip, sampling_period):
+            # function run on a separate thread for each combination of metric/target
+
+            print(f"[TELEMETRY] Thread started: {metric_name} from {target} every {sampling_period}s", flush=True)
+            # create results structure
+            with results_lock:
+                if metric_name not in telemetry_results:
+                    telemetry_results[metric_name] = {}
+                telemetry_results[metric_name][target] = []
+
+            last_collection = start_time
+            sample_count = 0
+
+            while time.time() < end_time:
+                current_time = time.time()
+
+                # check if it is time to sample
+                if current_time - last_collection >= sampling_period:
+                    sample_count += 1
+                    elapsed = current_time - start_time
+                    print(f"[TELEMETRY] Sample {sample_count} at T+{elapsed:.1f}s: {metric_name} from {target}", flush=True)
+
+                    try:
+                        # use gNMI to collect metric
+                        with gNMIclient(
+                                target=(target_ip, 8080),
+                                username='admin',
+                                password='YourPaSsWoRd',
+                                insecure=True,
+                                skip_verify=True
+                        ) as gc:
+                            # check between OpenConfig and SONiC DB
+                            if ':' in metric_name and not metric_name.startswith('/openconfig-'):
+                                # SONiC DB format
+                                db_name, path = metric_name.split(':', 1)
+                                print(f"[TELEMETRY] Querying SONiC DB: {db_name}:{path}", flush=True)
+                                result = gc.get(path=[path], target=db_name, encoding='json')
+                            else:
+                                # OpenConfig format
+                                # create path for the test
+                                match = re.match(r'^(/openconfig-[^:]+):(.+)$', metric_path)
+                                if match:
+                                    prefix = match.group(1)
+                                    path_after_colon = match.group(2)
+                                    # add, if there is not the double prefix
+                                    prefix_without_slash = prefix[1:]
+
+                                    if not path_after_colon.startswith(prefix_without_slash + ':'):
+                                        # Add the same prefix
+                                        path_for_execution = prefix + ':' + prefix_without_slash + ':' + path_after_colon
+                                    else:
+                                        # double prefix present, use the original one
+                                        path_for_execution = metric_path
+                                else:
+                                    # double prefix present, use the original one
+                                    path_for_execution = metric_path
+
+                                print(f"[TELEMETRY] Querying OpenConfig: {path_for_execution}", flush=True)
+                                result = gc.get(path=[path_for_execution], encoding='json')
+
+                            timestamp = datetime.now().isoformat()
+
+                            # save result in a thread-safe way
+                            with results_lock:
+                                telemetry_results[metric_name][target].append({
+                                    'timestamp': timestamp,
+                                    'value': result
+                                })
+
+                            print(f"[TELEMETRY] ✓ {metric_name} from {target} at {timestamp}", flush=True)
+
+                    except Exception as e:
+                        print(f"[TELEMETRY ERROR] {metric_name} from {target}: {str(e)}", flush=True)
+                        traceback.print_exc()
+
+                    last_collection = current_time
+
+                time.sleep(0.5)  # check every 0.5 seconds
+
+            print(f"[TELEMETRY] Thread finished: {metric_name} from {target}", flush=True)
+
+        # create a thread for each combination metric/target
+        threads = []
+        for metric_config in telemetry_config['metric']:
+            metric_name = metric_config['name']
+            metric_path = metric_config['name']
+            sampling_period = metric_config['sampling_period']
+            targets = metric_config['targets']
+
+            print(f"[TELEMETRY] Setting up collection for: {metric_name}", flush=True)
+            print(f"[TELEMETRY] Targets: {targets}, Sampling: {sampling_period}s", flush=True)
+
+            for target in targets:
+                if target not in device_ips:
+                    print(f"[TELEMETRY] Device {target} not found in inventory", flush=True)
+                    continue
+
+                target_ip = device_ips[target]
+
+                # start thread for the current combination
+                thread = threading.Thread(target=collect_metric_from_target, args=(metric_name, metric_path, target, target_ip, sampling_period), daemon=True)
+                thread.start()
+                threads.append(thread)
+
+        print(f"[TELEMETRY] Started {len(threads)} collection threads", flush=True)
+
+        # wait every thread
+        for idx, thread in enumerate(threads):
+            thread.join()
+            print(f"[TELEMETRY] Thread {idx + 1}/{len(threads)} joined", flush=True)
+
+        # save results in a JSON file
+        results_file = os.path.join(results_dir, f"{experiment_name}_telemetry_results.json")
+        with open(results_file, 'w') as f:
+            json.dump(telemetry_results, f, indent=2)
+
+        total_samples = sum(len(samples) for metric in telemetry_results.values() for samples in metric.values())
+
+        print(f"[TELEMETRY] Collection completed. Total samples: {total_samples}", flush=True)
+        print(f"[TELEMETRY] Results saved to {results_file}", flush=True)
+        return True, None
+
+    except Exception as e:
+        error_msg = f"Telemetry collection failed: {str(e)}"
+        print(f"[TELEMETRY ERROR] {error_msg}", flush=True)
+        traceback.print_exc()
+        return False, error_msg
+
+def execute_experiment_schedule(reservation_id, experiment_name, experiment_data, inventory_path):
+    # execute experiment schedule
+    try:
+        results_dir = os.path.join(EXPERIMENT_RESULTS_DIR, f"res_{reservation_id}", experiment_name)
+        os.makedirs(results_dir, exist_ok=True)
+        # get schedule section values and global duration
+        schedule = experiment_data.get('schedule', [])
+        duration_s = experiment_data.get('duration_s', 0)
+
+        experiment_name_base = os.path.splitext(experiment_name)[0]
+        playbooks_dir = os.path.join(EXPERIMENT_PLAYBOOKS_DIR, f'res_{reservation_id}', experiment_name_base)
+
+        print(f"[EXPERIMENT] Starting execution of {experiment_name}", flush=True)
+        print(f"[EXPERIMENT] Total duration: {duration_s}s", flush=True)
+        print(f"[EXPERIMENT] Schedule steps: {len(schedule)}", flush=True)
+
+        start_time = time.time()
+        execution_log = []
+        has_errors = False
+
+        # sort schedule for time_offset_s
+        sorted_schedule = sorted(schedule, key=lambda x: x.get('time_offset_s', 0))
+
+        for step_idx, step in enumerate(sorted_schedule):
+            time_offset = step.get('time_offset_s', 0)
+            step_name = step.get('name', f'step_{step_idx}')
+            playbook_name = step.get('playbook', '')
+            targets = step.get('targets', [])
+
+            # wait until time_offset
+            elapsed = time.time() - start_time
+            print(f"[EXPERIMENT DEBUG] start_time: {start_time}, current time: {time.time()}, elapsed: {elapsed:.1f}s",
+                  flush=True)
+            wait_time = time_offset - elapsed
+
+            print(f"[EXPERIMENT] Step '{step_name}' scheduled at T+{time_offset}s", flush=True)
+            print(f"[EXPERIMENT] Current time: T+{elapsed:.1f}s", flush=True)
+
+            if wait_time > 0:
+                print(f"[EXPERIMENT] Waiting {wait_time:.1f}s until step '{step_name}'", flush=True)
+                time.sleep(wait_time)
+            elif wait_time < -5:  # print if the delay is greater than 5 seconds
+                print(f"[EXPERIMENT WARNING] Step '{step_name}' is {abs(wait_time):.1f}s late!", flush=True)
+
+            # effective time of execution
+            actual_time = time.time() - start_time
+            print(f"[EXPERIMENT] Executing '{step_name}' at T+{actual_time:.1f}s", flush=True)
+
+            # run playbook
+            playbook_path = os.path.join(playbooks_dir, playbook_name)
+
+            if not os.path.exists(playbook_path):
+                error_msg = f"Playbook not found: {playbook_path}"
+                print(f"[EXPERIMENT ERROR] {error_msg}", flush=True)
+                execution_log.append({
+                    'step': step_name,
+                    'time_offset_s': time_offset,
+                    'playbook': playbook_name,
+                    'status': 'error',
+                    'error': error_msg
+                })
+                has_errors = True
+                continue
+
+            print(f"[EXPERIMENT] Executing step '{step_name}' - playbook: {playbook_name}", flush=True)
+
+            # Timestamp before execution
+            exec_start = time.time()
+            exec_elapsed = exec_start - start_time
+            print(f"[EXPERIMENT] Playbook execution starting at T+{exec_elapsed:.1f}s (scheduled: T+{time_offset}s)",
+                  flush=True)
+
+            # Esegui playbook con Ansible
+            extra_vars = {
+                'target_devices': targets
+            }
+
+            returncode, stdout, stderr = run_ansible_playbook(inventory_path=inventory_path, playbook_path=playbook_path, extra_vars=extra_vars, timeout=300)
+
+            # Timestamp after execution
+            exec_end = time.time()
+            exec_duration = exec_end - exec_start
+            exec_total_elapsed = exec_end - start_time
+            print(f"[EXPERIMENT] Playbook '{playbook_name}' completed in {exec_duration:.1f}s (now at T+{exec_total_elapsed:.1f}s)", flush=True)
+
+            step_result = {
+                'step': step_name,
+                'time_offset_s': time_offset,
+                'playbook': playbook_name,
+                'targets': targets,
+                'returncode': returncode,
+                'status': 'success' if returncode == 0 else 'error',
+                'stdout': stdout,
+                'stderr': stderr
+            }
+
+            execution_log.append(step_result)
+
+            if returncode == 0:
+                print(f"[EXPERIMENT] Step '{step_name}' completed successfully", flush=True)
+            else:
+                print(f"[EXPERIMENT ERROR] Step '{step_name}' failed with code {returncode}", flush=True)
+                has_errors = True
+
+        # save execution log
+        log_file = os.path.join(results_dir, f"{experiment_name}_execution_log.json")
+        with open(log_file, 'w') as f:
+            json.dump(execution_log, f, indent=2)
+
+        print(f"[EXPERIMENT] Execution completed. Log saved to {log_file}", flush=True)
+        if has_errors:
+            return True, "Experiment completed with some errors"
+        else:
+            return True, None
+
+    except Exception as e:
+        error_msg = f"Experiment execution failed: {str(e)}"
+        print(f"[EXPERIMENT ERROR] {error_msg}", flush=True)
+        traceback.print_exc()
+        return False, error_msg
 
 @app.route('/api/experimenter/getDevices', methods=['POST'])
 def get_devices():
@@ -929,17 +1211,22 @@ def run_experiment():
         experiment_file_path = os.path.join(EXPERIMENT_TEMPLATES_DIR, f'res_{reservation_id}', f'{experiment_name}.yml')
         # get duration_s
         try:
+            with open(telemetry_file_path, 'r') as f:
+                telemetry_data = yaml.safe_load(f)
+
             with open(experiment_file_path, 'r') as f:
                 experiment_data = yaml.safe_load(f)
-                duration_s = experiment_data.get('duration_s')
 
-                if duration_s is None:
-                    return jsonify({
-                        'success': False,
-                        'error': 'duration_s field not found in telemetry file'
-                    }), 400
+            duration_s = experiment_data.get('duration_s')
 
-                duration_s = int(duration_s)
+            if duration_s is None:
+                return jsonify({
+                    'success': False,
+                    'error': 'duration_s field not found in telemetry file'
+                }), 400
+
+            duration_s = int(duration_s)
+
         except Exception as e:
             return jsonify({
                 'success': False,
@@ -1005,13 +1292,76 @@ def run_experiment():
         db.session.add(new_experiment)
         db.session.commit()
 
+        experiment_id = new_experiment.id
+
+        # inventory path
+        safe_res = safe_filename(f"res-{reservation_id}-inventory")
+        inventory_path = os.path.join(INVENTORY_DIR, f"{safe_res}.ini")
+
+        # parallel execution: experiment + telemetry
+        def run_experiment_with_telemetry():
+            try:
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    # start experiment and telemetry execution
+                    experiment_future = executor.submit(
+                        execute_experiment_schedule,
+                        reservation_id,
+                        experiment_name,
+                        experiment_data,
+                        inventory_path
+                    )
+
+                    telemetry_future = executor.submit(
+                        collect_telemetry_data,
+                        reservation_id,
+                        experiment_name,
+                        telemetry_data,
+                        inventory_path,
+                        duration_s
+                    )
+
+                    # wait completion
+                    experiment_success, experiment_error = experiment_future.result()
+                    telemetry_success, telemetry_error = telemetry_future.result()
+
+                with app.app_context():
+                    # update experiment status
+                    exp = Experiment.query.filter_by(id=experiment_id).first()
+                    if exp:
+                        if experiment_success and telemetry_success:
+                            exp.status = 'completed'
+                            print(f"[EXPERIMENT] {experiment_name} marked as completed", flush=True)
+                        else:
+                            exp.status = 'completed_with_errors'
+                            error_details = []
+                            if not experiment_success:
+                                error_details.append(f"Experiment: {experiment_error}")
+                            if not telemetry_success:
+                                error_details.append(f"Telemetry: {telemetry_error}")
+                            print(f"[EXPERIMENT] {experiment_name} completed with errors: {'; '.join(error_details)}", flush=True)
+
+                        db.session.commit()
+
+            except Exception as e:
+                print(f"[EXPERIMENT THREAD ERROR] {str(e)}", flush=True)
+                traceback.print_exc()
+                with app.app_context():
+                    exp = Experiment.query.filter_by(id=experiment_id).first()
+                    if exp:
+                        exp.status = 'error'
+                        db.session.commit()
+
+        # start thread for execution
+        thread = threading.Thread(target=run_experiment_with_telemetry, daemon=True)
+        thread.start()
+
         return jsonify({
             'success': True,
             'duration_s': duration_s,
             'start_time': experiment_start.isoformat(),
             'end_time': experiment_end.isoformat(),
             'experiment_id': new_experiment.id,
-            'message': 'Experiment started'
+            'message': 'Experiment started successfully'
         }), 200
 
     except Exception as e:
@@ -1083,7 +1433,6 @@ def get_experiment_status():
             'error': f'Server error: {str(e)}'
         }), 500
 
-
 @app.route('/api/experimenter/finishExperiment', methods=['POST'])
 def finish_experiment():
     # end manually an experiment
@@ -1123,7 +1472,6 @@ def finish_experiment():
             'error': f'Server error: {str(e)}'
         }), 500
 
-
 @app.route('/api/experimenter/updateExperimentStatus', methods=['POST'])
 def update_experiment_status():
     # update status of a 'completed' experiment
@@ -1159,6 +1507,107 @@ def update_experiment_status():
         print(f"Error updating experiment status: {str(e)}")
         return jsonify({'success': False, 'error': f'Server error: {str(e)}'}), 500
 
+
+@app.route('/api/experimenter/getExperimentResults', methods=['POST'])
+def get_experiment_results():
+    # return results of the last completed experiment
+    try:
+        data = request.json
+        reservation_id = data.get('reservation_id')
+
+        if not reservation_id:
+            return jsonify({'success': False, 'error': 'Missing reservation_id'}), 400
+
+        # find last completed experiment
+        completed_experiment = Experiment.query.filter_by(
+            reservation_id=reservation_id,
+            status='completed'
+        ).order_by(Experiment.end_time.desc()).first()
+
+        if not completed_experiment:
+            return jsonify({
+                'success': False,
+                'error': 'No completed experiment found'
+            }), 404
+
+        experiment_name = completed_experiment.experiment_name
+        results_dir = os.path.join(EXPERIMENT_RESULTS_DIR, f"res_{reservation_id}", experiment_name)
+
+        # read telemetry files
+        telemetry_file = os.path.join(results_dir, f"{experiment_name}_telemetry_results.json")
+        execution_log_file = os.path.join(results_dir, f"{experiment_name}_execution_log.json")
+
+        telemetry_results = None
+        execution_log = None
+
+        if os.path.exists(telemetry_file):
+            with open(telemetry_file, 'r') as f:
+                telemetry_results = json.load(f)
+
+        if os.path.exists(execution_log_file):
+            with open(execution_log_file, 'r') as f:
+                execution_log = json.load(f)
+
+        return jsonify({
+            'success': True,
+            'experiment_name': experiment_name,
+            'experiment_id': completed_experiment.id,
+            'start_time': completed_experiment.start_time.isoformat(),
+            'end_time': completed_experiment.end_time.isoformat(),
+            'duration_s': completed_experiment.duration_s,
+            'telemetry_results': telemetry_results,
+            'execution_log': execution_log
+        }), 200
+
+    except Exception as e:
+        print(f"Error in getExperimentResults: {str(e)}")
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'Server error: {str(e)}'
+        }), 500
+
+@app.route('/api/experimenter/downloadResults', methods=['POST'])
+def download_results():
+    # download result files as ZIP
+    try:
+        import zipfile
+        from io import BytesIO
+
+        data = request.json
+        reservation_id = data.get('reservation_id')
+        experiment_name = data.get('experiment_name')
+
+        if not reservation_id or not experiment_name:
+            return jsonify({'success': False, 'error': 'Missing parameters'}), 400
+
+        results_dir = os.path.join(EXPERIMENT_RESULTS_DIR, f"res_{reservation_id}", experiment_name)
+
+        if not os.path.exists(results_dir):
+            return jsonify({'success': False, 'error': 'Results not found'}), 404
+
+        # create in memory ZIP
+        memory_file = BytesIO()
+        with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for root, dirs, files in os.walk(results_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    arcname = os.path.relpath(file_path, results_dir)
+                    zf.write(file_path, arcname)
+
+        memory_file.seek(0)
+
+        return send_file(
+            memory_file,
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name=f'{experiment_name}_results.zip'
+        )
+
+    except Exception as e:
+        print(f"Error in downloadResults: {str(e)}")
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(debug=False, host='0.0.0.0', port=5004, use_reloader=False)

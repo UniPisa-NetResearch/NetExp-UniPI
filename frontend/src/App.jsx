@@ -7,6 +7,7 @@ import Home from './Home.jsx';
 import Reservation from './Reservation.jsx';
 import Configuration from './Configuration.jsx';
 import Experiment from "./Experiment.jsx";
+import Evaluation from "./Evaluation.jsx";
 
 const ProtectedPageGuard = ({ isReservationActive, isAccessGranted, children }) => {
   const navigate = useNavigate();
@@ -54,6 +55,8 @@ function App() {
     // there is a small period in minute needed to create user accounts and install packages on devices
     // the user must wait this period to access configuration and experiment pages
     const [isAccessGranted, setIsAccessGranted] = useState(false);
+    // the access of evaluation page is allowed only after experiment
+    const [isEvaluationAccessGranted, setIsEvaluationAccessGranted] = useState(false);
 
     const socketRef = useRef(/** @type {any} */ (null));
 
@@ -273,9 +276,52 @@ function App() {
         if (currentUser) checkActiveReservation(currentUser);
     }, [currentUser, checkActiveReservation]);
 
+    const checkEvaluationAccess = useCallback(async () => {
+        if (!reservationId) {
+            setIsEvaluationAccessGranted(false);
+            return false;
+        }
+
+        try {
+            // Check esperimento running
+            const statusResponse = await fetch('http://localhost:5004/api/experimenter/getExperimentStatus', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ reservation_id: reservationId })
+            });
+            const statusData = await statusResponse.json();
+
+            if (statusData.success && statusData.running) {
+                setIsEvaluationAccessGranted(false);
+                return false;
+            }
+
+            // Check risultati disponibili
+            const resultsResponse = await fetch('http://localhost:5004/api/experimenter/getExperimentResults', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ reservation_id: reservationId })
+            });
+            const resultsData = await resultsResponse.json();
+
+            if (resultsData.success) {
+                setIsEvaluationAccessGranted(true);
+                return true;
+            } else {
+                setIsEvaluationAccessGranted(false);
+                return false;
+            }
+
+        } catch (error) {
+            console.error('Error checking evaluation access:', error);
+            setIsEvaluationAccessGranted(false);
+            return false;
+        }
+    }, [reservationId]);
+
     // wrapper component to show layout and content
     const NavbarWrapper = ({ children }) => (
-        <NavbarLayout onLogout={handleLogout} activeReservationExpiration={activeReservationExpiration} isReservationActive={isReservationActive} isAccessGranted={isAccessGranted}>
+        <NavbarLayout onLogout={handleLogout} activeReservationExpiration={activeReservationExpiration} isReservationActive={isReservationActive} isAccessGranted={isAccessGranted} isEvaluationAccessGranted={isEvaluationAccessGranted} checkEvaluationAccess={checkEvaluationAccess}>
             {children}
         </NavbarLayout>
     );
@@ -303,6 +349,7 @@ function App() {
                 <Route path="/reservation" element={<NavbarWrapper><Reservation username={currentUser} isReservationActive={isReservationActive} /> </NavbarWrapper>} />
                 <Route path="/configuration" element={<NavbarWrapper><ProtectedPageGuard isReservationActive={isReservationActive} isAccessGranted={isAccessGranted}><Configuration username={currentUser} reservation_id={reservationId}/> </ProtectedPageGuard></NavbarWrapper>} />
                 <Route path="/experiment" element={<NavbarWrapper><ProtectedPageGuard isReservationActive={isReservationActive} isAccessGranted={isAccessGranted}><Experiment username={currentUser} reservation_id={reservationId}/> </ProtectedPageGuard></NavbarWrapper>} />
+                <Route path="/evaluation" element={<NavbarWrapper><ProtectedPageGuard isReservationActive={isReservationActive} isAccessGranted={isEvaluationAccessGranted}><Evaluation username={currentUser} reservation_id={reservationId}/></ProtectedPageGuard></NavbarWrapper>} />
             </Route>
 
             {/* default route for not found path */}

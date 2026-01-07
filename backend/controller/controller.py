@@ -501,7 +501,6 @@ def check_availability():
         print(f"User {username} not found in active reservations, reservation id: {reservation_id}")
         return jsonify({"ok": True, "command": "wait_configuration"}), 200
 
-
 @app.route('/api/controller/cleanupReservation', methods=['POST'])
 def cleanup_reservation():
     # remove reservation data from memory and filesystem, when admin remove the reservation

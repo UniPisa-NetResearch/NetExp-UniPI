@@ -20,7 +20,7 @@ const isLinkActive = (itemPath, currentPath) => {
 };
 
 // this component will receive teh children component to show (Home, Reservation, etc)
-const NavbarLayout = ({ children, onLogout, showLogoutButton = true, isReservationActive = false, activeReservationExpiration = null, isAccessGranted = false }) => {
+const NavbarLayout = ({ children, onLogout, showLogoutButton = true, isReservationActive = false, activeReservationExpiration = null, isAccessGranted = false, isEvaluationAccessGranted = false, checkEvaluationAccess }) => {
     const location = useLocation();
     const navigate = useNavigate();
 
@@ -74,9 +74,9 @@ const NavbarLayout = ({ children, onLogout, showLogoutButton = true, isReservati
     }, [isReservationActive, activeReservationExpiration]);
 
 
-    const handleNavClick = (e, item) => {
+    const handleNavClick = async (e, item) => {
         // block navigation to configuration if there is no active reservation/token
-        if ((item.path === '/configuration' || item.path === '/experiment') && !isReservationActive) {
+        if ((item.path === '/configuration' || item.path === '/experiment' || item.path === '/evaluation') && !isReservationActive) {
             e.preventDefault();
             // give feedback and remain on current page
             alert('⚠️ Access denied: you do not have an active reservation.');
@@ -87,6 +87,19 @@ const NavbarLayout = ({ children, onLogout, showLogoutButton = true, isReservati
             e.preventDefault();
             // give feedback and remain on current page
             alert('⏳ Account creation in progress on devices. Please wait before accessing this page.');
+            return;
+        }
+
+        if (item.path === '/evaluation') {
+            e.preventDefault();
+            const hasAccess = await checkEvaluationAccess();
+
+            if (!hasAccess) {
+                alert('⏳ No completed experiments available for evaluation.');
+                return;
+            }
+            
+            navigate(item.path);
         }
     };
 
