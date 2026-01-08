@@ -231,36 +231,62 @@ def execute_experiment_schedule(reservation_id, experiment_name, experiment_data
         print(f"[EXPERIMENT] Schedule steps: {len(schedule)}", flush=True)
 
         start_time = time.time()
+        start_dt = datetime.fromtimestamp(start_time)
+        print(f"[EXPERIMENT] Start time: {start_dt.strftime('%Y-%m-%d %H:%M:%S.%f')}", flush=True)
+        print(f"[EXPERIMENT] Start timestamp: {start_time}", flush=True)
+
         execution_log = []
         has_errors = False
 
         # sort schedule for time_offset_s
         sorted_schedule = sorted(schedule, key=lambda x: x.get('time_offset_s', 0))
+        scheduled_times = []
 
-        for step_idx, step in enumerate(sorted_schedule):
+        for step in sorted_schedule:
             time_offset = step.get('time_offset_s', 0)
-            step_name = step.get('name', f'step_{step_idx}')
+            absolute_time = start_time + time_offset
+            scheduled_times.append({
+                'step': step,
+                'time_offset': time_offset,
+                'absolute_time': absolute_time
+            })
+
+            # wait until time_offset
+            #elapsed = time.time() - start_time
+            #print(f"[EXPERIMENT DEBUG] start_time: {start_time}, current time: {time.time()}, elapsed: {elapsed:.1f}s",
+                  #flush=True)
+            #wait_time = time_offset - elapsed
+        for item in scheduled_times:
+            step = item['step']
+            time_offset = item['time_offset']
+            absolute_time = item['absolute_time']
+
+            step_name = step.get('name', 'unnamed_step')
             playbook_name = step.get('playbook', '')
             targets = step.get('targets', [])
 
-            # wait until time_offset
-            elapsed = time.time() - start_time
-            print(f"[EXPERIMENT DEBUG] start_time: {start_time}, current time: {time.time()}, elapsed: {elapsed:.1f}s",
-                  flush=True)
-            wait_time = time_offset - elapsed
+            absolute_time = start_time + time_offset
+            wait_time = absolute_time - time.time()
 
-            print(f"[EXPERIMENT] Step '{step_name}' scheduled at T+{time_offset}s", flush=True)
-            print(f"[EXPERIMENT] Current time: T+{elapsed:.1f}s", flush=True)
+            current_time = time.time()
+            wait_time = absolute_time - current_time
+            elapsed = current_time - start_time
+
+            print(f"[EXPERIMENT] Step '{step_name}' scheduled at T+{time_offset}s (absolute: {datetime.fromtimestamp(absolute_time).strftime('%H:%M:%S')})", flush=True)
+            print(f"[EXPERIMENT] Current time: T+{elapsed:.1f}s (absolute: {datetime.fromtimestamp(current_time).strftime('%H:%M:%S')})", flush=True)
+            print(f"[EXPERIMENT] Wait time: {wait_time:.1f}s", flush=True)
 
             if wait_time > 0:
-                print(f"[EXPERIMENT] Waiting {wait_time:.1f}s until step '{step_name}'", flush=True)
-                time.sleep(wait_time)
+                    print(f"[EXPERIMENT] Waiting {wait_time:.1f}s until step '{step_name}'", flush=True)
+                    time.sleep(wait_time)
             elif wait_time < -5:  # print if the delay is greater than 5 seconds
                 print(f"[EXPERIMENT WARNING] Step '{step_name}' is {abs(wait_time):.1f}s late!", flush=True)
 
             # effective time of execution
-            actual_time = time.time() - start_time
-            print(f"[EXPERIMENT] Executing '{step_name}' at T+{actual_time:.1f}s", flush=True)
+            actual_time = time.time()
+            actual_elapsed = actual_time - start_time
+            actual_dt = datetime.fromtimestamp(actual_time)
+            print(f"[EXPERIMENT] Executing '{step_name}' at T+{actual_elapsed:.1f}s (absolute: {actual_dt.strftime('%H:%M:%S.%f')})", flush=True)
 
             # run playbook
             playbook_path = os.path.join(playbooks_dir, playbook_name)
@@ -302,6 +328,8 @@ def execute_experiment_schedule(reservation_id, experiment_name, experiment_data
             step_result = {
                 'step': step_name,
                 'time_offset_s': time_offset,
+                'scheduled_absolute_time': absolute_time,
+                'actual_absolute_time': actual_time,
                 'playbook': playbook_name,
                 'targets': targets,
                 'returncode': returncode,

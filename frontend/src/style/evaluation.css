@@ -1,3 +1,18 @@
+.evaluation-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.card.evaluation-card {
+  max-width: 95%;
+  width: 100%;
+  margin: 20px auto;
+  box-sizing: border-box;
+  padding: 16px;
+
+}
+
 .experiment-info-card {
     background: white;
     border-radius: 8px;
@@ -89,13 +104,13 @@
 }
 
 .log-status.success {
-    background: #d4edda;
-    color: #155724;
+    background: rgba(40, 167, 69, 0.1);
+    color: #28a745;
 }
 
 .log-status.error {
-    background: #f8d7da;
-    color: #721c24;
+    background: rgba(220, 53, 69, 0.1);
+    color: #dc3545;
 }
 
 .log-details {
@@ -196,11 +211,89 @@
 }
 
 .error-message {
-    background: #f8d7da;
-    color: #721c24;
+    background: rgba(220, 53, 69, 0.1);
+    color: #dc3545;
 }
 
 .info-message {
     background: #d1ecf1;
     color: #0c5460;
+}
+
+.selection-section {
+    margin-bottom: 20px;
+}
+
+.selection-section label {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 8px;
+    font-size: 14px;
+    color: #333;
+}
+
+.selection-section select {
+    width: 100%;
+    max-width: 400px;
+    padding: 10px 12px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    font-size: 14px;
+    background: white;
+    cursor: pointer;
+}
+
+.selection-section select:disabled {
+    background: #e9ecef;
+    cursor: not-allowed;
+}
+
+.action-buttons {
+    display: flex;
+    gap: 15px;
+    margin-top: 20px;
+    margin-bottom: 20px;
+}
+
+.btn-primary, .btn-secondary {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.btn-primary {
+    background: #007bff;
+    color: white;
+}
+
+.btn-primary:hover {
+    background: #0056b3;
+}
+
+.btn-secondary {
+    background: #5aef9e;
+    color: white;
+}
+
+.btn-secondary:hover {
+    background: #49bc7b;
+}
+
+.chart-container {
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    border: 1px solid #dee2e6;
+}
+
+.no-data-message {
+    padding: 20px;
+    text-align: center;
+    color: #dc3545;
+    background: rgba(220, 53, 69, 0.1);
+    border-radius: 4px;
 }

@@ -20,6 +20,8 @@ export default function ExperimentControls({
     reservation_id,
     timerIntervalRef
 }) {
+    const experimentEndTimeRef = React.useRef(null);
+
     // function to format time for timer
     const formatTime = (totalSeconds) => {
         if (totalSeconds < 0) totalSeconds = 0;
@@ -49,40 +51,55 @@ export default function ExperimentControls({
                     setCurrentExperimentId(data.experiment_id);
                     setExperimentRunMessage(`Experiment "${data.experiment_name}" in progress`);
                     setExperimentRunMessageType('success');
-                    setExperimentTimer(formatTime(remainingSeconds));
+                    //setExperimentTimer(formatTime(remainingSeconds));
 
-                    let timeLeft = remainingSeconds;
+                    //let timeLeft = remainingSeconds;
+                    experimentEndTimeRef.current = Date.now() + (remainingSeconds * 1000);
                     if (timerIntervalRef.current) {
                         clearInterval(timerIntervalRef.current);
                     }
 
-                    timerIntervalRef.current = setInterval(async () => {
-                        timeLeft -= 1;
+                    const updateExperimentTimer = () => {
+                        if (!experimentEndTimeRef.current) {
+                            setExperimentTimer('--:--:--');
+                            return;
+                        }
+
+                        const now = Date.now();
+                        const diffMs = experimentEndTimeRef.current - now;
+                        const timeLeft = Math.max(0, Math.floor(diffMs / 1000));
+
                         if (timeLeft <= 0) {
                             clearInterval(timerIntervalRef.current);
+                            timerIntervalRef.current = null;
+                            experimentEndTimeRef.current = null;
                             setExperimentTimer('--:--:--');
                             setRunningExperiment(false);
                             setCurrentExperimentId(null);
                             setExperimentRunMessage(`Experiment "${data.experiment_name}" completed`);
                             setExperimentRunMessageType('success');
                             // update the experiment status on database if it is ended
-                            try {
-                                await fetch('http://localhost:5004/api/experimenter/updateExperimentStatus', {
-                                    method: 'POST',
-                                    headers: {'Content-Type': 'application/json'},
-                                    body: JSON.stringify({
-                                        reservation_id: reservation_id,
-                                        experiment_id: expId
-                                    })
-                                });
+                            fetch('http://localhost:5004/api/experimenter/updateExperimentStatus', {
+                                method: 'POST',
+                                headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify({
+                                    reservation_id: reservation_id,
+                                    experiment_id: expId
+                                })
+                            }).then(() => {
                                 console.log('Experiment status updated to completed');
-                            } catch (error) {
+                            }).catch(error => {
                                 console.error('Error updating experiment status:', error);
-                            }
+                            });
                         } else {
                             setExperimentTimer(formatTime(timeLeft));
                         }
-                    }, 1000);
+                    };
+                    // initial update
+                    updateExperimentTimer();
+
+                    // start interval
+                    timerIntervalRef.current = setInterval(updateExperimentTimer, 1000);
 
                 } else if (data.just_completed) {
                     // the experiment has ended
@@ -156,40 +173,53 @@ export default function ExperimentControls({
                 setExperimentRunMessage(`Experiment "${experimentName}" started successfully`);
                 setExperimentRunMessageType('success');
 
-                let remainingTime = durationSeconds;
-                setExperimentTimer(formatTime(remainingTime));
+                experimentEndTimeRef.current = Date.now() + (durationSeconds * 1000);
 
                 if (timerIntervalRef.current) {
                     clearInterval(timerIntervalRef.current);
                 }
 
-                timerIntervalRef.current = setInterval(async () => {
-                    remainingTime -= 1;
+                const updateExperimentTimer = () => {
+                    if (!experimentEndTimeRef.current) {
+                        setExperimentTimer('--:--:--');
+                        return;
+                    }
+
+                    const now = Date.now();
+                    const diffMs = experimentEndTimeRef.current - now;
+                    const remainingTime = Math.max(0, Math.floor(diffMs / 1000));
+
                     if (remainingTime <= 0) {
                         clearInterval(timerIntervalRef.current);
+                        timerIntervalRef.current = null;
+                        experimentEndTimeRef.current = null;
                         setExperimentTimer('--:--:--');
                         setRunningExperiment(false);
                         setCurrentExperimentId(null);
                         setExperimentRunMessage(`Experiment "${experimentName}" completed`);
                         setExperimentRunMessageType('success');
                         // experiment completed, update status
-                        try {
-                            await fetch('http://localhost:5004/api/experimenter/updateExperimentStatus', {
-                                method: 'POST',
-                                headers: {'Content-Type': 'application/json'},
-                                body: JSON.stringify({
-                                    reservation_id: reservation_id,
-                                    experiment_id: expId
-                                })
-                            });
+                        fetch('http://localhost:5004/api/experimenter/updateExperimentStatus', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({
+                                reservation_id: reservation_id,
+                                experiment_id: expId
+                            })
+                        }).then(() => {
                             console.log('Experiment status updated to completed');
-                        } catch (error) {
+                        }).catch(error => {
                             console.error('Error updating experiment status:', error);
-                        }
+                        });
                     } else {
                         setExperimentTimer(formatTime(remainingTime));
                     }
-                }, 1000);
+                };
+                // initial update
+                updateExperimentTimer();
+
+                // start interval
+                timerIntervalRef.current = setInterval(updateExperimentTimer, 1000);
 
             } else {
                 setExperimentRunMessage(`Error: ${data.error || 'Failed to start experiment'}`);
@@ -227,6 +257,7 @@ export default function ExperimentControls({
                     timerIntervalRef.current = null;
                 }
 
+                experimentEndTimeRef.current = null;
                 setRunningExperiment(false);
                 setCurrentExperimentId(null);
                 setExperimentTimer('--:--:--');
