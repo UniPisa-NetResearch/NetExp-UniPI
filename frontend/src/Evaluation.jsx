@@ -144,6 +144,12 @@ export default function Evaluation({ username, reservation_id }) {
         setAvailableFields(fields);
     };
 
+    const handleFieldSelection = (fieldPath) => {
+        setSelectedField(fieldPath);
+        setChartData(null);
+        setErrorMessage('');
+    };
+
     const extractFieldsFromSample = (sampleValue, metricName) => {
       const fields = [];
 
@@ -300,7 +306,6 @@ export default function Evaluation({ username, reservation_id }) {
       }
 
       setChartData({ timestamps, values });
-      //renderChart({ timestamps, values });
     };
 
     const chartRef = useRef(null);
@@ -364,11 +369,11 @@ export default function Evaluation({ username, reservation_id }) {
     const handleDownloadCSV = () => {
       if (!chartData) return;
 
-      let csvContent = 'Timestamp,Metric,Field,Value\n';
+      let csvContent = 'Timestamp,Value,Metric,Field\n';
 
       chartData.timestamps.forEach((timestamp, idx) => {
         const value = chartData.values[idx] !== null ? chartData.values[idx] : '';
-        csvContent += `${timestamp},${selectedMetric},${selectedField},${value}\n`;
+        csvContent += `${timestamp},${value},${selectedMetric},${selectedField}\n`;
       });
 
       const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -383,10 +388,6 @@ export default function Evaluation({ username, reservation_id }) {
       document.body.removeChild(a);
       window.URL.revokeObjectURL(url);
     };
-
-    //const telemetryResults = experimentData.telemetry_results || {};
-    //const executionLog = experimentData.execution_log || [];
-    //const metrics = Object.keys(telemetryResults);
 
     return (
         <div className="evaluation-wrapper">
@@ -462,7 +463,7 @@ export default function Evaluation({ username, reservation_id }) {
                             {!loadingData && telemetryResults && (
                             <>
                               {/* select metric */}
-                              <div className="selection-section">
+                              <div className="selection-row">
                                 <label>Select Metric:</label>
                                 <select
                                   value={selectedMetric}
@@ -480,28 +481,21 @@ export default function Evaluation({ username, reservation_id }) {
 
 
                               {/* select device */}
-                              {selectedMetric && availableDevices.length > 0 && (
-                                <div className="selection-section">
-                                    <label>Select Device:</label>
-                                    <select value={selectedDevice} onChange={(e) => handleDeviceSelection(e.target.value)}>
-                                        <option value="">-- Select Device --</option>
-                                        {availableDevices.map(device => (
-                                            <option key={device} value={device}>
-                                                {device}
-                                            </option>
-                                        ))}
-                                    </select>
-                                </div>
-                              )}
+                              <div className="selection-row">
+                                  <label>Select Device:</label>
+                                  <select value={selectedDevice} onChange={(e) => handleDeviceSelection(e.target.value)} disabled={!selectedMetric || availableDevices.length === 0}>
+                                      <option value="">-- Select Device --</option>
+                                      {availableDevices.map(device => (
+                                          <option key={device} value={device}>{device}</option>
+                                      ))}
+                                  </select>
+                              </div>
+
 
                               {/* select field */}
-                              {selectedMetric && selectedDevice && availableFields.length > 0 && (
-                                <div className="selection-section">
+                              <div className="selection-row">
                                   <label>Select Field to Plot:</label>
-                                  <select
-                                    value={selectedField}
-                                    onChange={(e) => setSelectedField(e.target.value)}
-                                  >
+                                  <select value={selectedField} onChange={(e) => handleFieldSelection(e.target.value)} disabled={!selectedDevice || availableFields.length === 0}>
                                     <option value="">-- Select Field --</option>
                                     {availableFields.map(field => (
                                       <option key={field.path} value={field.path}>
@@ -509,19 +503,15 @@ export default function Evaluation({ username, reservation_id }) {
                                       </option>
                                     ))}
                                   </select>
-                                </div>
-                              )}
+                              </div>
 
                               {/* action buttons */}
-                              {selectedField && (
-                                <div className="action-buttons">
-                                  <button className="btn-primary" onClick={handleGeneratePlot}>Generate Plot</button>
+                              <div className="action-buttons">
+                                  <button className="btn-primary" onClick={handleGeneratePlot} disabled={!selectedMetric || !selectedDevice || !selectedField}>Generate Plot</button>
+                                  <button className="btn-secondary" onClick={handleDownloadCSV} disabled={!chartData || errorMessage}>Download CSV</button>
 
-                                  {chartData && !errorMessage && (
-                                    <button className="btn-secondary" onClick={handleDownloadCSV}>Download CSV</button>
-                                  )}
-                                </div>
-                              )}
+                              </div>
+
 
                               {/* error message */}
                               {errorMessage && (

@@ -15,6 +15,8 @@ export default function FreeMode({
     refreshExperiments,
     createDownload
 }) {
+    const [selectedFileName, setSelectedFileName] = React.useState('');
+    const [fileExtensionValid, setFileExtensionValid] = React.useState(true);
     // download experiment template
     const downloadExperimentTemplate = async () => {
         setWaitOperation(true);
@@ -49,21 +51,11 @@ export default function FreeMode({
 
         setFreePlaybookFiles(prev => [...prev, ...validFiles]);
         e.target.value = null;
-
-        // validation reset if it was a loaded template
-        if (experimentDescription.file) {
-            setTemplateValidation({ message: 'Playbooks changed - please reload template', type: 'error' });
-            experimentDescription.reset();
-        }
     };
     // remove a loaded playbook from the list
     const removeFreePlaybookFile = (index) => {
         setFreePlaybookFiles(prev => prev.filter((_, i) => i !== index));
-        // validation reset if it was a loaded template
-        if (experimentDescription.file) {
-            setTemplateValidation({ message: 'Playbooks changed - please reload template', type: 'error' });
-            experimentDescription.reset();
-        }
+
     };
 
     const chooseFreePlaybooks = () => {
@@ -92,7 +84,7 @@ export default function FreeMode({
             const data = await response.json();
 
             if (data.success) {
-                setTemplateValidation({ message: 'valid', type: 'success' });
+                setTemplateValidation({ message: 'Template and playbook loaded', type: 'success' });
                 await refreshExperiments();
             } else {
                 let errorMsg = 'Invalid format';
@@ -103,35 +95,33 @@ export default function FreeMode({
                 }
 
                 setTemplateValidation({ message: errorMsg, type: 'error' });
-                // reset file if not valid
-                experimentDescription.reset();
             }
         } catch (error) {
             console.error('Error validating template:', error);
             setTemplateValidation({ message: 'Validation error', type: 'error' });
-            experimentDescription.reset();
         } finally {
             setWaitOperation(false);
         }
     };
     // validate template when loading it
-    const handleExperimentDescriptionChange = async (e) => {
+    const handleExperimentDescriptionChange = (e) => {
         const f = e.target.files[0] || null;
-        experimentDescription.onChange(e);
 
         if (!f) {
+            setSelectedFileName('');
+            setFileExtensionValid(true);
             setTemplateValidation({ message: '', type: '' });
+            experimentDescription.onChange(e);
             return;
         }
 
         const nameLower = f.name.toLowerCase();
         const isValid = ['.yml', '.yaml'].some(ext => nameLower.endsWith(ext));
 
-        if (isValid) {
-            await validateExperimentTemplate(f);
-        } else {
-            setTemplateValidation({ message: '', type: '' });
-        }
+        setSelectedFileName(f.name);
+        setFileExtensionValid(isValid);
+
+        experimentDescription.onChange(e);
     };
 
     return (
@@ -144,29 +134,25 @@ export default function FreeMode({
                     </button>
                     <label className="label-inline label-fixed-width additional-margin">Load experiment description:</label>
                     <button type="button" className="template-button configuration-button choose-button"
-                            onClick={experimentDescription.choose} disabled={runningExperiment || waitOperation}>Choose
+                            onClick={() => document.getElementById('experiment_description_input').click()} disabled={runningExperiment || waitOperation}>Choose
                         description
                     </button>
-                    <input ref={experimentDescription.ref} type="file" style={{display: 'none'}}
+                    <input id="experiment_description_input" type="file" style={{display: 'none'}}
+                           accept=".yml,.yaml"
                            onChange={handleExperimentDescriptionChange}
                            disabled={runningExperiment}/>
 
-                    {(experimentDescription.fileName || templateValidation.message) && (
-                        <div className={`validation-message ${
-                            experimentDescription.fileType === 'valid' && templateValidation.type === 'success' 
-                                ? 'success' 
-                                : experimentDescription.fileType === 'invalid' || templateValidation.type === 'error' 
-                                    ? 'error' 
-                                    : ''
-                        } additional-margin`}>
-                            {experimentDescription.fileType === 'valid' && templateValidation.type === 'success'
-                                ? `✓ ${experimentDescription.fileName} ${templateValidation.message}`
-                                : experimentDescription.fileType === 'invalid'
-                                    ? `${experimentDescription.fileName} invalid format`
-                                    : templateValidation.message
-                            }
-                        </div>
-                    )}
+
+                    <span className={`selected-filename ${fileExtensionValid ? 'valid-extension ' : 'invalid-extension'} ${!selectedFileName ? 'hidden' : ''}`} >{selectedFileName}</span>
+
+                    <button
+                        type="button"
+                        className="configuration-button send-button upload-button"
+                        onClick={() => validateExperimentTemplate(experimentDescription.file)}
+                        disabled={runningExperiment || waitOperation || !experimentDescription.file}
+                    >
+                        Upload Template
+                    </button>
 
                 </div>
 
@@ -178,6 +164,11 @@ export default function FreeMode({
                     <input ref={freeModeFileRef} type="file" multiple accept=".yml,.yaml"
                            style={{display: 'none'}} onChange={handleFreePlaybookFiles}
                            disabled={runningExperiment}/>
+                    {templateValidation.message && (
+                        <span className={`validation-message ${templateValidation.type}`}>
+                            {templateValidation.message}
+                        </span>
+                    )}
                 </div>
 
                 {freePlaybookFiles.length > 0 && (

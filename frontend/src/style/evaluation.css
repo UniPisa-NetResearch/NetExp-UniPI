@@ -30,7 +30,7 @@
 
 .info-item {
     padding: 10px;
-    background: #f8f9fa;
+    background: #f1f4f4;
     border-radius: 4px;
 }
 
@@ -42,7 +42,8 @@
     border-radius: 5px;
     cursor: pointer;
     font-size: 14px;
-    margin-top: 15px;
+    margin-top: 20px;
+    display: block;
 }
 
 .download-button:hover {
@@ -66,7 +67,7 @@
 .log-entry {
     border-left: 4px solid #ccc;
     padding: 12px;
-    background: #f8f9fa;
+    background: #f1f4f4;
     border-radius: 4px;
 }
 
@@ -220,21 +221,24 @@
     color: #0c5460;
 }
 
-.selection-section {
-    margin-bottom: 20px;
+.selection-row {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    margin-bottom: 15px;
 }
 
-.selection-section label {
-    display: block;
+.selection-row label {
     font-weight: 600;
-    margin-bottom: 8px;
     font-size: 14px;
     color: #333;
+    min-width: 180px;
+    text-align: left;
 }
 
-.selection-section select {
-    width: 100%;
-    max-width: 400px;
+.selection-row select {
+    flex: 1;
+    max-width: 700px;
     padding: 10px 12px;
     border: 1px solid #ced4da;
     border-radius: 4px;
@@ -243,9 +247,10 @@
     cursor: pointer;
 }
 
-.selection-section select:disabled {
+.selection-row select:disabled {
     background: #e9ecef;
     cursor: not-allowed;
+    opacity: 0.6;
 }
 
 .action-buttons {
@@ -270,8 +275,14 @@
     color: white;
 }
 
-.btn-primary:hover {
+.btn-primary:hover:not(:disabled) {
     background: #0056b3;
+}
+
+.btn-primary:disabled {
+    background: #6c757d;
+    cursor: not-allowed;
+    opacity: 0.6;
 }
 
 .btn-secondary {
@@ -279,8 +290,14 @@
     color: white;
 }
 
-.btn-secondary:hover {
+.btn-secondary:hover:not(:disabled) {
     background: #49bc7b;
+}
+
+.btn-secondary:disabled {
+    background: #95a5a6;
+    cursor: not-allowed;
+    opacity: 0.6;
 }
 
 .chart-container {
