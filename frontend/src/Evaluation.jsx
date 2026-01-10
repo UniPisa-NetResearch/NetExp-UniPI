@@ -1,22 +1,23 @@
-// Evaluation.jsx
 import React, {useState, useEffect, useRef} from 'react';
 import { Chart } from 'chart.js/auto';
 import './style/style.css';
 import './style/evaluation.css';
 
 export default function Evaluation({ username, reservation_id }) {
-    const [experimentData, setExperimentData] = useState(null);
-    const [selectedMetric, setSelectedMetric] = useState(''); // selected metric path
-    const [selectedDevice, setSelectedDevice] = useState('');
-    const [availableDevices, setAvailableDevices] = useState([]);
-    const [telemetryResults, setTelemetryResults] = useState(null); // complete telemetry data
-    const [availableMetrics, setAvailableMetrics] = useState([]); // metric paths list
-    const [availableFields, setAvailableFields] = useState([]); // available fields for the metric
-    const [selectedField, setSelectedField] = useState(''); // selected field
-    const [chartData, setChartData] = useState(null); // data for the plot
-    const [errorMessage, setErrorMessage] = useState(''); // error message
-    const [loadingData, setLoadingData] = useState(true); // data loading
+    const [experimentData, setExperimentData] = useState(null);            // experiment data object containing results
+    const [selectedMetric, setSelectedMetric] = useState('');       // selected metric path
+    const [selectedDevice, setSelectedDevice] = useState('');       // select device from inventory
+    const [availableDevices, setAvailableDevices] = useState([]);   // list of available devices for selected metric
+    const [telemetryResults, setTelemetryResults] = useState(null);       // complete telemetry data
+    const [availableMetrics, setAvailableMetrics] = useState([]);  // metric paths list
+    const [availableFields, setAvailableFields] = useState([]);    // available fields for the metric
+    const [selectedField, setSelectedField] = useState('');       // selected field
+    const [chartData, setChartData] = useState(null);                    // data for the plot
+    const [errorMessage, setErrorMessage] = useState('');         // error message
+    const [loadingData, setLoadingData] = useState(true);       // data loading
 
+    // extract unique metric names from telemetry results
+    // telemetryResults is an Object with metric names as keys and returns an array of {name, label} objects
     const extractAvailableMetrics = (telemetryResults) => {
       const metricsSet = new Set();
 
@@ -36,6 +37,7 @@ export default function Evaluation({ username, reservation_id }) {
         loadExperimentResults();
     }, [reservation_id]);
 
+    // fetch experiment results from backend API
     const loadExperimentResults = async () => {
         setLoadingData(true);
         setErrorMessage('');
@@ -52,7 +54,7 @@ export default function Evaluation({ username, reservation_id }) {
             if (data.success && data.telemetry_results) {
                 setExperimentData(data);
                 setTelemetryResults(data.telemetry_results);
-
+                // extract available metrics from telemetry data
                 const metrics = extractAvailableMetrics(data.telemetry_results);
                 setAvailableMetrics(metrics);
             } else {
@@ -66,6 +68,7 @@ export default function Evaluation({ username, reservation_id }) {
         }
     };
 
+    // download complete experiment results as ZIP file
     const handleDownloadResults = async () => {
         if (!experimentData) return;
 
@@ -99,19 +102,21 @@ export default function Evaluation({ username, reservation_id }) {
     };
 
     const handleMetricSelection = (metricName) => {
+        // reset all dependent selections
         setSelectedMetric(metricName);
         setSelectedDevice('');
         setSelectedField('');
         setChartData(null);
         setErrorMessage('');
 
+        // validate metric exists in telemetry data
         if (!metricName || !telemetryResults[metricName]) {
             setAvailableFields([]);
             setAvailableDevices([]);
             return;
         }
 
-        // get first target and datapoint to analyze structure
+        // extract device names (targets) for this metric
         const targets = Object.keys(telemetryResults[metricName]);
         setAvailableDevices(targets);
 
@@ -122,24 +127,26 @@ export default function Evaluation({ username, reservation_id }) {
 
     const handleDeviceSelection = (deviceName) => {
         setSelectedDevice(deviceName);
+        // reset field selection and chart
         setSelectedField('');
         setChartData(null);
         setErrorMessage('');
 
+        // validate device exists for selected metric
         if (!deviceName || !telemetryResults[selectedMetric] || !telemetryResults[selectedMetric][deviceName]) {
             setAvailableFields([]);
             return;
         }
-
+        // get datapoints array for this device
         const datapoints = telemetryResults[selectedMetric][deviceName];
         if (!datapoints || datapoints.length === 0) {
             setAvailableFields([]);
             return;
         }
-
+        // analyze first sample to determine structure
         const firstSample = datapoints[0].value;
 
-        // extract fields from first sample
+        // extract fields from gNMI notification structure
         const fields = extractFieldsFromSample(firstSample, selectedMetric);
         setAvailableFields(fields);
     };
@@ -150,13 +157,15 @@ export default function Evaluation({ username, reservation_id }) {
         setErrorMessage('');
     };
 
+    // extract available fields from a gNMI sample value
     const extractFieldsFromSample = (sampleValue, metricName) => {
       const fields = [];
 
-      // {notification: [{update: [{path, val}]}]}
+      // gNMI structure: {notification: [{update: [{path, val}]}]}
       const notifications = sampleValue?.notification;
       if (!notifications || !Array.isArray(notifications)) return fields;
 
+      // iterate through notifications and updates
       // get the first notification and the first update
       for (const notif of notifications) {
         if (notif.update && Array.isArray(notif.update)) {
@@ -201,21 +210,17 @@ export default function Evaluation({ username, reservation_id }) {
     const handleGeneratePlot = () => {
       setErrorMessage('');
 
+      // validate all required selections are made
       if (!selectedMetric || !selectedDevice || !selectedField) {
         setErrorMessage('Please select metric, device and field');
         return;
       }
 
-      console.log('=== DEBUG handleGeneratePlot ===');
-      console.log('selectedMetric:', selectedMetric);
-      console.log('selectedDevice:', selectedDevice);
-      console.log('selectedField:', selectedField);
-
       const timestamps = [];
       const values = [];
       let hasNonNumeric = false;
 
-      // combine every datapoints of each target for selected metric
+      // get datapoints for selected metric and device
       const metricData = telemetryResults[selectedMetric];
       const deviceDatapoints = metricData[selectedDevice];
 
@@ -223,49 +228,43 @@ export default function Evaluation({ username, reservation_id }) {
           setErrorMessage('No data available for selected device');
           return;
       }
-      console.log('Total datapoints:', deviceDatapoints.length);
 
-      // sort by timestamp
+      // sort datapoints by timestamp
       const sortedDatapoints = [...deviceDatapoints].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
-      // extract values
-      sortedDatapoints.forEach((datapoint, index) => {
-          console.log(`\n--- Datapoint ${index} ---`);
+      // extract value from each datapoint
+      sortedDatapoints.forEach((datapoint) => {
+        // convert timestamp to readable time format
         timestamps.push(new Date(datapoint.timestamp).toLocaleTimeString());
 
-        // navigate the structure to extract value
+        // navigate gNMI notification structure to extract value
         const sampleValue = datapoint.value;
         const notifications = sampleValue?.notification;
 
-        console.log('notifications:', notifications ? 'exists' : 'null');
         let extractedValue = null;
 
         if (notifications && Array.isArray(notifications)) {
             for (const notif of notifications) {
-                console.log('notif.update:', notif.update);
+
                 if (notif.update && Array.isArray(notif.update)) {
-                    console.log('Available paths in this notification:');
-                    notif.update.forEach(upd => {
-                        console.log('  -', upd.path);
-                    });
+                    // remove leading slash from metric name if present
                     const normalizedMetric = selectedMetric.startsWith('/') ? selectedMetric.substring(1) : selectedMetric;
                     // find the update corresponding to the selected metric
                     const matchingUpdate = notif.update.find(upd => upd.path === normalizedMetric);
-                    console.log('matchingUpdate found:', !!matchingUpdate);
+
                     if (matchingUpdate) {
                         const val = matchingUpdate.val;
-                        console.log('val keys:', Object.keys(val));
+                        // navigate nested object structure using field path
                         const pathParts = selectedField.split('.');
-                        console.log('pathParts:', pathParts);
+
                         let currentVal = val;
 
+                        // traverse object hierarchy
                         for (const part of pathParts) {
-                            console.log(`Navigating to: ${part}, currentVal:`, currentVal);
                           currentVal = currentVal?.[part];
                         }
 
                         extractedValue = currentVal;
-                        console.log('extractedValue:', extractedValue);
                         break;
                    }else {
                         console.log('NO MATCHING UPDATE FOUND!');
@@ -274,10 +273,10 @@ export default function Evaluation({ username, reservation_id }) {
            }
         }
 
-        // convert in number
+        // convert extracted value to number for plotting
         if (extractedValue !== null && extractedValue !== undefined) {
           const numValue = Number(extractedValue);
-          console.log('numValue:', numValue, 'isNaN:', isNaN(numValue));
+
           if (isNaN(numValue)) {
             hasNonNumeric = true;
             values.push(null);
@@ -285,15 +284,9 @@ export default function Evaluation({ username, reservation_id }) {
             values.push(numValue);
           }
         } else {
-            console.log('extractedValue is null or undefined');
           values.push(null);
         }
       });
-
-      console.log('\n=== FINAL RESULTS ===');
-        console.log('hasNonNumeric:', hasNonNumeric);
-        console.log('values:', values);
-        console.log('all null?', values.every(v => v === null));
 
       if (hasNonNumeric) {
         setErrorMessage('Cannot create chart: selected field contains non-numeric values');
@@ -311,27 +304,30 @@ export default function Evaluation({ username, reservation_id }) {
     const chartRef = useRef(null);
     const chartInstanceRef = useRef(null);
 
+    // render Chart.js line chart with time series data
     const renderChart = (data) => {
+      // destroy previous chart instance to prevent memory leaks
       if (chartInstanceRef.current) {
         chartInstanceRef.current.destroy();
       }
 
+      // get 2D rendering context from canvas element
       const ctx = chartRef.current.getContext('2d');
       chartInstanceRef.current = new Chart(ctx, {
         type: 'line',
         data: {
-          labels: data.timestamps,
+          labels: data.timestamps,              // X-axis labels (time)
           datasets: [{
             label: `${selectedDevice} - ${selectedMetric} - ${selectedField}`,
-            data: data.values,
+            data: data.values,                  // Y-axis values
             borderColor: 'rgb(75, 192, 192)',
             backgroundColor: 'rgba(75, 192, 192, 0.2)',
-            tension: 0.1
+            tension: 0.1                        // line smoothing
           }]
         },
         options: {
-          responsive: true,
-          maintainAspectRatio: false,
+          responsive: true,                         // adapt to container size
+          maintainAspectRatio: false,               // allow custom height
           plugins: {
             title: {
               display: true,
@@ -340,7 +336,7 @@ export default function Evaluation({ username, reservation_id }) {
           },
           scales: {
             y: {
-              beginAtZero: false,
+              beginAtZero: false,                       // don't force Y-axis to start at 0
               title: { display: true, text: 'Value' }
             },
             x: {
@@ -357,7 +353,7 @@ export default function Evaluation({ username, reservation_id }) {
             renderChart(chartData);
         }
 
-        // Cleanup: destroy the plot when the component is unmounted or before creating a new one
+        // cleanup: destroy the plot when the component is unmounted or before creating a new one
         return () => {
             if (chartInstanceRef.current) {
                 chartInstanceRef.current.destroy();

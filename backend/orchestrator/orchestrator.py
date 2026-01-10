@@ -23,7 +23,7 @@ NETBOX_URL = os.getenv("NETBOX_URL", "http://localhost:8080")
 NETBOX_TOKEN = os.getenv("NETBOX_TOKEN", "6152fbb91529522c72307b194a690c4ca5253e93")
 
 MAX_HOURS = 72
-TEST = True                    #test mode, each reservation starts at current date + 2 min
+TEST = True                  #test mode, each reservation starts at current date + 2 min
 CONTAINERLAB_TEST = False      # useful to test pingall
 EXPERIMENT_DURATION = 180       #expressed in minutes
 NETBOX_SITE = "testbed"        # useful to change site of netbox
@@ -243,7 +243,8 @@ def ping_host(ip, count=2, per_ping_timeout=2, overall_timeout=5):
     if TEST:
         cmd = ["wsl", "ping", "-c", str(count), "-W", str(per_ping_timeout), str(ip)]
     else:
-        cmd = ["ping", "-c", str(count), "-W", str(per_ping_timeout), str(ip)]
+        #cmd = ["ping", "-c", str(count), "-W", str(per_ping_timeout), str(ip)]
+        cmd = ["wsl", "ping", "-c", str(count), "-W", str(per_ping_timeout), str(ip)]
 
     try:
         proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=overall_timeout, check=False,)
@@ -304,6 +305,45 @@ def show_devices():
     except Exception as exc:
         app.logger.exception("Error in show devices: %s", exc)
         return jsonify({"ok": False, "message": "Unable to fetch devices from NetBox"}), 500
+
+
+@app.route('/api/orchestrator/allReservations', methods=['GET'])
+def all_reservations():
+    # return all reservations for calendar view
+    try:
+        # get only future, current reservations and reservations of past month
+        now = datetime.now()
+        now_tuple = (now.date(), now.time().replace(second=0, microsecond=0))
+
+        # get all reservations (or filter by end date > now if you want only active ones)
+        reservations = Reservation.query.all()
+
+        result = []
+        for res in reservations:
+            start_dt = datetime.combine(res.startDate, res.startTime)
+            end_dt = datetime.combine(res.endDate, res.endTime)
+
+            # get devices for this reservation
+            try:
+                res_devs = ReservationDevice.query.filter_by(reservation_id=res.id).all()
+                devices = [rd.asset_tag for rd in res_devs]
+            except SQLAlchemyError:
+                devices = []
+
+            result.append({
+                'id': res.id,
+                'username': res.username,
+                'startDate': start_dt.isoformat(),
+                'endDate': end_dt.isoformat(),
+                'devices': devices
+            })
+
+        return jsonify(result), 200
+
+    except Exception as e:
+        app.logger.error(f"Error fetching all reservations: {e}")
+        return jsonify({"message": "Error fetching reservations"}), 500
+
 
 @app.route('/api/orchestrator/checkReservation', methods=['POST'])
 def check_reservation():

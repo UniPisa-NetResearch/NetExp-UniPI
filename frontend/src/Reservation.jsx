@@ -1,6 +1,11 @@
 import React, {useState, useEffect, useMemo} from 'react';
 import './style/style.css';
 import './style/reservation.css';
+import { Calendar, momentLocalizer } from 'react-big-calendar';
+import moment from 'moment';
+import 'react-big-calendar/lib/css/react-big-calendar.css';
+
+const localizer = momentLocalizer(moment);
 
 // max allowed number of hours for the reservation
 const MAX_HOURS = 72;
@@ -42,7 +47,44 @@ const calculateEndTimeDetails = (startDate, startTime, endDate, endTime) => {
   return { valid: true, start: startDateTime, end: endDateTime };
 };
 
+const CustomToolbar = ({ date, onNavigate }) => {
+  const goToPrevMonth = () => {
+    const newDate = moment(date).subtract(1, 'month').toDate();
+    onNavigate('DATE', newDate);
+  };
+
+  const goToNextMonth = () => {
+    const newDate = moment(date).add(1, 'month').toDate();
+    onNavigate('DATE', newDate);
+  };
+
+  // format: "January 2026"
+  const monthYear = moment(date).format('MMMM YYYY');
+
+  return (
+    <div className="calendar-custom-toolbar">
+      <button type="button" onClick={goToPrevMonth} className="calendar-nav-button" aria-label="Previous month">
+        ◀
+      </button>
+      <span className="calendar-month-label">{monthYear}</span>
+      <button type="button" onClick={goToNextMonth} className="calendar-nav-button" aria-label="Next month"
+      >
+        ▶
+      </button>
+    </div>
+  );
+};
+
 export default function Reservation({ username, isReservationActive }) {
+  // calendar state
+  const [allReservations, setAllReservations] = useState([]);               // every reservation
+  const [selectedEvent, setSelectedEvent] = useState(null);                       // selected event to show details
+  const [showEventModal, setShowEventModal] = useState(false);           // show/hide details
+  const [calendarDate, setCalendarDate] = useState(new Date());                      // check calendar date
+  const [showDayEventsModal, setShowDayEventsModal] = useState(false);   // show reservations if in the same day there are more reservations
+  const [dayEvents, setDayEvents] = useState([]);                          // reservations in a day
+  const [selectedDate, setSelectedDate] = useState(null);                         // date selected
+
   // form data state
   const [startDate, setStartDate] = useState('');
   const [startTime, setStartTime] = useState('');
@@ -143,6 +185,28 @@ export default function Reservation({ username, isReservationActive }) {
   // when the page is loaded, call the function
   useEffect(() => {
     fetchUserReservations();
+  }, []);
+
+  // fetch all reservations for calendar view
+  const fetchAllReservations = async () => {
+    try {
+      const resp = await fetch('/api/orchestrator/allReservations', { method: 'GET' });
+      const data = await resp.json().catch(() => []);
+
+      if (resp.ok && Array.isArray(data)) {
+        setAllReservations(data);
+      } else {
+        console.error('Error fetching all reservations', resp.status);
+        setAllReservations([]);
+      }
+    } catch (err) {
+      console.error('Network error fetching all reservations', err);
+      setAllReservations([]);
+    }
+  };
+
+  useEffect(() => {
+    fetchAllReservations();
   }, []);
 
   // call endpoint to check device reachability
@@ -279,6 +343,7 @@ export default function Reservation({ username, isReservationActive }) {
         setConflicts(null);
         // refresh reservation list from server
         await fetchUserReservations();
+        await fetchAllReservations();
         setStartDate('');             //when the reservation succeed, input fields are empty
         setStartTime('');
       } else {
@@ -353,149 +418,237 @@ export default function Reservation({ username, isReservationActive }) {
   const endMin = startDate || '';
   const endMax = maxEndInfo ? maxEndInfo.maxEndDateStr : '';
 
+  // transform reservations into calendar events
+  const calendarEvents = useMemo(() => {
+    return allReservations.map(res => ({
+      id: res.id,
+      title: "Reserved", //res.username === username ? `My Reservation` : `Reserved by ${res.username}`,
+      start: new Date(res.startDate),
+      end: new Date(res.endDate),
+      resource: {
+        username: res.username,
+        devices: res.devices,
+        isCurrentUser: res.username === username
+      }
+    }));
+  }, [allReservations, username]);
+
+  const handleSelectEvent = (event) => {
+    setSelectedEvent(event);
+    setShowEventModal(true);
+  };
+
+  // custom event style
+  const eventStyleGetter = (event) => {
+    const isCurrentUser = event.resource.isCurrentUser;
+
+    return {
+      style: {
+        backgroundColor: isCurrentUser ? '#4CAF50' : '#2196F3',
+        borderColor: isCurrentUser ? '#388E3C' : '#1976D2',
+        color: 'white',
+        borderRadius: '5px',
+        opacity: 0.8,
+        border: '1px solid',
+        display: 'block'
+      }
+    };
+  };
+
+  // handler for the click on "+X more"
+  const handleShowMore = (events, date) => {
+    setDayEvents(events);
+    setSelectedDate(date);
+    setShowDayEventsModal(true);
+  };
+
+  // prevent view change when click on show more
+  const getDrilldownView = (targetDate, currentView) => {
+    return currentView === 'month' ? 'month' : null;
+  };
+
   return (
-    <div className="home-content-wrapper">
+      <div className="reservation-page-container">
+        <div className="row-top">
+          <div className="card device-card">
 
-      <div className="card device-card side-by-side-container">
+            <h2 className="title"><img src="/Rack.png" alt="" className="rack-icon-img"/>Devices list</h2>
+            <div className="device-legend" aria-hidden="true">
+              <span className="legend-item"><span className="legend-color spine"/> Spine</span>
+              <span className="legend-item"><span className="legend-color leaf"/> Leaf</span>
+              <span className="legend-item"><span className="legend-color host"/> Host</span>
+            </div>
+            <div className="device-list">
+              {loadingDevices ? (
+                  <p>Loading devices...</p>
+              ) : devices.length === 0 ? (
+                  <p>No devices found.</p>
+              ) : (
+                  devices.map((d) => {
+                    // identifier for selection
+                    const key = `${d.asset_tag || d.name || ''}`;
+                    const role = (d.role || '').toLowerCase();
+                    const selected = selectedDevices.includes(key);
 
-        <h2 className="title"><img src="/Rack.png" alt="" className="rack-icon-img"/> Select devices</h2>
-        <div className="device-legend" aria-hidden="true">
-          <span className="legend-item"><span className="legend-color spine"/> Spine</span>
-          <span className="legend-item"><span className="legend-color leaf"/> Leaf</span>
-          <span className="legend-item"><span className="legend-color host"/> Host</span>
-        </div>
-        <div className="device-list">
-          {loadingDevices ? (
-              <p>Loading devices...</p>
-          ) : devices.length === 0 ? (
-              <p>No devices found.</p>
-          ) : (
-              devices.map((d) => {
-                // identifier for selection
-                const key = `${d.asset_tag || d.name || ''}`;
-                const role = (d.role || '').toLowerCase();
-                const selected = selectedDevices.includes(key);
-
-                // choose icon
-                const icon = (role === 'leaf' || role === 'spine') ?
-                    <img src="/networkSwitch.png" alt="" className="device-icon-img"/> : (role === 'host' ? '💻' : '🔹');
-                return (
-                    <label
-                        key={key}
-                        className={`device-item ${role || ''} ${d.reachable === false ? 'unreachable' : ''}`}
-                        title={`${d.asset_tag || d.name || ''} ${d.primary_ip ? ' - ' + d.primary_ip : ''} ${d.reachable === false ? '(unreachable)' : ''}`} /* information shown when the mouse is hover the element*/
-                        aria-disabled={d.reachable === false ? "true" : "false"}
-                    >
-                      <input
-                          type="checkbox"
-                          checked={selected}
-                          //onChange={() => toggleSelectDevice(key)}
-                          className="device-checkbox"
-                          //disabled={d.reachable === false}
-                          onChange={() => handleDeviceClick(key, d.primary_ip)}
-                          disabled={d.reachable === false || !!loadingReachability[key]}
-                          aria-label={`${d.name || key} selectable`}
-                      />
-                      <span className="device-icon" aria-hidden="true">{icon}</span>
-                      <span className="device-main">
-                        { loadingReachability[key] && <span className="device-loading" aria-hidden="true">⏳</span> }
-                        <span className="device-name">{d.name}</span>
+                    // choose icon
+                    const icon = (role === 'leaf' || role === 'spine') ?
+                        <img src="/networkSwitch.png" alt=""
+                             className="device-icon-img"/> : (role === 'host' ? '💻' : '🔹');
+                    return (
+                        <label
+                            key={key}
+                            className={`device-item ${role || ''} ${d.reachable === false ? 'unreachable' : ''}`}
+                            title={`${d.asset_tag || d.name || ''} ${d.primary_ip ? ' - ' + d.primary_ip : ''} ${d.reachable === false ? '(unreachable)' : ''}`} /* information shown when the mouse is hover the element*/
+                            aria-disabled={d.reachable === false ? "true" : "false"}
+                        >
+                          <input
+                              type="checkbox"
+                              checked={selected}
+                              //onChange={() => toggleSelectDevice(key)}
+                              className="device-checkbox"
+                              //disabled={d.reachable === false}
+                              onChange={() => handleDeviceClick(key, d.primary_ip)}
+                              disabled={d.reachable === false || !!loadingReachability[key]}
+                              aria-label={`${d.name || key} selectable`}
+                          />
+                          <span className="device-icon" aria-hidden="true">{icon}</span>
+                          <span className="device-main">
+                        {loadingReachability[key] && <span className="device-loading" aria-hidden="true">⏳</span>}
+                            <span className="device-name">{d.name}</span>
                         <span className="device-ip">{d.primary_ip}</span>
                       </span>
-                    </label>
-                );
-              })
-          )}
-        </div>
-      </div>
-      <div className="card  side-by-side-container">
-        <h2 className="title">📅 Reserve the Testbed</h2>
+                        </label>
+                    );
+                  })
+              )}
+            </div>
+          </div>
 
-        <div className="input-group">
-          <label htmlFor="date-picker">Select Start Date:</label>
-          <input type="date" id="date-picker" className="input-field" value={startDate} min={minDate}
-                 onChange={(e) => {
-                   setStartDate(e.target.value);
-                   setStartTime('');
-                 }}/>
-        </div>
+          <div className="calendar-card card">
+            <h2 className="title">
+              <span className="rack-icon-img">📅</span> Reservation Calendar
+            </h2>
 
-        <div className="input-group">
-          <label htmlFor="start-time">Start Time:</label>
-          <select id="start-time" className="input-field" value={startTime}
-                  onChange={(e) => setStartTime(e.target.value)} disabled={!startDate}>
-            <option value="">-- Select Start Time --</option>
-            {availableStartTimes.map(time => <option key={time} value={time}>{time}</option>)}
-          </select>
-          {isCurrentDate && startTime && parseInt(startTime.split(':')[0]) <= currentHour && (
-              <p className="error-text">Start time must be later than the current hour
-                ({currentHour.toString().padStart(2, '0')}:00).</p>
-          )}
-        </div>
+            <div className="calendar-container">
+              <Calendar
+                  localizer={localizer}
+                  events={calendarEvents}
+                  startAccessor="start"
+                  endAccessor="end"
+                  onSelectEvent={handleSelectEvent}
+                  eventPropGetter={eventStyleGetter}
+                  views={['month']}
+                  view="month"
+                  date={calendarDate}
+                  onNavigate={(date) => setCalendarDate(date)}
+                  components={{
+                    toolbar: CustomToolbar
+                  }}
+                  popup={false}
+                  onShowMore={handleShowMore}
+                  getDrilldownView={getDrilldownView}
+                  selected={null}
+              />
+            </div>
 
-        <div className="input-group">
-          <label htmlFor="end-date">Select End Date:</label>
-          <input type="date" id="end-date" className="input-field" value={endDate} min={endMin} max={endMax}
-                 onChange={(e) => setEndDate(e.target.value)} disabled={!startDate || !startTime}/>
-          {endDate && (<small>Max reservation duration: {MAX_HOURS} hours</small>)}
-        </div>
+            {/* Legend */}
+            <div className="calendar-legend">
+              <div className="legend-item-cal">
+                <div className="legend-color-cal user-reservation"></div>
+                <span>Your Reservations</span>
+              </div>
+              <div className="legend-item-cal">
+                <div className="legend-color-cal other-reservation"></div>
+                <span>Other Reservations</span>
+              </div>
+            </div>
 
-        <div className="input-group">
-          <label htmlFor="end-time">End Time:</label>
-          <select id="end-time" className="input-field" value={endTime}
-                  onChange={(e) => setEndTime(e.target.value)} disabled={!endDate}>
-            <option value="">-- Select End Time --</option>
-            {availableEndTimes.map(time => <option key={String(time)} value={String(time)}>{time}</option>)}
-          </select>
-          {isFormValid && finalDetails && !finalDetails.valid && (
-            <p className="error-text">Reservation duration must be between 1 and {MAX_HOURS} hours.</p>
-          )}
-        </div>
+            {/* Event Details Modal */}
+            {showEventModal && selectedEvent && (
+                <>
+                  <div className="event-modal-overlay" onClick={() => setShowEventModal(false)}/>
+                  <div className="event-modal">
+                    <h3 className="event-modal-title">Reservation Details</h3>
 
-        <button className="submit-button reservation-button" onClick={handleCheckReservation} disabled={!isButtonEnabled}>
-          Check Availability & Reserve
-        </button>
+                    {selectedEvent.resource.isCurrentUser && (
+                        <p><strong>User:</strong> {selectedEvent.resource.username}</p>
+                    )}
+                    <p><strong>Start:</strong> {moment(selectedEvent.start).format('YYYY-MM-DD HH:mm')}</p>
+                    <p><strong>End:</strong> {moment(selectedEvent.end).format('YYYY-MM-DD HH:mm')}</p>
 
-        {statusMessage && (
-          <div className={`status-message ${isAvailable === true ? 'success' : isAvailable === false ? 'error' : 'pending'}`}>
-            <p>{statusMessage}</p>
-              {Array.isArray(conflicts) && conflicts.length > 0 && (
-              <ul className="conflict-list" style={{ marginTop: 12, textAlign: 'left', paddingLeft: 16 }}>
-                {conflicts.map((c, idx) => {
-                  const start = `${c.startDate} ${c.startTime || ''}`.trim();
-                  const end = `${c.endDate} ${c.endTime || ''}`.trim();
-                  return (
-                    <li key={idx} className="conflict-item">
-                      {`${start} - ${end}`}
-                    </li>
-                  );
-                })}
-              </ul>
+                    {/* show devices only for current user's reservations */}
+                    {selectedEvent.resource.isCurrentUser && selectedEvent.resource.devices.length > 0 && (
+                        <div className="event-modal-devices">
+                          <strong>Devices:</strong>
+                          <div className="reservation-devices">
+                            {selectedEvent.resource.devices.map((device, idx) => (
+                                <span key={idx} className="device-pill">{device}</span>
+                            ))}
+                          </div>
+                        </div>
+                    )}
+                    <button className="event-modal-close-btn" onClick={() => setShowEventModal(false)}>Close</button>
+                  </div>
+                </>
+            )}
+            {showDayEventsModal && (
+              <>
+                <div className="event-modal-overlay" onClick={() => setShowDayEventsModal(false)}/>
+                <div className="event-modal day-events-modal">
+                  <h3 className="event-modal-title">
+                    Events on {selectedDate ? moment(selectedDate).format('MMMM D, YYYY') : ''}
+                  </h3>
+
+                  <div className="day-events-list">
+                    {dayEvents.map((event, idx) => (
+                      <div
+                        key={idx}
+                        className={`day-event-item ${event.resource.isCurrentUser ? 'current-user' : 'other-user'}`}
+                        onClick={() => {
+                          setShowDayEventsModal(false);
+                          handleSelectEvent(event);
+                        }}
+                      >
+                        <div className="day-event-title">{event.title}</div>
+                        <div>
+                          {moment(event.start).format('HH:mm')} - {moment(event.end).format('HH:mm')}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <button
+                    className="event-modal-close-btn"
+                    onClick={() => setShowDayEventsModal(false)}
+                  >
+                    Close
+                  </button>
+                </div>
+              </>
             )}
           </div>
-        )}
-      </div>
+        </div>
+        <div className="row-bottom">
+          <div id="reservations-list-container" className="card">
+            <h2 className="title">⏳ Your Reservations</h2>
 
-      <div id="reservations-list-container" className="card side-by-side-container">
-        <h2 className="title">⏳ Your Reservations</h2>
+            <div id="reservations-card-scrolling">
+              <ul id="user-reservations-list">
+                {reservations.length === 0 && (
+                    <li>No reservation found</li>
+                )}
 
-        <div id="reservations-card-scrolling">
-          <ul id="user-reservations-list">
-            {reservations.length === 0 && (
-              <li>No reservation found</li>
-            )}
-
-            {reservations.map(res => {
-              const startDateObj = new Date(res.startDate);
-              const endDateObj = new Date(res.endDate);
-              const remainingMs = startDateObj.getTime() - now;
-               const isActive = remainingMs <= 0 && endDateObj.getTime() > now;
-              const isExpired = endDateObj.getTime() <= now;
-              const resDevices = Array.isArray(res.devices) ? res.devices : [];
-              return (
-                  <li key={res.id} id={`reservation-item-${res.id}`}
-                      className={`reservation-item ${isExpired || !isReservationActive ? 'expired' : isActive ? 'active' : ''}`}>
-                    <div className="reservation-top-row">
+                {reservations.map(res => {
+                  const startDateObj = new Date(res.startDate);
+                  const endDateObj = new Date(res.endDate);
+                  const remainingMs = startDateObj.getTime() - now;
+                  const isActive = remainingMs <= 0 && endDateObj.getTime() > now;
+                  const isExpired = endDateObj.getTime() <= now;
+                  const resDevices = Array.isArray(res.devices) ? res.devices : [];
+                  return (
+                      <li key={res.id} id={`reservation-item-${res.id}`}
+                          className={`reservation-item ${isExpired || !isReservationActive ? 'expired' : isActive ? 'active' : ''}`}>
+                        <div className="reservation-top-row">
                       <span className="reservation-info">
                         <div className="date-line start">
                           <span className="date">{formatLocalDate(startDateObj)}</span>&nbsp;
@@ -507,29 +660,100 @@ export default function Reservation({ username, isReservationActive }) {
                         </div>
                       </span>
 
-                      <span id={`timer-${res.id}`}
-                            className="timer-display-list">{isActive || isExpired ? '--:--' : formatDuration(remainingMs)}</span>
+                          <span id={`timer-${res.id}`}
+                                className="timer-display-list">{isActive || isExpired ? '--:--' : formatDuration(remainingMs)}</span>
 
-                      <button id={`delete-btn-${res.id}`} className="delete-button" disabled={isActive || isExpired || res.deleting}
-                              onClick={() => deleteReservation(res.id)} data-reservation-id={res.id}>
-                        {res.deleting ? 'Deleting...' : 'Delete'}
-                      </button>
-                    </div>
-                      {resDevices.length > 0 && (
-                          <div className="reservation-devices">
-                            {resDevices.map((tag, idx) => (
-                                <span key={`${tag}-${idx}`} className="device-pill">
+                          <button id={`delete-btn-${res.id}`} className="delete-button"
+                                  disabled={isActive || isExpired || res.deleting}
+                                  onClick={() => deleteReservation(res.id)} data-reservation-id={res.id}>
+                            {res.deleting ? 'Deleting...' : 'Delete'}
+                          </button>
+                        </div>
+                        {resDevices.length > 0 && (
+                            <div className="reservation-devices">
+                              {resDevices.map((tag, idx) => (
+                                  <span key={`${tag}-${idx}`} className="device-pill">
                                   {tag}
                                 </span>
-                            ))}
-                          </div>
-                      )}
-                  </li>
-            );
-            })}
-            </ul>
+                              ))}
+                            </div>
+                        )}
+                      </li>
+                  );
+                })}
+              </ul>
+            </div>
+          </div>
+          <div className="card reserve-form-card">
+            <h2 className="title">📅 Reserve the Testbed</h2>
+
+            <div className="input-group">
+              <label htmlFor="date-picker">Select Start Date:</label>
+              <input type="date" id="date-picker" className="input-field" value={startDate} min={minDate}
+                     onChange={(e) => {
+                       setStartDate(e.target.value);
+                       setStartTime('');
+                     }}/>
+            </div>
+
+            <div className="input-group">
+              <label htmlFor="start-time">Start Time:</label>
+              <select id="start-time" className="input-field" value={startTime}
+                      onChange={(e) => setStartTime(e.target.value)} disabled={!startDate}>
+                <option value="">-- Select Start Time --</option>
+                {availableStartTimes.map(time => <option key={time} value={time}>{time}</option>)}
+              </select>
+              {isCurrentDate && startTime && parseInt(startTime.split(':')[0]) <= currentHour && (
+                  <p className="error-text">Start time must be later than the current hour
+                    ({currentHour.toString().padStart(2, '0')}:00).</p>
+              )}
+            </div>
+
+            <div className="input-group">
+              <label htmlFor="end-date">Select End Date:</label>
+              <input type="date" id="end-date" className="input-field" value={endDate} min={endMin} max={endMax}
+                     onChange={(e) => setEndDate(e.target.value)} disabled={!startDate || !startTime}/>
+              {endDate && (<small>Max reservation duration: {MAX_HOURS} hours</small>)}
+            </div>
+
+            <div className="input-group">
+              <label htmlFor="end-time">End Time:</label>
+              <select id="end-time" className="input-field" value={endTime}
+                      onChange={(e) => setEndTime(e.target.value)} disabled={!endDate}>
+                <option value="">-- Select End Time --</option>
+                {availableEndTimes.map(time => <option key={String(time)} value={String(time)}>{time}</option>)}
+              </select>
+              {isFormValid && finalDetails && !finalDetails.valid && (
+                  <p className="error-text">Reservation duration must be between 1 and {MAX_HOURS} hours.</p>
+              )}
+            </div>
+
+            <button className="submit-button reservation-button" onClick={handleCheckReservation}
+                    disabled={!isButtonEnabled}>
+              Check Availability & Reserve
+            </button>
+
+            {statusMessage && (
+                <div
+                    className={`status-message ${isAvailable === true ? 'success' : isAvailable === false ? 'error' : 'pending'}`}>
+                  <p>{statusMessage}</p>
+                  {Array.isArray(conflicts) && conflicts.length > 0 && (
+                      <ul className="conflict-list" style={{marginTop: 12, textAlign: 'left', paddingLeft: 16}}>
+                        {conflicts.map((c, idx) => {
+                          const start = `${c.startDate} ${c.startTime || ''}`.trim();
+                          const end = `${c.endDate} ${c.endTime || ''}`.trim();
+                          return (
+                              <li key={idx} className="conflict-item">
+                                {`${start} - ${end}`}
+                              </li>
+                          );
+                        })}
+                      </ul>
+                  )}
+                </div>
+            )}
+          </div>
         </div>
       </div>
-    </div>
-  );
-}
+
+  );}
