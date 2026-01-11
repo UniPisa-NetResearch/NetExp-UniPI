@@ -227,6 +227,7 @@ def serialize_reservation(reservation):
 
     return {
         'id': reservation.id,
+        'username': reservation.username,
         #  ISO format 2025-10-30T10:00:00
         'startDate': start_dt.isoformat(),
         'endDate': end_dt.isoformat(),
@@ -311,34 +312,10 @@ def show_devices():
 def all_reservations():
     # return all reservations for calendar view
     try:
-        # get only future, current reservations and reservations of past month
-        now = datetime.now()
-        now_tuple = (now.date(), now.time().replace(second=0, microsecond=0))
-
         # get all reservations (or filter by end date > now if you want only active ones)
         reservations = Reservation.query.all()
 
-        result = []
-        for res in reservations:
-            start_dt = datetime.combine(res.startDate, res.startTime)
-            end_dt = datetime.combine(res.endDate, res.endTime)
-
-            # get devices for this reservation
-            try:
-                res_devs = ReservationDevice.query.filter_by(reservation_id=res.id).all()
-                devices = [rd.asset_tag for rd in res_devs]
-            except SQLAlchemyError:
-                devices = []
-
-            result.append({
-                'id': res.id,
-                'username': res.username,
-                'startDate': start_dt.isoformat(),
-                'endDate': end_dt.isoformat(),
-                'devices': devices
-            })
-
-        return jsonify(result), 200
+        return jsonify([serialize_reservation(res) for res in reservations]), 200
 
     except Exception as e:
         app.logger.error(f"Error fetching all reservations: {e}")

@@ -84,6 +84,8 @@ export default function Reservation({ username, isReservationActive }) {
   const [showDayEventsModal, setShowDayEventsModal] = useState(false);   // show reservations if in the same day there are more reservations
   const [dayEvents, setDayEvents] = useState([]);                          // reservations in a day
   const [selectedDate, setSelectedDate] = useState(null);                         // date selected
+  // form for reservation selection
+  const [activeTab, setActiveTab] = useState('list');   // 'list' or 'new'
 
   // form data state
   const [startDate, setStartDate] = useState('');
@@ -265,6 +267,20 @@ export default function Reservation({ username, isReservationActive }) {
       return [...prev, deviceKey];                                              // otherwise create an array with the same elements as before and add deviceKey at the end
     });
   };
+  const handleSelectAll = () => {
+    const reachableDevices = devices.filter(d => d.reachable !== false);
+    const allSelected = reachableDevices.every(d =>
+      selectedDevices.includes(d.asset_tag || d.name || '')
+    );
+
+    if (allSelected) {
+      setSelectedDevices([]);
+    } else {
+      const allKeys = reachableDevices.map(d => d.asset_tag || d.name || '');
+      setSelectedDevices(allKeys);
+    }
+  };
+
   // show available devices
   const fetchDevices = async () => {
       try {
@@ -301,6 +317,7 @@ export default function Reservation({ username, isReservationActive }) {
 
       if (resp.ok) {
         setReservations(prev => prev.filter(r => r.id !== reservationId));   // remove the element with reservationId
+        await fetchAllReservations();       // update calendar
       } else {
         const txt = await resp.text().catch(() => 'Server error');
         window.alert(`Error deleting reservation: ${resp.status} - ${txt}`);
@@ -348,6 +365,9 @@ export default function Reservation({ username, isReservationActive }) {
         setStartTime('');
       } else {
         if (resp.status === 409 && data) {
+
+          await fetchAllReservations();         // update calendar
+
           if (Array.isArray(data.conflicts) && data.conflicts.length > 0) {
           setConflicts(data.conflicts);                                               // set reservation in conflict
           setStatusMessage('Requested slot overlaps existing reservations:');
@@ -472,7 +492,7 @@ export default function Reservation({ username, isReservationActive }) {
         <div className="row-top">
           <div className="card device-card">
 
-            <h2 className="title"><img src="/Rack.png" alt="" className="rack-icon-img"/>Devices list</h2>
+            <h2 className="title"><img src="/Rack.png" alt="" className="rack-icon-img"/>Device list</h2>
             <div className="device-legend" aria-hidden="true">
               <span className="legend-item"><span className="legend-color spine"/> Spine</span>
               <span className="legend-item"><span className="legend-color leaf"/> Leaf</span>
@@ -480,46 +500,32 @@ export default function Reservation({ username, isReservationActive }) {
             </div>
             <div className="device-list">
               {loadingDevices ? (
-                  <p>Loading devices...</p>
-              ) : devices.length === 0 ? (
-                  <p>No devices found.</p>
+                <div className="loading-message">Loading devices...</div>
               ) : (
-                  devices.map((d) => {
-                    // identifier for selection
-                    const key = `${d.asset_tag || d.name || ''}`;
-                    const role = (d.role || '').toLowerCase();
-                    const selected = selectedDevices.includes(key);
+                devices.map((d) => {
+                  // identifier for selection
+                  const key = `${d.asset_tag || d.name || ''}`;
+                  const role = (d.role || '').toLowerCase();
+                  // choose icon
+                  const icon = (role === 'leaf' || role === 'spine') ?
+                      <img src="/networkSwitch.png" alt="" className="device-icon-img"/> : (role === 'host' ? '💻' : '🔹');
 
-                    // choose icon
-                    const icon = (role === 'leaf' || role === 'spine') ?
-                        <img src="/networkSwitch.png" alt=""
-                             className="device-icon-img"/> : (role === 'host' ? '💻' : '🔹');
-                    return (
-                        <label
-                            key={key}
-                            className={`device-item ${role || ''} ${d.reachable === false ? 'unreachable' : ''}`}
-                            title={`${d.asset_tag || d.name || ''} ${d.primary_ip ? ' - ' + d.primary_ip : ''} ${d.reachable === false ? '(unreachable)' : ''}`} /* information shown when the mouse is hover the element*/
-                            aria-disabled={d.reachable === false ? "true" : "false"}
-                        >
-                          <input
-                              type="checkbox"
-                              checked={selected}
-                              //onChange={() => toggleSelectDevice(key)}
-                              className="device-checkbox"
-                              //disabled={d.reachable === false}
-                              onChange={() => handleDeviceClick(key, d.primary_ip)}
-                              disabled={d.reachable === false || !!loadingReachability[key]}
-                              aria-label={`${d.name || key} selectable`}
-                          />
-                          <span className="device-icon" aria-hidden="true">{icon}</span>
-                          <span className="device-main">
-                        {loadingReachability[key] && <span className="device-loading" aria-hidden="true">⏳</span>}
-                            <span className="device-name">{d.name}</span>
-                        <span className="device-ip">{d.primary_ip}</span>
-                      </span>
-                        </label>
-                    );
-                  })
+                  const displayText = d.asset_tag ? `${d.name} (${d.asset_tag})` : d.name;
+
+                  return (
+                      <label
+                          key={key}
+                          className={`device-item ${role || ''}`}
+                      >
+                        <span className="device-icon" aria-hidden="true">{icon}</span>
+                        <span className="device-main">
+                              {loadingReachability[key] && <span className="device-loading" aria-hidden="true">⏳</span>}
+                          <span className="device-name">{displayText}</span>
+                              <span className="device-ip">{d.primary_ip}</span>
+                            </span>
+                      </label>
+                  );
+                })
               )}
             </div>
           </div>
@@ -555,7 +561,7 @@ export default function Reservation({ username, isReservationActive }) {
             <div className="calendar-legend">
               <div className="legend-item-cal">
                 <div className="legend-color-cal user-reservation"></div>
-                <span>Your Reservations</span>
+                <span>My Reservations</span>
               </div>
               <div className="legend-item-cal">
                 <div className="legend-color-cal other-reservation"></div>
@@ -628,132 +634,210 @@ export default function Reservation({ username, isReservationActive }) {
             )}
           </div>
         </div>
-        <div className="row-bottom">
-          <div id="reservations-list-container" className="card">
-            <h2 className="title">⏳ Your Reservations</h2>
+        <div className="row-bottom-unified">
+          <div className="card unified-reservation-card">
+            {/* Tab Switcher */}
+            <div className="tab-switcher">
+              <button
+                className={`tab-button ${activeTab === 'list' ? 'active' : ''}`}
+                onClick={() => setActiveTab('list')}
+              >
+                My Reservations
+              </button>
+              <button
+                className={`tab-button ${activeTab === 'new' ? 'active' : ''}`}
+                onClick={() => setActiveTab('new')}
+              >
+                New Reservation
+              </button>
+            </div>
+            {activeTab === 'list' && (
+              <div className="tab-content">
+                <h2 className="title">⏳ Reservations</h2>
 
-            <div id="reservations-card-scrolling">
-              <ul id="user-reservations-list">
-                {reservations.length === 0 && (
-                    <li>No reservation found</li>
-                )}
+                <div id="reservations-card-scrolling">
+                  <ul id="user-reservations-list">
+                    {reservations.length === 0 && (
+                        <li>No reservation found</li>
+                    )}
 
-                {reservations.map(res => {
-                  const startDateObj = new Date(res.startDate);
-                  const endDateObj = new Date(res.endDate);
-                  const remainingMs = startDateObj.getTime() - now;
-                  const isActive = remainingMs <= 0 && endDateObj.getTime() > now;
-                  const isExpired = endDateObj.getTime() <= now;
-                  const resDevices = Array.isArray(res.devices) ? res.devices : [];
-                  return (
-                      <li key={res.id} id={`reservation-item-${res.id}`}
-                          className={`reservation-item ${isExpired || !isReservationActive ? 'expired' : isActive ? 'active' : ''}`}>
-                        <div className="reservation-top-row">
-                      <span className="reservation-info">
-                        <div className="date-line start">
-                          <span className="date">{formatLocalDate(startDateObj)}</span>&nbsp;
-                          <span className="time">{formatLocalTime(startDateObj)}</span>
-                        </div>
-                        <div className="date-line end">
-                          <span className="date">{formatLocalDate(endDateObj)}</span>&nbsp;
-                          <span className="time">{formatLocalTime(endDateObj)}</span>
-                        </div>
-                      </span>
+                    {reservations.map(res => {
+                      const startDateObj = new Date(res.startDate);
+                      const endDateObj = new Date(res.endDate);
+                      const remainingMs = startDateObj.getTime() - now;
+                      const isActive = remainingMs <= 0 && endDateObj.getTime() > now;
+                      const isExpired = endDateObj.getTime() <= now;
+                      const resDevices = Array.isArray(res.devices) ? res.devices : [];
+                      return (
+                          <li key={res.id} id={`reservation-item-${res.id}`}
+                              className={`reservation-item ${isExpired || !isReservationActive ? 'expired' : isActive ? 'active' : ''}`}>
+                            <div className="reservation-top-row">
+                              <span className="reservation-info">
+                                <span className="date">{formatLocalDate(startDateObj)}</span>
+                                <span className="time">{formatLocalTime(startDateObj)}</span>
+                                <span className="date-separator"> -- </span>
+                                <span className="date">{formatLocalDate(endDateObj)}</span>
+                                <span className="time">{formatLocalTime(endDateObj)}</span>
+                              </span>
 
-                          <span id={`timer-${res.id}`}
-                                className="timer-display-list">{isActive || isExpired ? '--:--' : formatDuration(remainingMs)}</span>
+                              {resDevices.length > 0 && (
+                                <div className="reservation-devices">
+                                  {resDevices.map((tag, idx) => (
+                                      <span key={`${tag}-${idx}`} className="device-pill">
+                                    {tag}
+                                  </span>
+                                  ))}
+                                </div>
+                            )}
 
-                          <button id={`delete-btn-${res.id}`} className="delete-button"
-                                  disabled={isActive || isExpired || res.deleting}
-                                  onClick={() => deleteReservation(res.id)} data-reservation-id={res.id}>
-                            {res.deleting ? 'Deleting...' : 'Delete'}
-                          </button>
-                        </div>
-                        {resDevices.length > 0 && (
-                            <div className="reservation-devices">
-                              {resDevices.map((tag, idx) => (
-                                  <span key={`${tag}-${idx}`} className="device-pill">
-                                  {tag}
-                                </span>
-                              ))}
+                              <span id={`timer-${res.id}`}
+                                    className="timer-display-list">{isActive || isExpired ? '--:--' : formatDuration(remainingMs)}</span>
+
+                              <button id={`delete-btn-${res.id}`} className="delete-button"
+                                      disabled={isActive || isExpired || res.deleting}
+                                      onClick={() => deleteReservation(res.id)} data-reservation-id={res.id}>
+                                {res.deleting ? 'Deleting...' : 'Delete'}
+                              </button>
                             </div>
-                        )}
-                      </li>
-                  );
-                })}
-              </ul>
-            </div>
-          </div>
-          <div className="card reserve-form-card">
-            <h2 className="title">📅 Reserve the Testbed</h2>
+                          </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              </div>
+            )}
 
-            <div className="input-group">
-              <label htmlFor="date-picker">Select Start Date:</label>
-              <input type="date" id="date-picker" className="input-field" value={startDate} min={minDate}
-                     onChange={(e) => {
-                       setStartDate(e.target.value);
-                       setStartTime('');
-                     }}/>
-            </div>
+            {/* Tab: New Reservation */}
+            {activeTab === 'new' && (
+              <div className="tab-content new-reservation-content">
+                <div className="form-section time-selection-section">
+                  <h2 className="title">📅 Reserve the Testbed</h2>
 
-            <div className="input-group">
-              <label htmlFor="start-time">Start Time:</label>
-              <select id="start-time" className="input-field" value={startTime}
-                      onChange={(e) => setStartTime(e.target.value)} disabled={!startDate}>
-                <option value="">-- Select Start Time --</option>
-                {availableStartTimes.map(time => <option key={time} value={time}>{time}</option>)}
-              </select>
-              {isCurrentDate && startTime && parseInt(startTime.split(':')[0]) <= currentHour && (
-                  <p className="error-text">Start time must be later than the current hour
-                    ({currentHour.toString().padStart(2, '0')}:00).</p>
-              )}
-            </div>
+                  <div className="time-row">
+                    <div className="input-group">
+                      <label htmlFor="date-picker">Select Start Date:</label>
+                      <input type="date" id="date-picker" className="input-field" value={startDate} min={minDate}
+                             onChange={(e) => {
+                               setStartDate(e.target.value);
+                               setStartTime('');
+                             }}/>
+                    </div>
 
-            <div className="input-group">
-              <label htmlFor="end-date">Select End Date:</label>
-              <input type="date" id="end-date" className="input-field" value={endDate} min={endMin} max={endMax}
-                     onChange={(e) => setEndDate(e.target.value)} disabled={!startDate || !startTime}/>
-              {endDate && (<small>Max reservation duration: {MAX_HOURS} hours</small>)}
-            </div>
+                    <div className="input-group">
+                      <label htmlFor="start-time">Start Time:</label>
+                      <select id="start-time" className="input-field" value={startTime}
+                              onChange={(e) => setStartTime(e.target.value)} disabled={!startDate}>
+                        <option value="">-- Select Start Time --</option>
+                        {availableStartTimes.map(time => <option key={time} value={time}>{time}</option>)}
+                      </select>
+                    </div>
+                  </div>
 
-            <div className="input-group">
-              <label htmlFor="end-time">End Time:</label>
-              <select id="end-time" className="input-field" value={endTime}
-                      onChange={(e) => setEndTime(e.target.value)} disabled={!endDate}>
-                <option value="">-- Select End Time --</option>
-                {availableEndTimes.map(time => <option key={String(time)} value={String(time)}>{time}</option>)}
-              </select>
-              {isFormValid && finalDetails && !finalDetails.valid && (
-                  <p className="error-text">Reservation duration must be between 1 and {MAX_HOURS} hours.</p>
-              )}
-            </div>
+                  {isCurrentDate && startTime && parseInt(startTime.split(':')[0]) <= currentHour && (
+                      <p className="error-text">Start time must be later than the current hour
+                        ({currentHour.toString().padStart(2, '0')}:00).</p>
+                  )}
 
-            <button className="submit-button reservation-button" onClick={handleCheckReservation}
-                    disabled={!isButtonEnabled}>
-              Check Availability & Reserve
-            </button>
+                  <div className="time-row">
+                    <div className="input-group">
+                      <label htmlFor="end-date">Select End Date:</label>
+                      <input type="date" id="end-date" className="input-field" value={endDate} min={endMin} max={endMax}
+                             onChange={(e) => setEndDate(e.target.value)} disabled={!startDate || !startTime}/>
+                    </div>
 
-            {statusMessage && (
-                <div
-                    className={`status-message ${isAvailable === true ? 'success' : isAvailable === false ? 'error' : 'pending'}`}>
-                  <p>{statusMessage}</p>
-                  {Array.isArray(conflicts) && conflicts.length > 0 && (
-                      <ul className="conflict-list" style={{marginTop: 12, textAlign: 'left', paddingLeft: 16}}>
-                        {conflicts.map((c, idx) => {
-                          const start = `${c.startDate} ${c.startTime || ''}`.trim();
-                          const end = `${c.endDate} ${c.endTime || ''}`.trim();
+                    <div className="input-group">
+                      <label htmlFor="end-time">End Time:</label>
+                      <select id="end-time" className="input-field" value={endTime}
+                              onChange={(e) => setEndTime(e.target.value)} disabled={!endDate}>
+                        <option value="">-- Select End Time --</option>
+                        {availableEndTimes.map(time => <option key={String(time)} value={String(time)}>{time}</option>)}
+                      </select>
+                    </div>
+                  </div>
+
+                  {endDate && (<small>Max reservation duration: {MAX_HOURS} hours</small>)}
+
+                  {isFormValid && finalDetails && !finalDetails.valid && (
+                      <p className="error-text">Reservation duration must be between 1 and {MAX_HOURS} hours.</p>
+                  )}
+                  {/* Device Selection Section */}
+                  <div className="form-section device-selection-section">
+                    <div className="section-header">
+                      <h3 className="section-title">
+                       Select Devices
+                      </h3>
+                      {!loadingDevices && (
+                        <div className="select-all-container">
+                          <label className="select-all-label">
+                            <input
+                              type="checkbox"
+                              checked={devices.filter(d => d.reachable !== false).length > 0 &&
+                                       devices.filter(d => d.reachable !== false)
+                                         .every(d => selectedDevices.includes(d.asset_tag || d.name || ''))}
+                              onChange={handleSelectAll}
+                              className="select-all-checkbox"
+                            />
+                            <span>Select All</span>
+                          </label>
+                          <span className="selected-count">({selectedDevices.length} selected)</span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="device-selection-grid">
+                      {loadingDevices ? (
+                        <div className="loading-message">Loading devices...</div>
+                      ) : (
+                        devices.map((d) => {
+                          const key = `${d.asset_tag || d.name || ''}`;
+                          const selected = selectedDevices.includes(key);
+                          const isReachable = d.reachable !== false;
+
                           return (
-                              <li key={idx} className="conflict-item">
-                                {`${start} - ${end}`}
-                              </li>
+                            <label key={key} className={`device-select-item ${!isReachable ? 'unavailable' : ''} ${selected ? 'selected' : ''}`}>
+                              <input
+                                type="checkbox"
+                                checked={selected}
+                                onChange={() => isReachable && handleDeviceClick(key, d.primary_ip)}
+                                disabled={!isReachable || !!loadingReachability[key]}
+                                className="device-select-checkbox"
+                              />
+                              {/* device icon e info */}
+                              <span className={`availability-indicator ${isReachable ? 'available' : 'unavailable'}`}>
+                                {loadingReachability[key] ? '⏳' : (d.asset_tag || d.name)}
+                              </span>
+                            </label>
                           );
-                        })}
-                      </ul>
+                        })
+                      )}
+                    </div>
+                  </div>
+
+                  <button className="submit-button reservation-button" onClick={handleCheckReservation}
+                          disabled={!isButtonEnabled}>
+                    Check Availability & Reserve
+                  </button>
+
+                  {statusMessage && (
+                      <div className={`status-message ${isAvailable === true ? 'success' : isAvailable === false ? 'error' : 'pending'}`}>
+                        <p>{statusMessage}</p>
+                        {Array.isArray(conflicts) && conflicts.length > 0 && (
+                            <ul className="conflict-list" style={{marginTop: 12, textAlign: 'left', paddingLeft: 16}}>
+                              {conflicts.map((c, idx) => {
+                                const start = `${c.startDate} ${c.startTime || ''}`.trim();
+                                const end = `${c.endDate} ${c.endTime || ''}`.trim();
+                                return (
+                                    <li key={idx} className="conflict-item">{`${start} - ${end}`}</li>
+                                );
+                              })}
+                            </ul>
+                        )}
+                      </div>
                   )}
                 </div>
+              </div>
             )}
           </div>
         </div>
       </div>
-
   );}
