@@ -1,0 +1,49 @@
+- name: Cleanup iPerf processes and TC rules
+  hosts: all
+  gather_facts: no
+  become: yes
+
+  tasks:
+    - name: Kill all iPerf server processes
+      shell: |
+        pkill -9 iperf3 || true
+        pkill -9 iperf || true
+      ignore_errors: yes
+
+    - name: Kill all iPerf client processes
+      shell: |
+        killall -9 iperf3 || true
+        killall -9 iperf || true
+      ignore_errors: yes
+
+    - name: Remove custom TC rules (htb/netem/tbf) in one command
+      shell: |
+        tc qdisc show | grep -E 'qdisc (htb|netem|tbf)' | awk '{print $5}' | sort -u | while read iface; do
+          if [ -n "$iface" ] && [ "$iface" != "lo" ]; then
+            echo "Removing TC from $iface"
+            tc qdisc del dev $iface root 2>/dev/null || true
+            tc qdisc del dev $iface ingress 2>/dev/null || true
+          fi
+        done
+      register: tc_cleanup
+      ignore_errors: yes
+      changed_when: tc_cleanup.stdout != ""
+
+    - name: Verify no iPerf processes running
+      shell: pgrep -f iperf
+      register: iperf_check
+      failed_when: false
+      changed_when: false
+
+    - name: Verify cleanup
+      shell: |
+        iperf_count=$(pgrep -c iperf 2>/dev/null || echo 0)
+        tc_count=$(tc qdisc show | grep -cE '(htb|netem|tbf)' 2>/dev/null || echo 0)
+        echo "iPerf processes: $iperf_count"
+        echo "Custom TC rules: $tc_count"
+      register: cleanup_status
+      changed_when: false
+
+    - name: Display cleanup status
+      debug:
+        msg: "{{ cleanup_status.stdout }}"

@@ -13,14 +13,7 @@ from werkzeug.utils import secure_filename
 from ...database.db import db, UserMetrics, Reservation, Experiment
 from pygnmi.client import gNMIclient
 from ...app import app
-from ..controller import (
-    ensure_inventory_dir, safe_filename, run_ansible_playbook, win_to_wsl_path,
-    CONTROLLER_PLAYBOOKS_DIR,
-    CONTROLLER_CONFIGS_DIR,
-    USER_PLAYBOOKS_DIR,
-    USER_CONFIGS_DIR,
-    INVENTORY_DIR
-)
+from ..controller import (safe_filename, run_ansible_playbook, INVENTORY_DIR)
 # true if development mode is active
 TEST = True
 
@@ -29,6 +22,9 @@ EXPERIMENT_TEMPLATES_DIR = os.path.join(BASE_DIR, "experimentTemplates")
 EXPERIMENT_PLAYBOOKS_DIR = os.path.join(BASE_DIR, "experimentPlaybooks")
 EXPERIMENT_TELEMETRY_DIR = os.path.join(BASE_DIR, "experimentTelemetry")
 EXPERIMENT_RESULTS_DIR = os.path.join(BASE_DIR, "experimentResults")
+
+running_experiments = {}  # {reservation_id: {'futures': [...], 'stop_flag': threading.Event()}}
+experiments_lock = threading.Lock()     #lock for stopping threads
 
 def ensure_experiment_dirs():
     # create directories when don't exist
@@ -86,9 +82,22 @@ def collect_telemetry_data(reservation_id, experiment_name, telemetry_config, in
         start_time = time.time()
         end_time = start_time + duration_s
 
+        stop_requested = threading.Event()
+
         def collect_metric_from_target(metric_name, metric_path, target, target_ip, sampling_period):
             # function run on a separate thread for each combination of metric/target
+            if stop_requested.is_set():
+                print(f"[TELEMETRY] Stop signal received for {metric_name} from {target}", flush=True)
+                return
 
+            # check global flag
+            with experiments_lock:
+                if reservation_id in running_experiments:
+                    if running_experiments[reservation_id]['stop_flag'].is_set():
+                        print(f"[TELEMETRY] Global stop for {metric_name} from {target}", flush=True)
+                        stop_requested.set()  # propagate to other threads
+                        return
+                    
             print(f"[TELEMETRY] Thread started: {metric_name} from {target} every {sampling_period}s", flush=True)
             # create results structure
             with results_lock:
@@ -100,6 +109,13 @@ def collect_telemetry_data(reservation_id, experiment_name, telemetry_config, in
             sample_count = 0
 
             while time.time() < end_time:
+                # check if the stop is requested
+                with experiments_lock:
+                    if reservation_id in running_experiments:
+                        if running_experiments[reservation_id]['stop_flag'].is_set():
+                            print(f"[TELEMETRY] Stop requested for {metric_name} from {target}", flush=True)
+                            return
+
                 current_time = time.time()
 
                 # check if it is time to sample
@@ -186,16 +202,50 @@ def collect_telemetry_data(reservation_id, experiment_name, telemetry_config, in
                 target_ip = device_ips[target]
 
                 # start thread for the current combination
-                thread = threading.Thread(target=collect_metric_from_target, args=(metric_name, metric_path, target, target_ip, sampling_period), daemon=True)
+                thread = threading.Thread(target=collect_metric_from_target, args=(metric_name, metric_path, target, target_ip, sampling_period), daemon=False)
                 thread.start()
                 threads.append(thread)
 
         print(f"[TELEMETRY] Started {len(threads)} collection threads", flush=True)
 
+        stop_detected = False
         # wait every thread
         for idx, thread in enumerate(threads):
-            thread.join()
+            while thread.is_alive():
+                # check if stop requested
+                with experiments_lock:
+                    if reservation_id in running_experiments:
+                        if running_experiments[reservation_id]['stop_flag'].is_set():
+                            if not stop_detected:
+                                print(f"[TELEMETRY] Stop requested, signaling all threads", flush=True)
+                                stop_requested.set()
+                                stop_detected = True
+                            # threads will stp in the next check
+                            #return False, "Telemetry collection stopped by user"
+
+                thread.join(timeout=0.5)  # wait 1 second at a time
+
             print(f"[TELEMETRY] Thread {idx + 1}/{len(threads)} joined", flush=True)
+
+        all_stopped = all(not thread.is_alive() for thread in threads)
+        if not all_stopped:
+            print(f"[TELEMETRY] WARNING: Some threads still alive, waiting...", flush=True)
+            max_additional_wait = 5
+            waited = 0
+            while waited < max_additional_wait:
+                still_alive = [i for i, thread in enumerate(threads) if thread.is_alive()]
+                if not still_alive:
+                    print(f"[TELEMETRY] All threads stopped after {waited:.1f}s additional wait", flush=True)
+                    break
+                print(f"[TELEMETRY] Still waiting for threads: {still_alive}", flush=True)
+                time.sleep(0.5)
+                waited += 0.5
+
+            still_alive = [i for i, thread in enumerate(threads) if thread.is_alive()]
+            if still_alive:
+                print(f"[TELEMETRY] ERROR: Threads {still_alive} still alive after {max_additional_wait}s", flush=True)
+
+        print(f"[TELEMETRY] All {len(threads)} threads confirmed stopped", flush=True)
 
         # save results in a JSON file
         results_file = os.path.join(results_dir, f"{experiment_name}_telemetry_results.json")
@@ -251,22 +301,24 @@ def execute_experiment_schedule(reservation_id, experiment_name, experiment_data
                 'absolute_time': absolute_time
             })
 
-            # wait until time_offset
-            #elapsed = time.time() - start_time
-            #print(f"[EXPERIMENT DEBUG] start_time: {start_time}, current time: {time.time()}, elapsed: {elapsed:.1f}s",
-                  #flush=True)
-            #wait_time = time_offset - elapsed
         for item in scheduled_times:
+            # check if stop has been requested
+            with experiments_lock:
+                if reservation_id in running_experiments:
+                    if running_experiments[reservation_id]['stop_flag'].is_set():
+                        print(f"[EXPERIMENT] Stop requested, aborting execution", flush=True)
+                        return False, "Experiment stopped by user"
+
             step = item['step']
             time_offset = item['time_offset']
-            absolute_time = item['absolute_time']
+            #absolute_time = item['absolute_time']
 
             step_name = step.get('name', 'unnamed_step')
             playbook_name = step.get('playbook', '')
             targets = step.get('targets', [])
 
             absolute_time = start_time + time_offset
-            wait_time = absolute_time - time.time()
+            #wait_time = absolute_time - time.time()
 
             current_time = time.time()
             wait_time = absolute_time - current_time
@@ -278,7 +330,21 @@ def execute_experiment_schedule(reservation_id, experiment_name, experiment_data
 
             if wait_time > 0:
                     print(f"[EXPERIMENT] Waiting {wait_time:.1f}s until step '{step_name}'", flush=True)
-                    time.sleep(wait_time)
+                    end_wait_time = time.time() + wait_time
+                    while time.time() < end_wait_time:
+                        # check if the stop has been requested during wait
+                        with experiments_lock:
+                            if reservation_id in running_experiments:
+                                if running_experiments[reservation_id]['stop_flag'].is_set():
+                                    print(f"[EXPERIMENT] Stop requested during wait, aborting (no playbook running)",
+                                          flush=True)
+                                    return False, "Experiment stopped by user during wait"
+
+                        # sleep for maximum 0,5 seconds
+                        remaining = end_wait_time - time.time()
+                        if remaining > 0:
+                            time.sleep(min(0.5, remaining))
+
             elif wait_time < -5:  # print if the delay is greater than 5 seconds
                 print(f"[EXPERIMENT WARNING] Step '{step_name}' is {abs(wait_time):.1f}s late!", flush=True)
 
@@ -345,6 +411,22 @@ def execute_experiment_schedule(reservation_id, experiment_name, experiment_data
             else:
                 print(f"[EXPERIMENT ERROR] Step '{step_name}' failed with code {returncode}", flush=True)
                 has_errors = True
+
+            # check flag after playbook execution
+            with experiments_lock:
+                if reservation_id in running_experiments:
+                    if running_experiments[reservation_id]['stop_flag'].is_set():
+                        print(f"[EXPERIMENT] Stop requested after playbook completion, stopping now", flush=True)
+                        print(f"[EXPERIMENT] Playbook '{playbook_name}' completed successfully before stopping",
+                              flush=True)
+
+                        # save partial log
+                        log_file = os.path.join(results_dir, f"{experiment_name}_execution_log.json")
+                        with open(log_file, 'w') as f:
+                            json.dump(execution_log, f, indent=2)
+                        print(f"[EXPERIMENT] Partial execution log saved to: {log_file}", flush=True)
+
+                        return False, "Experiment stopped by user (playbook completed safely)"
 
         # save execution log
         log_file = os.path.join(results_dir, f"{experiment_name}_execution_log.json")
@@ -1329,6 +1411,13 @@ def run_experiment():
         # parallel execution: experiment + telemetry
         def run_experiment_with_telemetry():
             try:
+                stop_flag = threading.Event()
+                with experiments_lock:
+                    running_experiments[reservation_id] = {
+                        'futures': [],
+                        'stop_flag': stop_flag
+                    }
+
                 with ThreadPoolExecutor(max_workers=2) as executor:
                     # start experiment and telemetry execution
                     experiment_future = executor.submit(
@@ -1348,27 +1437,48 @@ def run_experiment():
                         duration_s
                     )
 
+                    # save Futures and flag
+                    with experiments_lock:
+                        if reservation_id in running_experiments:
+                            running_experiments[reservation_id]['futures'] = [experiment_future, telemetry_future]
+
                     # wait completion
                     experiment_success, experiment_error = experiment_future.result()
                     telemetry_success, telemetry_error = telemetry_future.result()
 
-                with app.app_context():
-                    # update experiment status
-                    exp = Experiment.query.filter_by(id=experiment_id).first()
-                    if exp:
-                        if experiment_success and telemetry_success:
-                            exp.status = 'completed'
-                            print(f"[EXPERIMENT] {experiment_name} marked as completed", flush=True)
-                        else:
-                            exp.status = 'completed_with_errors'
-                            error_details = []
-                            if not experiment_success:
-                                error_details.append(f"Experiment: {experiment_error}")
-                            if not telemetry_success:
-                                error_details.append(f"Telemetry: {telemetry_error}")
-                            print(f"[EXPERIMENT] {experiment_name} completed with errors: {'; '.join(error_details)}", flush=True)
+                    # remove from dictionary when completed
+                    with experiments_lock:
+                        if reservation_id in running_experiments:
+                            del running_experiments[reservation_id]
 
-                        db.session.commit()
+                    with app.app_context():
+                        # update experiment status
+                        exp = Experiment.query.filter_by(id=experiment_id).first()
+                        if exp:
+                            # check if the termination is volunteered
+                            is_user_stop = ((not experiment_success and experiment_error and "stopped by user" in experiment_error.lower()) or
+                                    (not telemetry_success and telemetry_error and "stopped by user" in telemetry_error.lower()))
+
+                            if is_user_stop:
+                                exp.status = "stopped"
+                                print(f"[EXPERIMENT] {experiment_name} stopped by user", flush=True)
+
+                            elif experiment_success and telemetry_success:
+                                exp.status = 'completed'
+                                print(f"[EXPERIMENT] {experiment_name} marked as completed", flush=True)
+                            else:
+                                exp.status = 'error'
+                                error_details = []
+                                if not experiment_success  and not (experiment_error and "stopped by user" in experiment_error.lower()):
+                                    error_details.append(f"Experiment: {experiment_error}")
+                                if not telemetry_success and not (telemetry_error and "stopped by user" in telemetry_error.lower()):
+                                    error_details.append(f"Telemetry: {telemetry_error}")
+                                if error_details:
+                                    print(f"[EXPERIMENT] {experiment_name} failed: {', '.join(error_details)}", flush=True)
+                                else:
+                                    print(f"[EXPERIMENT] {experiment_name} encountered an error", flush=True)
+
+                            db.session.commit()
 
             except Exception as e:
                 print(f"[EXPERIMENT THREAD ERROR] {str(e)}", flush=True)
@@ -1483,13 +1593,102 @@ def finish_experiment():
                 'error': 'No experiment found for this reservation'
             }), 404
 
+        print(f"[FINISH] Stopping experiment for reservation {reservation_id}", flush=True)
+
+
+        # set stop flag for threads
+        with experiments_lock:
+            if reservation_id in running_experiments:
+                print(f"[FINISH] Setting stop flag for threads", flush=True)
+                running_experiments[reservation_id]['stop_flag'].set()
+            else:
+                print(f"[FINISH] Warning: No running experiment tracked for reservation {reservation_id}", flush=True)
+
+        print(f"[FINISH] Waiting for threads to stop...", flush=True)
+        max_wait = 20
+        waited = 0
+        threads_stopped = False
+
+        while waited < max_wait:
+            with experiments_lock:
+                if reservation_id not in running_experiments:
+                    print(f"[FINISH] Threads stopped naturally", flush=True)
+                    threads_stopped = True
+                    break
+
+                # check if futures are ready
+                futures = running_experiments[reservation_id].get('futures', [])
+                if futures:
+                    all_done = all(f.done() for f in futures)
+                    if all_done:
+                        print(f"[FINISH] All futures completed after {waited:.1f}s", flush=True)
+                        del running_experiments[reservation_id]
+                        threads_stopped = True
+                        break
+
+            time.sleep(0.5)
+            waited += 0.5
+        if not threads_stopped:
+            # remove if still running
+            with experiments_lock:
+                if reservation_id in running_experiments:
+                    print(f"[FINISH] Force removing experiment from tracking after {max_wait}s timeout", flush=True)
+                    del running_experiments[reservation_id]
+
+        print(f"[FINISH] Running cleanup playbook", flush=True)
+
+        # get inventory path
+        safe_res = safe_filename(f"res-{reservation_id}-inventory")
+        inventory_path = os.path.join(INVENTORY_DIR, f"{safe_res}.ini")
+
+        cleanup_success = True
+        cleanup_message = ""
+
+        if not os.path.exists(inventory_path):
+            print(f"[FINISH] Warning: inventory file not found", flush=True)
+            cleanup_message = "Warning: inventory file not found, cleanup skipped"
+        else:
+            # cleanup playbook
+            cleanup_playbook_path = os.path.join(
+                EXPERIMENT_PLAYBOOKS_DIR,
+                "iperf_common",
+                "cleanup_iperf.yml"
+            )
+
+            if os.path.exists(cleanup_playbook_path):
+                print(f"[FINISH] Executing cleanup playbook: {cleanup_playbook_path}", flush=True)
+
+                # run playbook on every device
+                returncode, stdout, stderr = run_ansible_playbook(
+                    inventory_path=inventory_path,
+                    playbook_path=cleanup_playbook_path,
+                    extra_vars={},
+                    timeout=120
+                )
+
+                if returncode == 0:
+                    print(f"[FINISH] Cleanup playbook completed successfully", flush=True)
+                    cleanup_message = "Cleanup completed successfully"
+                else:
+                    print(f"[FINISH] Cleanup playbook failed with code {returncode}", flush=True)
+                    print(f"[FINISH] stdout: {stdout}", flush=True)
+                    print(f"[FINISH] stderr: {stderr}", flush=True)
+                    cleanup_success = False
+                    cleanup_message = f"Cleanup failed: {stderr[:200]}"
+            else:
+                print(f"[FINISH] Warning: cleanup playbook not found at {cleanup_playbook_path}", flush=True)
+
         # remove record from database
+        print(f"[FINISH] Removing experiment from database", flush=True)
         db.session.delete(running_experiment)
         db.session.commit()
 
+        print(f"[FINISH] Experiment finished and removed successfully", flush=True)
+
         return jsonify({
             'success': True,
-            'message': 'Experiment finished and removed successfully'
+            "message": f"Experiment stopped and removed. {cleanup_message}",
+            "cleanup_success": cleanup_success
         }), 200
 
     except Exception as e:

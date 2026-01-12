@@ -21,6 +21,7 @@ export default function ExperimentControls({
     timerIntervalRef
 }) {
     const experimentEndTimeRef = React.useRef(null);
+    const [currentExperimentName, setCurrentExperimentName] = React.useState('');
 
     // function to format time for timer
     const formatTime = (totalSeconds) => {
@@ -49,6 +50,7 @@ export default function ExperimentControls({
                     const remainingSeconds = data.remaining_seconds;
                     setRunningExperiment(true);
                     setCurrentExperimentId(data.experiment_id);
+                    setCurrentExperimentName(data.experimentname);
                     setExperimentRunMessage(`Experiment "${data.experiment_name}" in progress`);
                     setExperimentRunMessageType('success');
                     //setExperimentTimer(formatTime(remainingSeconds));
@@ -170,6 +172,7 @@ export default function ExperimentControls({
                 const durationSeconds = data.duration_s;
                 setRunningExperiment(true);
                 setCurrentExperimentId(data.experiment_id);
+                setCurrentExperimentName(experimentName);
                 setExperimentRunMessage(`Experiment "${experimentName}" started successfully`);
                 setExperimentRunMessageType('success');
 
@@ -196,6 +199,7 @@ export default function ExperimentControls({
                         setExperimentTimer('--:--:--');
                         setRunningExperiment(false);
                         setCurrentExperimentId(null);
+                        setCurrentExperimentName('');
                         setExperimentRunMessage(`Experiment "${experimentName}" completed`);
                         setExperimentRunMessageType('success');
                         // experiment completed, update status
@@ -240,6 +244,10 @@ export default function ExperimentControls({
             return;
         }
 
+        const expName = currentExperimentName || 'Current experiment';
+        setExperimentRunMessage(`Stopping ${expName}...`);
+        setExperimentRunMessageType('warning');
+
         setWaitOperation(true);
 
         try {
@@ -261,7 +269,8 @@ export default function ExperimentControls({
                 setRunningExperiment(false);
                 setCurrentExperimentId(null);
                 setExperimentTimer('--:--:--');
-                setExperimentRunMessage('Experiment finished and removed');
+                setCurrentExperimentName('');
+                setExperimentRunMessage(`Experiment ${expName} finished and removed`);
                 setExperimentRunMessageType('success');
 
                 setTimeout(() => {
