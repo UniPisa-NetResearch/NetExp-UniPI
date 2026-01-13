@@ -171,7 +171,7 @@ def collect_telemetry_data(reservation_id, experiment_name, telemetry_config, in
                                     'value': result
                                 })
 
-                            print(f"[TELEMETRY] ✓ {metric_name} from {target} at {timestamp}", flush=True)
+                            print(f"[TELEMETRY] {metric_name} from {target} at {timestamp}", flush=True)
 
                     except Exception as e:
                         print(f"[TELEMETRY ERROR] {metric_name} from {target}: {str(e)}", flush=True)
@@ -264,6 +264,141 @@ def collect_telemetry_data(reservation_id, experiment_name, telemetry_config, in
         traceback.print_exc()
         return False, error_msg
 
+
+def convert_iperf_experiment_to_schedule(experiment_data):
+    # Convert a guided mode experiment in standard schedule format
+
+    iperf_flows = experiment_data.get('iperf_flows', [])
+    schedule_actions = experiment_data.get('schedule', [])
+    playbooks_base_path = experiment_data.get('playbooks_base_path', 'iperf_common')
+
+    # create flows dictionary
+    flows_dict = {flow['flow_id']: flow for flow in iperf_flows}
+
+    standard_schedule = []
+
+    # group actions by time
+    actions_by_time = {}
+
+    for action_item in schedule_actions:
+        time_offset = action_item.get('time_offset_s', 0)
+        action = action_item.get('action', '')
+
+        if time_offset not in actions_by_time:
+            actions_by_time[time_offset] = []
+        actions_by_time[time_offset].append(action_item)
+
+    # process each group time
+    for time_offset in sorted(actions_by_time.keys()):
+        actions = actions_by_time[time_offset]
+
+        all_servers = []
+        server_extra_vars = {}
+
+        all_clients = []
+        client_flows = []
+
+        for action_item in actions:
+            action = action_item.get('action', '')
+
+            if action == 'start_iperf_servers':
+                # start server for every flow
+                flow_ids = action_item.get('flow_ids', [])
+
+                # create a separate task for each server
+                for fid in flow_ids:
+                    if fid in flows_dict:
+                        flow = flows_dict[fid]
+                        server = flow['server']
+
+                        if server not in all_servers:
+                            all_servers.append(server)
+                            server_extra_vars[server] = {
+                                'server_ip': flow['server_ip'],
+                                'port': flow['port']
+                            }
+
+            elif action == 'start_iperf_client':
+                # start client for a single flow
+                flow_id = action_item.get('flow_id')
+                if flow_id and flow_id in flows_dict:
+                    flow = flows_dict[flow_id]
+                    client = flow['client']
+
+                    if client not in all_clients:
+                        all_clients.append(client)
+
+                    client_flows.append({
+                        'client': client,
+                        'flow': flow,
+                        'flow_id': flow_id
+                    })
+
+            elif action == 'stop_iperf':
+                # stop iperf in every device
+                flow_ids = action_item.get('flow_ids', [])
+                devices = set()
+                for fid in flow_ids:
+                    if fid in flows_dict:
+                        devices.add(flows_dict[fid]['client'])
+                        devices.add(flows_dict[fid]['server'])
+
+                standard_schedule.append({
+                    'time_offset_s': time_offset,
+                    'name': 'STOP_IPERF',
+                    'playbook': 'stop_iperf.yml',
+                    'targets': list(devices)
+                })
+
+
+        if all_servers:
+            servers_config = {}
+            for server in all_servers:
+                if server in server_extra_vars:
+                    servers_config[server] = server_extra_vars[server]
+
+            standard_schedule.append({
+                'time_offset_s': time_offset,
+                'name': f"START_SERVERS_T{time_offset}",
+                'playbook': 'start_iperf_server.yml',
+                'targets': all_servers,
+                'extra_vars': {
+                    'servers_config': servers_config
+                }
+            })
+
+        if all_clients:
+            clients_config = {}
+            for cf in client_flows:
+                client = cf['client']
+                flow = cf['flow']
+                flow_id = cf['flow_id']
+
+                if client not in clients_config:
+                    clients_config[client] = []
+
+                clients_config[client].append({
+                    'flow_id': flow_id,
+                    'server': flow['server'],
+                    'server_ip': flow['server_ip'],
+                    'port': flow['port'],
+                    'bandwidth_mbps': flow.get('bandwidth_mbps', 'unlimited'),
+                    'protocol': flow.get('protocol', 'tcp'),
+                    'duration': flow.get('duration_s', 60)
+                })
+
+            standard_schedule.append({
+                'time_offset_s': time_offset,
+                'name': f"START_CLIENTS_T{time_offset}",
+                'playbook': 'start_iperf_client.yml',
+                'targets': all_clients,
+                'extra_vars': {
+                    'clients_config': clients_config
+                }
+            })
+
+    return standard_schedule, playbooks_base_path
+
 def execute_experiment_schedule(reservation_id, experiment_name, experiment_data, inventory_path):
     # execute experiment schedule
     try:
@@ -273,8 +408,15 @@ def execute_experiment_schedule(reservation_id, experiment_name, experiment_data
         schedule = experiment_data.get('schedule', [])
         duration_s = experiment_data.get('duration_s', 0)
 
-        experiment_name_base = os.path.splitext(experiment_name)[0]
-        playbooks_dir = os.path.join(EXPERIMENT_PLAYBOOKS_DIR, f'res_{reservation_id}', experiment_name_base)
+        if 'playbooks_base_path' in experiment_data:
+            # Guided mode: use shared playbooks
+            playbooks_base = experiment_data['playbooks_base_path']
+            playbooks_dir = os.path.join(EXPERIMENT_PLAYBOOKS_DIR, playbooks_base)
+            print(f"[EXPERIMENT] Using shared playbooks: {playbooks_dir}", flush=True)
+        else:
+            # Free/Interactive mode
+            experiment_name_base = os.path.splitext(experiment_name)[0]
+            playbooks_dir = os.path.join(EXPERIMENT_PLAYBOOKS_DIR, f'res_{reservation_id}', experiment_name_base)
 
         print(f"[EXPERIMENT] Starting execution of {experiment_name}", flush=True)
         print(f"[EXPERIMENT] Total duration: {duration_s}s", flush=True)
@@ -378,10 +520,8 @@ def execute_experiment_schedule(reservation_id, experiment_name, experiment_data
             print(f"[EXPERIMENT] Playbook execution starting at T+{exec_elapsed:.1f}s (scheduled: T+{time_offset}s)",
                   flush=True)
 
-            # Esegui playbook con Ansible
-            extra_vars = {
-                'target_devices': targets
-            }
+            extra_vars = step.get('extra_vars', {})
+            extra_vars['target_devices'] = targets
 
             returncode, stdout, stderr = run_ansible_playbook(inventory_path=inventory_path, playbook_path=playbook_path, extra_vars=extra_vars, timeout=300)
 
@@ -843,7 +983,7 @@ def create_iperf_experiment():
         experiment_name = data.get('experiment_name')
         duration = data.get('duration')
         reservation_id = data.get('reservation_id')
-        flows = data.get('flows', [])  # MODIFICATO: riceve lista di flussi
+        flows = data.get('flows', [])
 
         if not experiment_name or not duration or not reservation_id:
             return jsonify({'error': 'Missing required fields'}), 400
@@ -892,21 +1032,30 @@ def create_iperf_experiment():
 
         # iperf_flows section creation
         iperf_flows = []
+        all_flow_ids = []
         for idx, flow in enumerate(flows, 1):
             start_offset = int(flow.get('startOffset')) if flow.get('startOffset') else 5
-            flow_duration = int(flow.get('duration')) if flow.get('duration') else int(duration) - start_offset - 5
+
+            if flow.get('duration'):
+                flow_duration = int(flow.get('duration'))
+                if flow_duration + start_offset > int(duration) - 5:
+                    flow_duration = int(duration) - start_offset - 5
+            else:
+                flow_duration = int(duration) - start_offset - 5
 
             iperf_flows.append({
                 'flow_id': idx,
                 'client': flow['client'],
                 'server': flow['server'],
+                'server_ip': flow['serverIp'],
+                'port': int(flow['port']),
                 'bandwidth_mbps': int(flow['bandwidth']) if flow.get('bandwidth') else 1000,
                 'protocol': flow.get('protocol', 'tcp'),
                 #'parallel_streams': int(flow.get('parallelStreams', 1)),
                 'start_offset_s': start_offset,
-                'duration_s': flow_duration,
-                'port': 5201
+                'duration_s': flow_duration
             })
+            all_flow_ids.append(idx)
 
         experiment_doc = {
             'experiment_id': experiment_name.strip().upper().replace(' ', '_'),
@@ -1328,6 +1477,18 @@ def run_experiment():
                 experiment_data = yaml.safe_load(f)
 
             duration_s = experiment_data.get('duration_s')
+
+            if 'iperf_flows' in experiment_data and 'playbooks_base_path' in experiment_data:
+                print(f"[RUN] Detected guided mode (iperf) experiment", flush=True)
+
+                # convert in standard format
+                converted_schedule, playbooks_path = convert_iperf_experiment_to_schedule(experiment_data)
+
+                # change schedule with the converted one
+                experiment_data['schedule'] = converted_schedule
+
+                print(f"[RUN] Converted {len(converted_schedule)} schedule steps", flush=True)
+                print(f"[RUN] Using playbooks from: {playbooks_path}", flush=True)
 
             if duration_s is None:
                 return jsonify({

@@ -718,13 +718,20 @@
 
 /* Iperf flows container */
 .iperf-flow-container {
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 8px;
   background-color: rgba(248, 249, 250, 0.6);
   border-radius: 6px;
   margin-bottom: 8px;
+  max-width: 98%;
+}
+.field-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
 .label-flow {

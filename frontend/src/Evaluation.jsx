@@ -192,12 +192,26 @@ export default function Evaluation({ username, reservation_id }) {
               }
             } else {
               // Config DB: val = {"SAI_PORT_STAT_...": "value", ...}
-              for (const fieldKey in val) {
-                fields.push({
-                  path: fieldKey,
-                  label: fieldKey,
-                  fullPath: fieldKey
-                });
+              for (const interfaceKey in val) {
+                const interfaceData = val[interfaceKey];
+                // expand if the value is an object
+                if (typeof interfaceData === 'object' && interfaceData !== null && !Array.isArray(interfaceData)) {
+                  // extract each field from nested level
+                  for (const fieldKey in interfaceData) {
+                    fields.push({
+                      path: `${interfaceKey}.${fieldKey}`,
+                      label: `${interfaceKey} - ${fieldKey}`,
+                      fullPath: `${interfaceKey}.${fieldKey}`
+                    });
+                  }
+                } else {
+                  // use directly a simple value
+                  fields.push({
+                    path: interfaceKey,
+                    label: interfaceKey,
+                    fullPath: interfaceKey
+                  });
+                }
               }
             }
           }
@@ -247,13 +261,24 @@ export default function Evaluation({ username, reservation_id }) {
             for (const notif of notifications) {
 
                 if (notif.update && Array.isArray(notif.update)) {
-                    // remove leading slash from metric name if present
-                    const normalizedMetric = selectedMetric.startsWith('/') ? selectedMetric.substring(1) : selectedMetric;
-                    // find the update corresponding to the selected metric
-                    const matchingUpdate = notif.update.find(upd => upd.path === normalizedMetric);
+                    const isOpenConfig = selectedMetric.includes('openconfig');
+                    let val = null;
+                    if(isOpenConfig) {
+                        // remove leading slash from metric name if present
+                        const normalizedMetric = selectedMetric.startsWith('/') ? selectedMetric.substring(1) : selectedMetric;
+                        // find the update corresponding to the selected metric
+                        const matchingUpdate = notif.update.find(upd => upd.path === normalizedMetric);
 
-                    if (matchingUpdate) {
-                        const val = matchingUpdate.val;
+                        if (matchingUpdate) {
+                           val = matchingUpdate.val;
+                        }
+                    } else {
+                      // Sonic DB:
+                      if (notif.update.length > 0) {
+                          val = notif.update[0].val;
+                      }
+                    }
+                    if(val){
                         // navigate nested object structure using field path
                         const pathParts = selectedField.split('.');
 
@@ -262,8 +287,10 @@ export default function Evaluation({ username, reservation_id }) {
                         // traverse object hierarchy
                         for (const part of pathParts) {
                           currentVal = currentVal?.[part];
+                          if (currentVal === undefined || currentVal === null) {
+                            break;
+                            }
                         }
-
                         extractedValue = currentVal;
                         break;
                    }else {

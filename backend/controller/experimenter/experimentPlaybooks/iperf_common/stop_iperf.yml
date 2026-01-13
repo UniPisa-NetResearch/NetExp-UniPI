@@ -46,7 +46,7 @@
           All iperf3 processes stopped successfully
           {% endif %}
 
-    - name: Archive iperf3 results (optional)
+    - name: Archive iperf3 results
       archive:
         path: /tmp/iperf3_results
         dest: "/tmp/iperf3_results_{{ ansible_date_time.iso8601_basic_short }}.tar.gz"
@@ -55,7 +55,7 @@
       ignore_errors: yes
       when: archive_results | default(false) | bool
 
-    - name: Clean up temporary files (optional)
+    - name: Clean up temporary files
       file:
         path: /tmp/iperf3_results
         state: absent

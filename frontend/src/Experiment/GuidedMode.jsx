@@ -57,6 +57,8 @@ export default function GuidedMode({
                 id: newId,
                 client: '',
                 server: '',
+                serverIp: '',
+                port: 5201,
                 bandwidth: '',
                 protocol: 'tcp',
                 startOffset: '',
@@ -74,6 +76,10 @@ export default function GuidedMode({
     const handleIperfFlowChange = (flowId, field, value) => {
         if (['bandwidth', 'startOffset', 'duration'].includes(field)) {
             if (value !== '' && !/^\d+$/.test(value)) return;
+        }
+
+        if (field === 'port') {
+            value = value === '' ? '' : parseInt(value);
         }
 
         setIperfFlows(prev =>
@@ -114,6 +120,41 @@ export default function GuidedMode({
             setGuidedMessage('Client and server cannot be the same device in a flow');
             setGuidedMessageType('error');
             return;
+        }
+
+        const hasEmptyServerIp = iperfFlows.some(flow => !flow.serverIp || !flow.serverIp.trim());
+        if (hasEmptyServerIp) {
+            setGuidedMessage('All flows must have server IP address specified');
+            setGuidedMessageType('error');
+            return;
+        }
+
+        const ipRegex = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/;
+        const hasInvalidIp = iperfFlows.some(flow => !ipRegex.test(flow.serverIp));
+        if (hasInvalidIp) {
+            setGuidedMessage('Invalid IP address format in one or more flows');
+            setGuidedMessageType('error');
+            return;
+        }
+
+        const hasInvalidPort = iperfFlows.some(flow =>
+            !flow.port || flow.port < 1024 || flow.port > 65535
+        );
+        if (hasInvalidPort) {
+            setGuidedMessage('Port must be between 1024 and 65535');
+            setGuidedMessageType('error');
+            return;
+        }
+
+        const portBindings = {};
+        for (const flow of iperfFlows) {
+            const key = `${flow.server}:${flow.serverIp}:${flow.port}`;
+            if (portBindings[key]) {
+                setGuidedMessage(`Port conflict: ${flow.server} on ${flow.serverIp}:${flow.port} is used by multiple flows`);
+                setGuidedMessageType('error');
+                return;
+            }
+            portBindings[key] = true;
         }
 
         const invalidTiming = iperfFlows.some(flow =>
@@ -246,79 +287,112 @@ export default function GuidedMode({
 
                 {iperfFlows.map((flow, idx) => (
                     <div key={flow.id} className="config-row config-row-nowrap iperf-flow-container">
-                        <label className="label-inline label-flow">Client:</label>
-                        <select
-                            className={`flow-select ${flow.client && flow.server === flow.client ? 'flow-select-error' : ''}`}
-                            value={flow.client}
-                            onChange={(e) => handleIperfFlowChange(flow.id, 'client', e.target.value)}
-                            disabled={runningExperiment}
-                        >
-                            <option value="">Select</option>
-                            {iperfClients.map(client => (
-                                <option key={client} value={client} disabled={client === flow.server}>{client}{client === flow.server? ' (same as server' : ''}</option>
-                            ))}
-                        </select>
-
+                        <div className="field-group">
+                            <label className="label-inline label-flow">Client:</label>
+                            <select
+                                className={`flow-select ${flow.client && flow.server === flow.client ? 'flow-select-error' : ''}`}
+                                value={flow.client}
+                                onChange={(e) => handleIperfFlowChange(flow.id, 'client', e.target.value)}
+                                disabled={runningExperiment}
+                            >
+                                <option value="">Select</option>
+                                {iperfClients.map(client => (
+                                    <option key={client} value={client}
+                                            disabled={client === flow.server}>{client}{client === flow.server ? ' (same as server' : ''}</option>
+                                ))}
+                            </select>
+                        </div>
                         <span className="flow-arrow">→</span>
-
-                        <label className="label-inline label-flow">Server:</label>
-                        <select
-                            className={`flow-select ${flow.client && flow.server === flow.client ? 'flow-select-error' : ''}`}
-                            value={flow.server}
-                            onChange={(e) => handleIperfFlowChange(flow.id, 'server', e.target.value)}
-                            disabled={runningExperiment}
-                        >
-                            <option value="">Select</option>
-                            {iperfServers.map(server => (
-                                <option key={server} value={server} disabled={server === flow.client}>{server}{server === flow.client ? ' (same as client)' : ''}</option>
-                            ))}
-                        </select>
-
-                        <label className="label-inline label-flow">BW(Mbps):</label>
-                        <input
-                            type="text"
-                            className="flow-field"
-                            value={flow.bandwidth}
-                            onChange={(e) => handleIperfFlowChange(flow.id, 'bandwidth', e.target.value)}
-                            placeholder="1000"
-                            disabled={runningExperiment}
-                        />
-
-                        <label className="label-inline label-flow">Protocol:</label>
-                        <select
-                            className="flow-select-short"
-                            value={flow.protocol}
-                            onChange={(e) => handleIperfFlowChange(flow.id, 'protocol', e.target.value)}
-                            disabled={runningExperiment}
-                        >
-                            <option value="tcp">TCP</option>
-                            <option value="udp">UDP</option>
-                        </select>
-
-                        <label className="label-inline label-flow">Start(s):</label>
-                        <input
-                            type="text"
-                            className="flow-field"
-                            value={flow.startOffset}
-                            onChange={(e) => handleIperfFlowChange(flow.id, 'startOffset', e.target.value)}
-                             placeholder="5"
-                            disabled={runningExperiment}
-                        />
-
-                        <label className="label-inline label-flow">Duration(s):</label>
-                        <input
-                            type="text"
-                            className="flow-field"
-                            value={flow.duration}
-                            onChange={(e) => handleIperfFlowChange(flow.id, 'duration', e.target.value)}
-                            placeholder="Auto"
-                            disabled={runningExperiment}
-                        />
+                        <div className="field-group">
+                            <label className="label-inline label-flow">Server:</label>
+                            <select
+                                className={`flow-select ${flow.client && flow.server === flow.client ? 'flow-select-error' : ''}`}
+                                value={flow.server}
+                                onChange={(e) => handleIperfFlowChange(flow.id, 'server', e.target.value)}
+                                disabled={runningExperiment}
+                            >
+                                <option value="">Select</option>
+                                {iperfServers.map(server => (
+                                    <option key={server} value={server}
+                                            disabled={server === flow.client}>{server}{server === flow.client ? ' (same as client)' : ''}</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div className="field-group">
+                            <label className="label-inline label-flow">Server IP:</label>
+                            <input
+                                type="text"
+                                className="flow-field flow-field-ip"
+                                value={flow.serverIp}
+                                onChange={(e) => handleIperfFlowChange(flow.id, 'serverIp', e.target.value)}
+                                placeholder="10.0.1.1"
+                                disabled={runningExperiment}
+                                style={{width: '110px'}}
+                            />
+                        </div>
+                        <div className="field-group">
+                            <label className="label-inline label-flow">Port:</label>
+                            <input
+                                type="number"
+                                className="flow-field"
+                                value={flow.port}
+                                onChange={(e) => handleIperfFlowChange(flow.id, 'port', e.target.value)}
+                                min="1024"
+                                max="65535"
+                                disabled={runningExperiment}
+                                style={{width: '70px'}}
+                            />
+                        </div>
+                        <div className="field-group">
+                            <label className="label-inline label-flow">BW(Mbps):</label>
+                            <input
+                                type="text"
+                                className="flow-field"
+                                value={flow.bandwidth}
+                                onChange={(e) => handleIperfFlowChange(flow.id, 'bandwidth', e.target.value)}
+                                placeholder="1000"
+                                disabled={runningExperiment}
+                            />
+                        </div>
+                        <div className="field-group">
+                            <label className="label-inline label-flow">Protocol:</label>
+                            <select
+                                className="flow-select-short"
+                                value={flow.protocol}
+                                onChange={(e) => handleIperfFlowChange(flow.id, 'protocol', e.target.value)}
+                                disabled={runningExperiment}
+                            >
+                                <option value="tcp">TCP</option>
+                                <option value="udp">UDP</option>
+                            </select>
+                        </div>
+                        <div className="field-group">
+                            <label className="label-inline label-flow">Start(s):</label>
+                            <input
+                                type="text"
+                                className="flow-field"
+                                value={flow.startOffset}
+                                onChange={(e) => handleIperfFlowChange(flow.id, 'startOffset', e.target.value)}
+                                placeholder="5"
+                                disabled={runningExperiment}
+                            />
+                        </div>
+                        <div className="field-group">
+                            <label className="label-inline label-flow">Duration(s):</label>
+                            <input
+                                type="text"
+                                className="flow-field"
+                                value={flow.duration}
+                                onChange={(e) => handleIperfFlowChange(flow.id, 'duration', e.target.value)}
+                                placeholder="Auto"
+                                disabled={runningExperiment}
+                            />
+                        </div>
 
                         <label
                             className="label-inline add-remove-label"
                             onClick={() => handleAddIperfFlow(idx)}
-                            style={{ pointerEvents: runningExperiment ? 'none' : 'auto' }}
+                            style={{pointerEvents: runningExperiment ? 'none' : 'auto'}}
                         >+</label>
                         <label
                             className="label-inline add-remove-label"

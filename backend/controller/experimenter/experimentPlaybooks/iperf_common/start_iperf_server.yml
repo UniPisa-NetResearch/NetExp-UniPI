@@ -1,6 +1,6 @@
 ---
 - name: Start iperf3 server on target hosts
-  hosts: all
+  hosts: "{{ target_devices | join(',') }}"
   gather_facts: no
   become: yes
   tasks:
@@ -20,9 +20,13 @@
       changed_when: false
       ignore_errors: yes
 
-    - name: Start iperf3 server
+    - name: Get server config for this host
+      set_fact:
+        server_config: "{{ servers_config[inventory_hostname] }}"
+
+    - name: Start iperf3 server on specific IP and port
       shell: |
-        nohup iperf3 -s -p {{ port | default(5201) }} -D > /dev/null 2>&1 &
+        nohup iperf3 -s -p {{ server_config.port }} -4 -D > /dev/null 2>&1 &
       args:
         executable: /bin/bash
       async: 2
@@ -30,11 +34,12 @@
 
     - name: Wait for iperf3 server to start
       wait_for:
-        port: "{{ port | default(5201) }}"
+        host: "{{ server_config.server_ip }}"
+        port: "{{ server_config.port }}"
         delay: 1
         timeout: 10
       ignore_errors: yes
 
     - name: Log server start
       debug:
-        msg: "iperf3 server started on {{ inventory_hostname }} at port {{ port | default(5201) }}"
+        msg: "iperf3 server started on {{ inventory_hostname }} at port {{ server_config.port }}"
