@@ -26,7 +26,7 @@
 
     - name: Start iperf3 server on specific IP and port
       shell: |
-        nohup iperf3 -s -p {{ server_config.port }} -4 -D > /dev/null 2>&1 &
+        nohup iperf3 -s -p {{ server_config.port }} -4 > /dev/null 2>&1 &
       args:
         executable: /bin/bash
       async: 2

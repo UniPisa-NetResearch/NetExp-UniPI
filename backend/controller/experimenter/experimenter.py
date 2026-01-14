@@ -13,9 +13,7 @@ from werkzeug.utils import secure_filename
 from ...database.db import db, UserMetrics, Reservation, Experiment
 from pygnmi.client import gNMIclient
 from ...app import app
-from ..controller import (safe_filename, run_ansible_playbook, INVENTORY_DIR)
-# true if development mode is active
-TEST = True
+from ..controller import (safe_filename, run_ansible_playbook, INVENTORY_DIR, win_to_wsl_path, TEST)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 EXPERIMENT_TEMPLATES_DIR = os.path.join(BASE_DIR, "experimentTemplates")
@@ -350,7 +348,6 @@ def convert_iperf_experiment_to_schedule(experiment_data):
                     'targets': list(devices)
                 })
 
-
         if all_servers:
             servers_config = {}
             for server in all_servers:
@@ -407,7 +404,32 @@ def execute_experiment_schedule(reservation_id, experiment_name, experiment_data
         # get schedule section values and global duration
         schedule = experiment_data.get('schedule', [])
         duration_s = experiment_data.get('duration_s', 0)
+        """
+        wrapper_playbook = os.path.join(EXPERIMENT_PLAYBOOKS_DIR, 'iperf_common', 'create_iperf_wrapper.yml')
 
+        if os.path.exists(wrapper_playbook):
+            print(f"[EXPERIMENT] Creating automatic iperf3 output capture", flush=True)
+
+            # find every target
+            all_targets = set()
+            for step in schedule:
+                all_targets.update(step.get('targets', []))
+
+            if all_targets:
+                extra_vars = {'target_devices': list(all_targets)}
+                returncode, stdout, stderr = run_ansible_playbook(
+                    inventory_path=inventory_path,
+                    playbook_path=wrapper_playbook,
+                    extra_vars=extra_vars,
+                    timeout=60
+                )
+
+                if returncode == 0:
+                    print(f"[EXPERIMENT] Wrapper setup completed successfully", flush=True)
+                else:
+                    print(f"[EXPERIMENT WARNING] Wrapper setup failed (code {returncode}), continuing anyway",
+                          flush=True)
+        """
         if 'playbooks_base_path' in experiment_data:
             # Guided mode: use shared playbooks
             playbooks_base = experiment_data['playbooks_base_path']
@@ -417,6 +439,20 @@ def execute_experiment_schedule(reservation_id, experiment_name, experiment_data
             # Free/Interactive mode
             experiment_name_base = os.path.splitext(experiment_name)[0]
             playbooks_dir = os.path.join(EXPERIMENT_PLAYBOOKS_DIR, f'res_{reservation_id}', experiment_name_base)
+            """
+            cleanup_playbook_path = os.path.join(EXPERIMENT_PLAYBOOKS_DIR, 'iperf_common', 'stop_iperf.yml')
+            if os.path.exists(cleanup_playbook_path):
+                wsl_results_dir = ''
+                if TEST:
+                    wsl_results_dir = win_to_wsl_path(results_dir)
+                schedule.append({
+                    'time_offset_s': duration_s,
+                    'name': 'CLEANUP_IPERF',
+                    'targets': [],
+                    'playbook': '../../iperf_common/stop_iperf.yml',
+                    'extra_vars': {'experiment_results_path': wsl_results_dir if TEST else results_dir, 'save_results': True}
+                })
+            """
 
         print(f"[EXPERIMENT] Starting execution of {experiment_name}", flush=True)
         print(f"[EXPERIMENT] Total duration: {duration_s}s", flush=True)
@@ -496,8 +532,12 @@ def execute_experiment_schedule(reservation_id, experiment_name, experiment_data
             actual_dt = datetime.fromtimestamp(actual_time)
             print(f"[EXPERIMENT] Executing '{step_name}' at T+{actual_elapsed:.1f}s (absolute: {actual_dt.strftime('%H:%M:%S.%f')})", flush=True)
 
-            # run playbook
-            playbook_path = os.path.join(playbooks_dir, playbook_name)
+            if playbook_name.startswith('../') or playbook_name.startswith('..\\'):
+                playbook_path = os.path.normpath(os.path.join(playbooks_dir, playbook_name))
+                print(f"[EXPERIMENT] Resolved relative path: {playbook_name} -> {playbook_path}", flush=True)
+            else:
+                # run playbook
+                playbook_path = os.path.join(playbooks_dir, playbook_name)
 
             if not os.path.exists(playbook_path):
                 error_msg = f"Playbook not found: {playbook_path}"
@@ -522,6 +562,18 @@ def execute_experiment_schedule(reservation_id, experiment_name, experiment_data
 
             extra_vars = step.get('extra_vars', {})
             extra_vars['target_devices'] = targets
+
+            if 'STOP_IPERF' in step.get('name', ''):
+                # test mode
+                wsl_results_dir = ''
+                if TEST:
+                    wsl_results_dir = win_to_wsl_path(results_dir)
+
+                extra_vars = step.get('extra_vars', {})
+                extra_vars['experiment_results_path'] = wsl_results_dir if TEST else results_dir
+                if 'save_results' not in extra_vars:
+                    extra_vars['save_results'] = True
+                step['extra_vars'] = extra_vars
 
             returncode, stdout, stderr = run_ansible_playbook(inventory_path=inventory_path, playbook_path=playbook_path, extra_vars=extra_vars, timeout=300)
 
@@ -1813,7 +1865,7 @@ def finish_experiment():
             cleanup_playbook_path = os.path.join(
                 EXPERIMENT_PLAYBOOKS_DIR,
                 "iperf_common",
-                "cleanup_iperf.yml"
+                "stop_iperf.yml"
             )
 
             if os.path.exists(cleanup_playbook_path):
@@ -1823,7 +1875,7 @@ def finish_experiment():
                 returncode, stdout, stderr = run_ansible_playbook(
                     inventory_path=inventory_path,
                     playbook_path=cleanup_playbook_path,
-                    extra_vars={},
+                    extra_vars={'save_results': False},
                     timeout=120
                 )
 
@@ -1895,7 +1947,6 @@ def update_experiment_status():
         print(f"Error updating experiment status: {str(e)}")
         return jsonify({'success': False, 'error': f'Server error: {str(e)}'}), 500
 
-
 @app.route('/api/experimenter/getExperimentResults', methods=['POST'])
 def get_experiment_results():
     # return results of the last completed experiment
@@ -1936,6 +1987,24 @@ def get_experiment_results():
             with open(execution_log_file, 'r') as f:
                 execution_log = json.load(f)
 
+        # read iperf3 results
+        iperf_results = {}
+        for filename in os.listdir(results_dir):
+            if filename.startswith('iperf_') and filename.endswith('.txt'):
+                filepath = os.path.join(results_dir, filename)
+                try:
+                    with open(filepath, 'r') as f:
+                        text_content = f.read()
+                        if text_content:  # check if file is not empty
+                            # use filename without extension as key
+                            flow_name = os.path.splitext(filename)[0]
+
+                            iperf_results[flow_name] = {
+                                'text': text_content
+                            }
+                except Exception as e:
+                    print(f"[ERROR] Error reading {filename}: {str(e)}", flush=True)
+
         return jsonify({
             'success': True,
             'experiment_name': experiment_name,
@@ -1944,7 +2013,8 @@ def get_experiment_results():
             'end_time': completed_experiment.end_time.isoformat(),
             'duration_s': completed_experiment.duration_s,
             'telemetry_results': telemetry_results,
-            'execution_log': execution_log
+            'execution_log': execution_log,
+            'iperf_results': iperf_results
         }), 200
 
     except Exception as e:

@@ -4,24 +4,36 @@
   gather_facts: no
   become: yes
   tasks:
+    - name: Find all iperf results
+      find:
+        paths: /tmp/iperf3_results
+        patterns: 'iperf_flow_*.txt'
+      register: iperf_txt
+      ignore_errors: yes
+
+    - name: Fetch txt results to controller
+      fetch:
+        src: "{{ item.path }}"
+        dest: "{{ experiment_results_path }}/{{ item.path | basename }}"
+        flat: yes
+      loop: "{{ iperf_txt.files | default([])}}"
+      when:
+        - experiment_results_path is defined
+        - iperf_txt.files is defined
+        - iperf_txt.files | length > 0
+        - save_results | default(true) | bool
+      become: no
+
     - name: Get list of iperf3 processes
       shell: ps aux | grep iperf3 | grep -v grep || true
       register: iperf_processes
       changed_when: false
       ignore_errors: yes
 
-    - name: Kill all iperf3 server processes
-      shell: pkill -9 'iperf3 -s' || true
-      changed_when: false
-      ignore_errors: yes
-
-    - name: Kill all iperf3 client processes
-      shell: pkill -9 'iperf3 -c' || true
-      changed_when: false
-      ignore_errors: yes
-
-    - name: Kill any remaining iperf3 processes
-      shell: pkill -9 iperf3 || true
+    - name: Kill all iperf3 processes
+      shell: | 
+            pkill -9 iperf3 || true
+            killall -9 iperf3 || true
       changed_when: false
       ignore_errors: yes
 
@@ -35,6 +47,33 @@
       changed_when: false
       ignore_errors: yes
 
+    - name: Remove custom TC rules (htb/netem/tbf) in one command
+      shell: |
+        tc qdisc show | grep -E 'qdisc (htb|netem|tbf)' | awk '{print $5}' | sort -u | while read iface; do
+          if [ -n "$iface" ] && [ "$iface" != "lo" ]; then
+            echo "Removing TC from $iface"
+            tc qdisc del dev $iface root 2>/dev/null || true
+            tc qdisc del dev $iface ingress 2>/dev/null || true
+          fi
+        done
+      register: tc_cleanup
+      ignore_errors: yes
+      changed_when: tc_cleanup.stdout != ""
+
+    - name: Verify TC cleanup
+      shell: |
+        tc_count=$(tc qdisc show | grep -cE '(htb|netem|tbf)' 2>/dev/null || echo 0)
+        echo "Custom TC rules remaining: $tc_count"
+      register: tc_status
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Remove /tmp/iperf3_results
+      file:
+        path: /tmp/iperf3_results
+        state: absent
+      ignore_errors: yes
+
     - name: Log stop status
       debug:
         msg: |
@@ -45,19 +84,3 @@
           {% else %}
           All iperf3 processes stopped successfully
           {% endif %}
-
-    - name: Archive iperf3 results
-      archive:
-        path: /tmp/iperf3_results
-        dest: "/tmp/iperf3_results_{{ ansible_date_time.iso8601_basic_short }}.tar.gz"
-        format: gz
-        remove: no
-      ignore_errors: yes
-      when: archive_results | default(false) | bool
-
-    - name: Clean up temporary files
-      file:
-        path: /tmp/iperf3_results
-        state: absent
-      when: cleanup_results | default(false) | bool
-      ignore_errors: yes

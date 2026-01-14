@@ -15,6 +15,11 @@ export default function Evaluation({ username, reservation_id }) {
     const [chartData, setChartData] = useState(null);                    // data for the plot
     const [errorMessage, setErrorMessage] = useState('');         // error message
     const [loadingData, setLoadingData] = useState(true);       // data loading
+    // iperf results
+    const [iperfResults, setIperfResults] = useState(null);              // iperf3 results
+    const [availableFlows, setAvailableFlows] = useState([]);      // available flows list
+    const [selectedFlow, setSelectedFlow] = useState('');          // selected flow
+    const [flowData, setFlowData] = useState(null);                       // selected flow data
 
     // extract unique metric names from telemetry results
     // telemetryResults is an Object with metric names as keys and returns an array of {name, label} objects
@@ -60,6 +65,16 @@ export default function Evaluation({ username, reservation_id }) {
             } else {
                 setErrorMessage('No telemetry data available');
             }
+
+            if (data.iperf_results) {
+                setIperfResults(data.iperf_results);
+                // extract flows
+                const flows = Object.keys(data.iperf_results).sort();
+                setAvailableFlows(flows);
+            } else {
+                setErrorMessage('No iperf data available');
+            }
+
         } catch (err) {
             console.error('Error loading results:', err);
             setErrorMessage('Network error while loading results');
@@ -412,6 +427,18 @@ export default function Evaluation({ username, reservation_id }) {
       window.URL.revokeObjectURL(url);
     };
 
+    const handleFlowSelection = (flowName) => {
+        setSelectedFlow(flowName);
+        setFlowData(null);
+
+        if (!flowName || !iperfResults[flowName]) {
+            return;
+        }
+
+        // load data of selected
+        setFlowData(iperfResults[flowName]);
+    };
+
     return (
         <div className="evaluation-wrapper">
             <div className="card evaluation-card">
@@ -464,15 +491,17 @@ export default function Evaluation({ username, reservation_id }) {
                                                 </div>
                                                 <div className="log-details">
                                                     <div><strong>Playbook:</strong> {step.playbook}</div>
-                                                    <div><strong>Targets:</strong> {step.targets ? step.targets.join(', ') : 'N/A'}
+                                                    <div>
+                                                        <strong>Targets:</strong> {step.targets ? step.targets.join(', ') : 'N/A'}
                                                     </div>
                                                     {step.error &&
-                                                        <div className="error-text"><strong>Error:</strong> {step.error}</div>}
+                                                        <div className="error-text"><strong>Error:</strong> {step.error}
+                                                        </div>}
                                                 </div>
                                             </div>
                                         ))}
                                     </div>
-                                 );
+                                );
                             })()}
                         </div>
 
@@ -484,77 +513,116 @@ export default function Evaluation({ username, reservation_id }) {
                             )}
 
                             {!loadingData && telemetryResults && (
-                            <>
-                              {/* select metric */}
-                              <div className="selection-row">
-                                <label>Select Metric:</label>
-                                <select
-                                  value={selectedMetric}
-                                  onChange={(e) => handleMetricSelection(e.target.value)}
-                                  disabled={availableMetrics.length === 0}
-                                >
-                                  <option value="">-- Select Metric --</option>
-                                  {availableMetrics.map(metric => (
-                                    <option key={metric.name} value={metric.name}>
-                                      {metric.label}
-                                    </option>
-                                  ))}
-                                </select>
-                              </div>
+                                <>
+                                    {/* select metric */}
+                                    <div className="selection-row">
+                                        <label>Select Metric:</label>
+                                        <select
+                                            value={selectedMetric}
+                                            onChange={(e) => handleMetricSelection(e.target.value)}
+                                            disabled={availableMetrics.length === 0}
+                                        >
+                                            <option value="">-- Select Metric --</option>
+                                            {availableMetrics.map(metric => (
+                                                <option key={metric.name} value={metric.name}>
+                                                    {metric.label}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
 
 
-                              {/* select device */}
-                              <div className="selection-row">
-                                  <label>Select Device:</label>
-                                  <select value={selectedDevice} onChange={(e) => handleDeviceSelection(e.target.value)} disabled={!selectedMetric || availableDevices.length === 0}>
-                                      <option value="">-- Select Device --</option>
-                                      {availableDevices.map(device => (
-                                          <option key={device} value={device}>{device}</option>
-                                      ))}
-                                  </select>
-                              </div>
+                                    {/* select device */}
+                                    <div className="selection-row">
+                                        <label>Select Device:</label>
+                                        <select value={selectedDevice}
+                                                onChange={(e) => handleDeviceSelection(e.target.value)}
+                                                disabled={!selectedMetric || availableDevices.length === 0}>
+                                            <option value="">-- Select Device --</option>
+                                            {availableDevices.map(device => (
+                                                <option key={device} value={device}>{device}</option>
+                                            ))}
+                                        </select>
+                                    </div>
 
 
-                              {/* select field */}
-                              <div className="selection-row">
-                                  <label>Select Field to Plot:</label>
-                                  <select value={selectedField} onChange={(e) => handleFieldSelection(e.target.value)} disabled={!selectedDevice || availableFields.length === 0}>
-                                    <option value="">-- Select Field --</option>
-                                    {availableFields.map(field => (
-                                      <option key={field.path} value={field.path}>
-                                        {field.label}
-                                      </option>
-                                    ))}
-                                  </select>
-                              </div>
+                                    {/* select field */}
+                                    <div className="selection-row">
+                                        <label>Select Field to Plot:</label>
+                                        <select value={selectedField}
+                                                onChange={(e) => handleFieldSelection(e.target.value)}
+                                                disabled={!selectedDevice || availableFields.length === 0}>
+                                            <option value="">-- Select Field --</option>
+                                            {availableFields.map(field => (
+                                                <option key={field.path} value={field.path}>
+                                                    {field.label}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
 
-                              {/* action buttons */}
-                              <div className="action-buttons">
-                                  <button className="btn-primary" onClick={handleGeneratePlot} disabled={!selectedMetric || !selectedDevice || !selectedField}>Generate Plot</button>
-                                  <button className="btn-secondary" onClick={handleDownloadCSV} disabled={!chartData || errorMessage}>Download CSV</button>
+                                    {/* action buttons */}
+                                    <div className="action-buttons">
+                                        <button className="btn-primary" onClick={handleGeneratePlot}
+                                                disabled={!selectedMetric || !selectedDevice || !selectedField}>Generate
+                                            Plot
+                                        </button>
+                                        <button className="btn-secondary" onClick={handleDownloadCSV}
+                                                disabled={!chartData || errorMessage}>Download CSV
+                                        </button>
 
-                              </div>
+                                    </div>
 
 
-                              {/* error message */}
-                              {errorMessage && (
-                                <div className="error-message">{errorMessage}</div>
-                              )}
+                                    {/* error message */}
+                                    {errorMessage && (
+                                        <div className="error-message">{errorMessage}</div>
+                                    )}
 
-                              {/* show plot */}
-                              {chartData && !errorMessage && (
-                                <div className="chart-container" style={{ height: '400px', marginTop: '20px' }}>
-                                  <canvas ref={chartRef}></canvas>
+                                    {/* show plot */}
+                                    {chartData && !errorMessage && (
+                                        <div className="chart-container" style={{height: '400px', marginTop: '20px'}}>
+                                            <canvas ref={chartRef}></canvas>
+                                        </div>
+                                    )}
+                                </>
+                            )}
+
+                            {!loadingData && !telemetryResults && (
+                                <div className="no-data-message">
+                                    No telemetry data available for this experiment
                                 </div>
-                              )}
-                            </>
-                          )}
+                            )}
+                        </div>
 
-                          {!loadingData && !telemetryResults && (
-                            <div className="no-data-message">
-                              No telemetry data available for this experiment
-                            </div>
-                          )}
+                        <div className="section-card">
+                            <h2>iPerf Flow Results</h2>
+
+                            {!iperfResults || Object.keys(iperfResults).length === 0 ? (
+                                <div className="no-data-message">
+                                    No iPerf results available for this experiment
+                                </div>
+                            ) : (
+                                <>
+                                    {/* Select flow */}
+                                    <div className="selection-row">
+                                        <label>Select Flow:</label>
+                                        <select value={selectedFlow} onChange={(e) => handleFlowSelection(e.target.value)}>
+                                            <option value="">-- Select Flow --</option>
+                                            {availableFlows.map(flow => (<option key={flow} value={flow}>{flow}</option>))}
+                                        </select>
+                                    </div>
+                                    {/* Full txt output */}
+                                    {flowData && flowData.text && (
+                                        <div className="iperf-viewer-card">
+                                            <h3>Flow Output: {selectedFlow}</h3>
+                                            <pre className="iperf-text-content">
+                                                {flowData.text}
+                                            </pre>
+                                        </div>
+                                    )}
+                                </>
+                            )}
                         </div>
                     </>
                 )}

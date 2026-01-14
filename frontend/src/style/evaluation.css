@@ -314,3 +314,33 @@
     background: rgba(220, 53, 69, 0.1);
     border-radius: 4px;
 }
+.iperf-viewer-card {
+    background: white;
+    border-radius: 8px;
+    padding: 20px;
+    margin-top: 20px;
+    border: 1px solid #dee2e6;
+}
+
+.iperf-viewer-card h3 {
+    margin-top: 0;
+    margin-bottom: 15px;
+    color: #333;
+    font-size: 16px;
+}
+
+.iperf-text-content {
+    background: #1e1e1e;
+    color: #d4d4d4;
+    padding: 15px;
+    border-radius: 4px;
+    overflow-x: auto;
+    max-height: 500px;
+    overflow-y: auto;
+    font-size: 14px;
+    line-height: 1.7;
+    border: 1px solid #ddd;
+    text-align: left;
+    font-family: 'Courier New', monospace;
+    white-space: pre;
+}

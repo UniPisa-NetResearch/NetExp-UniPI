@@ -1,7 +1,7 @@
 ---
 - name: Start iperf3 client on target hosts
   hosts: "{{ target_devices | join(',') }}"
-  gather_facts: yes
+  gather_facts: no
   become: yes
   tasks:
     - name: Check if iperf3 is installed
@@ -12,7 +12,7 @@
 
     - name: Fail if iperf3 is not installed
       fail:
-        msg: "iperf3 is not installed on {{ clients_config[inventory_hostname] }}"
+        msg: "iperf3 is not installed on {{ inventory_hostname }}"
       when: iperf3_check.rc != 0
 
     - name: Create results directory
@@ -27,24 +27,36 @@
 
     - name: Start iperf3 client for each flow
       shell: |
-        result_file="/tmp/iperf3_results/flow_{{ item.flow_id }}_{{ inventory_hostname }}_$(date +%s).json"
+        result_file="/tmp/iperf3_results/iperf_flow_{{ item.flow_id }}_{{ inventory_hostname }}.txt"
+        
+        if [ ! -f "$result_file" ]; then
+          echo "=========================================================================" > $result_file
+          echo "Flow {{ item.flow_id }}: {{ inventory_hostname }} -> {{ item.server_ip }}:{{ item.port }}" >> $result_file
+          echo "=========================================================================" >> $result_file
+        fi
+        
+        echo "" >> $result_file
+        echo "--- Execution at $(date '+%Y-%m-%d %H:%M:%S') ---" >> $result_file
+        
         iperf_cmd="iperf3 -c {{ item.server_ip }} -p {{ item.port }} -t {{ item.duration }}"
+        
         {% if item.bandwidth_mbps != 'unlimited' and item.bandwidth_mbps != '' %}
         iperf_cmd="$iperf_cmd -b {{ item.bandwidth_mbps }}M"
         {% endif %}
         {% if item.protocol == 'udp' %}
         iperf_cmd="$iperf_cmd -u"
         {% endif %}
-        iperf_cmd="$iperf_cmd -J > $result_file 2>&1"
-        eval "$iperf_cmd &"
-        echo "Started flow {{ item.flow_id }} -> {{ item.server_ip }}:{{ item.port }}"
+        
+        eval "$iperf_cmd >> $result_file 2>&1"
+        echo "Completed flow {{ item.flow_id }}"
       args:
         executable: /bin/bash
-      async: "{{ (item.duration | int) + 15 }}"
+      async: "{{ (item.duration | int) + 10 }}"
       poll: 0
       loop: "{{ flows }}"
       loop_control:
         label: "Flow {{ item.flow_id }}"
+      register: client_jobs
 
     - name: Log client start
       debug:
