@@ -5,6 +5,7 @@ import traceback
 from flask import request, send_file, jsonify
 import json
 import yaml
+import zipfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -262,7 +263,6 @@ def collect_telemetry_data(reservation_id, experiment_name, telemetry_config, in
         traceback.print_exc()
         return False, error_msg
 
-
 def convert_iperf_experiment_to_schedule(experiment_data):
     # Convert a guided mode experiment in standard schedule format
 
@@ -404,32 +404,7 @@ def execute_experiment_schedule(reservation_id, experiment_name, experiment_data
         # get schedule section values and global duration
         schedule = experiment_data.get('schedule', [])
         duration_s = experiment_data.get('duration_s', 0)
-        """
-        wrapper_playbook = os.path.join(EXPERIMENT_PLAYBOOKS_DIR, 'iperf_common', 'create_iperf_wrapper.yml')
 
-        if os.path.exists(wrapper_playbook):
-            print(f"[EXPERIMENT] Creating automatic iperf3 output capture", flush=True)
-
-            # find every target
-            all_targets = set()
-            for step in schedule:
-                all_targets.update(step.get('targets', []))
-
-            if all_targets:
-                extra_vars = {'target_devices': list(all_targets)}
-                returncode, stdout, stderr = run_ansible_playbook(
-                    inventory_path=inventory_path,
-                    playbook_path=wrapper_playbook,
-                    extra_vars=extra_vars,
-                    timeout=60
-                )
-
-                if returncode == 0:
-                    print(f"[EXPERIMENT] Wrapper setup completed successfully", flush=True)
-                else:
-                    print(f"[EXPERIMENT WARNING] Wrapper setup failed (code {returncode}), continuing anyway",
-                          flush=True)
-        """
         if 'playbooks_base_path' in experiment_data:
             # Guided mode: use shared playbooks
             playbooks_base = experiment_data['playbooks_base_path']
@@ -439,7 +414,7 @@ def execute_experiment_schedule(reservation_id, experiment_name, experiment_data
             # Free/Interactive mode
             experiment_name_base = os.path.splitext(experiment_name)[0]
             playbooks_dir = os.path.join(EXPERIMENT_PLAYBOOKS_DIR, f'res_{reservation_id}', experiment_name_base)
-            """
+
             cleanup_playbook_path = os.path.join(EXPERIMENT_PLAYBOOKS_DIR, 'iperf_common', 'stop_iperf.yml')
             if os.path.exists(cleanup_playbook_path):
                 wsl_results_dir = ''
@@ -452,7 +427,7 @@ def execute_experiment_schedule(reservation_id, experiment_name, experiment_data
                     'playbook': '../../iperf_common/stop_iperf.yml',
                     'extra_vars': {'experiment_results_path': wsl_results_dir if TEST else results_dir, 'save_results': True}
                 })
-            """
+
 
         print(f"[EXPERIMENT] Starting execution of {experiment_name}", flush=True)
         print(f"[EXPERIMENT] Total duration: {duration_s}s", flush=True)
@@ -711,44 +686,60 @@ class IndentedDumper(yaml.Dumper):
     def ignore_aliases(self, data):
         return True
 
-@app.route('/api/experimenter/downloadTemplate', methods=['POST'])
+@app.route('/api/experimenter/downloadTemplate', methods=['GET'])
 def download_experiment_template():
     # return experiment template
-    reservation_id = request.form.get('reservation_id')
-    template = {
-        'experiment_id': 'EXPERIMENT_NAME',
-        'duration_s': 600,
-        'reservation_id': reservation_id,
-        'schedule': [
-            {
-                'time_offset_s': 0,
-                'name': 'INITIAL_CHECK',
-                'playbook': 'initial_check.yml',
-                'targets': ['sw1', 'sw2']
-            },
-            {
-                'time_offset_s': 120,
-                'name': 'MAIN_ACTION',
-                'playbook': 'main_action.yml',
-                'targets': ['sw1']
-            }
-        ]
-    }
-
-    # convert in YAML
-    yaml_content = yaml.dump(template, Dumper=IndentedDumper, default_flow_style=False, sort_keys=False, indent=2, width=1000)
+    template_yaml_path = os.path.join(EXPERIMENT_PLAYBOOKS_DIR, 'general_playbooks', 'experiment_template.yml')
+    example_playbook_path = os.path.join(EXPERIMENT_PLAYBOOKS_DIR, 'general_playbooks', 'iperf_client_example.yml')
+    readme_path = os.path.join(EXPERIMENT_PLAYBOOKS_DIR, 'general_playbooks', 'README.txt')
 
     # create temporary file
     buffer = BytesIO()
-    buffer.write(yaml_content.encode('utf-8'))
+
+    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as b:
+        if os.path.exists(template_yaml_path):
+            with open(template_yaml_path, 'r') as f:
+                b.writestr('experiment_template.yml', f.read())
+
+        if os.path.exists(example_playbook_path):
+            with open(example_playbook_path, 'r') as f:
+                b.writestr('iperf_client_example.yml', f.read())
+
+        if os.path.exists(readme_path):
+            with open(readme_path, 'r') as f:
+                b.writestr('README.txt', f.read())
+
     buffer.seek(0)
 
     return send_file(
         buffer,
-        mimetype='application/x-yaml',
+        mimetype='application/zip',
         as_attachment=True,
-        download_name='experiment_template.yml'
+        download_name='experiment_template_package.zip'
     )
+
+
+@app.route('/api/experimenter/downloadIperfExample', methods=['GET'])
+def download_iperf_example():
+    # download only the iperf3 example playbook (for interactive mode)
+
+    try:
+        example_playbook_path = os.path.join(EXPERIMENT_PLAYBOOKS_DIR, 'general_playbooks', 'iperf_client_example.yml')
+
+        if not os.path.exists(example_playbook_path):
+            return jsonify({'error': 'Example playbook not found'}), 404
+
+        return send_file(
+            example_playbook_path,
+            mimetype='application/x-yaml',
+            as_attachment=True,
+            download_name='iperf_client_example.yml'
+        )
+
+    except Exception as e:
+        print(f"[DOWNLOAD IPERF EXAMPLE ERROR] {str(e)}", flush=True)
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 
 def validate_experiment_template_schema(yaml_data):
 

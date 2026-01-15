@@ -1,0 +1,15 @@
+experiment_id: EXPERIMENT_NAME
+duration_s: 600
+reservation_id: null
+schedule:
+  - time_offset_s: 0
+    name: INITIAL_CHECK
+    playbook: initial_check.yml
+    targets:
+      - sw1
+      - sw2
+  - time_offset_s: 120
+    name: MAIN_ACTION
+    playbook: main_action.yml
+    targets:
+      - sw1

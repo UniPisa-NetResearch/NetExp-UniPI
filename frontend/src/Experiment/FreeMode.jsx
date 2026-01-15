@@ -20,12 +20,9 @@ export default function FreeMode({
     // download experiment template
     const downloadExperimentTemplate = async () => {
         setWaitOperation(true);
-        const payload = {reservation_id};
         try {
             const response = await fetch(`http://localhost:5004/api/experimenter/downloadTemplate`, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/x-yaml'},
-                body: JSON.stringify(payload)
+                method: 'GET',
             });
 
             if (!response.ok) {
@@ -33,7 +30,7 @@ export default function FreeMode({
             }
 
             const blob = await response.blob();
-            createDownload(blob, 'experiment_template.yml');
+            createDownload(blob, 'experiment_template_package.zip');
         } catch (error) {
             console.error('Error downloading template:', error);
         } finally {
@@ -128,7 +125,7 @@ export default function FreeMode({
         <div className="experiment-section mode-content">
             <div className="section-content">
                 <div className="config-row">
-                    <label className="label-inline label-fixed-width">Download description template:</label>
+                    <label className="label-inline label-fixed-width">Download description template package:</label>
                     <button type="button" className="template-button configuration-button"
                             onClick={downloadExperimentTemplate} disabled={runningExperiment || waitOperation}>Download
                     </button>

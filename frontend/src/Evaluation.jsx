@@ -1,4 +1,4 @@
-import React, {useState, useEffect, useRef} from 'react';
+import React, {useState, useEffect, useRef, useMemo} from 'react';
 import { Chart } from 'chart.js/auto';
 import './style/style.css';
 import './style/evaluation.css';
@@ -41,6 +41,20 @@ export default function Evaluation({ username, reservation_id }) {
     useEffect(() => {
         loadExperimentResults();
     }, [reservation_id]);
+
+    const allDevicesFromLog = useMemo(() => {
+    if (!experimentData || !experimentData.execution_log) {
+        return [];
+    }
+
+    const allDevices = new Set();
+        experimentData.execution_log.forEach(step => {
+            if (step.targets && Array.isArray(step.targets)) {
+                step.targets.forEach(device => allDevices.add(device));
+            }
+        });
+        return Array.from(allDevices);
+    }, [experimentData]);
 
     // fetch experiment results from backend API
     const loadExperimentResults = async () => {
@@ -490,9 +504,9 @@ export default function Evaluation({ username, reservation_id }) {
                                                 </span>
                                                 </div>
                                                 <div className="log-details">
-                                                    <div><strong>Playbook:</strong> {step.playbook}</div>
+                                                    <div><strong>Playbook:</strong> {step.playbook.split('/').pop()}</div>
                                                     <div>
-                                                        <strong>Targets:</strong> {step.targets ? step.targets.join(', ') : 'N/A'}
+                                                        <strong>Targets:</strong> {(step.targets && step.targets.length > 0) ? step.targets.join(', ') : allDevicesFromLog.join(', ') || 'N/A'}
                                                     </div>
                                                     {step.error &&
                                                         <div className="error-text"><strong>Error:</strong> {step.error}

@@ -21,6 +21,25 @@ export default function InteractiveMode({
     idCounter
 }) {
     const playbookFileRefs = useRef({});
+    // download iperf3 example playbook
+    const downloadIperfExample = async () => {
+        try {
+            const response = await fetch('http://localhost:5004/api/experimenter/downloadIperfExample', {
+                method: 'GET'
+            });
+
+            if (!response.ok) {
+                console.error('Failed to download iperf example');
+                return;
+            }
+
+            const blob = await response.blob();
+            createDownload(blob, 'iperf_client_example.yml');
+        } catch (error) {
+            console.error('Error downloading iperf example:', error);
+        }
+    };
+
     const allowedPlaybookExt = ['.yml', '.yaml'];
     // handler for experiment duration
     const handleNumericChange = (setter) => (e) => {
@@ -199,8 +218,7 @@ export default function InteractiveMode({
         <div className="experiment-section mode-content">
             <div className="section-content">
                 <div className="config-row">
-                    <label className="label-inline label-fixed-width label-output">Insert experiment
-                        name:</label>
+                    <label className="label-inline label-fixed-width label-output">Insert experiment name:</label>
                     <input
                         type="text"
                         className="duration-field"
@@ -209,6 +227,17 @@ export default function InteractiveMode({
                         readOnly={runningExperiment}
                         placeholder="e.g., My Experiment"
                     />
+                    <label className="label-inline label-fixed-width label-output">Download client iperf example:</label>
+                    <button
+                        type="button"
+                        className="template-button configuration-button"
+                        onClick={downloadIperfExample}
+                        disabled={runningExperiment}
+                        style={{marginLeft: '10px'}}
+                        title="Download iperf3 example playbook"
+                    >
+                        Download
+                    </button>
                 </div>
                 <div className="config-row">
                     <label className="label-inline label-fixed-width label-output">Insert experiment

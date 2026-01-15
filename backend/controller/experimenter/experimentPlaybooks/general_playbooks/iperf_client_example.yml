@@ -1,0 +1,85 @@
+---
+# ==============================================================================
+# EXAMPLE PLAYBOOK: iperf3 Client with Automatic Output Capture
+# ==============================================================================
+#
+# This playbook demonstrates how to run iperf3 clients and automatically
+# capture their output in a format compatible with the experiment results.
+#
+# IMPORTANT: To see iperf3 output in the GUI results, you MUST follow this format.
+# ==============================================================================
+
+- name: Run iperf3 clients with automatic output capture
+  hosts: "{{ target_devices | default('all') }}"
+  gather_facts: no
+  become: yes
+  tasks:
+    # Step 1: Create the results directory (REQUIRED)
+    - name: Create results directory
+      file:
+        path: /tmp/iperf3_results
+        state: directory
+        mode: '0755'
+
+    # Step 2: Run iperf3 for each flow with output capture (REQUIRED FORMAT)
+    - name: Start iperf3 client h4 to sw4 data link
+      when: inventory_hostname == 'h4'
+      shell: |
+        TARGET_IP="10.0.0.0"
+        TARGET_PORT="5201"
+        DURATION=240
+        result_file="/tmp/iperf3_results/iperf_flow_1_{{ inventory_hostname }}.txt"
+
+        if [ ! -f "$result_file" ]; then
+          echo "=========================================================================" > "$result_file"
+          echo "Flow 1: {{ inventory_hostname }} -> ${TARGET_IP}:${TARGET_PORT}" >> "$result_file"
+          echo "=========================================================================" >> "$result_file"
+        fi
+
+        echo "" >> "$result_file"
+        echo "--- Execution at $(date '+%Y-%m-%d %H:%M:%S') ---" >> "$result_file"
+
+        iperf3 -c $TARGET_IP -p $TARGET_PORT -t $DURATION -b 50M -i 10 >> "$result_file" 2>&1
+
+        echo "Completed flow 1"
+      args:
+        executable: /bin/bash
+      async: 270
+      poll: 0
+
+# ==============================================================================
+# FILE NAMING REQUIREMENTS (CRITICAL):
+# ==============================================================================
+#
+# Files MUST be saved in: /tmp/iperf3_results/
+# Files MUST follow pattern: iperf_flow_<FLOW_ID>_<HOSTNAME>.txt
+#
+# Example valid filenames:
+#   - iperf_flow_h1_to_h2_h1.txt
+#   - iperf_flow_client1_h3.txt
+#   - iperf_flow_test_sw1.txt
+#
+# ==============================================================================
+# SIMPLE SINGLE FLOW EXAMPLE:
+# ==============================================================================
+#
+# - name: Run single iperf3 flow
+#   shell: |
+#     result_file="/tmp/iperf3_results/iperf_flow_myflow_{{ inventory_hostname }}.txt"
+#
+#     if [ ! -f "$result_file" ]; then
+#       echo "=========================================================================" > "$result_file"
+#       echo "Flow myflow: {{ inventory_hostname }} -> 10.0.0.2:5201" >> "$result_file"
+#       echo "=========================================================================" >> "$result_file"
+#     fi
+#
+#     echo "" >> "$result_file"
+#     echo "--- Execution at $(date '+%Y-%m-%d %H:%M:%S') ---" >> "$result_file"
+#
+#     iperf3 -c 10.0.0.2 -p 5201 -t 60 >> "$result_file" 2>&1
+#
+#     echo "--- Completed at $(date '+%Y-%m-%d %H:%M:%S') ---" >> "$result_file"
+#   args:
+#     executable: /bin/bash
+#
+# ==============================================================================
