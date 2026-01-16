@@ -69,6 +69,8 @@ export default function Experiment({username, reservation_id}) {
     const [playbookRows, setPlaybookRows] = useState([
       { id: 1, executionTime: '', file: null, fileName: '', fileType: '', selectedDevices: [] }
     ]);
+    const [yamlUploadMessage, setYamlUploadMessage] = useState('');
+    const [yamlUploadMessageType, setYamlUploadMessageType] = useState('');
 
     // Guided mode states
     const [guidedDuration, setGuidedDuration] = useState('');               // experiment duration
@@ -81,6 +83,8 @@ export default function Experiment({username, reservation_id}) {
     const [iperfFlows, setIperfFlows] = useState([
         {id: 1, client: '', server: '', bandwidth: '', protocol: 'tcp', startOffset: '', duration: ''}
     ]);
+    const [yamlUploadMessageGuided, setYamlUploadMessageGuided] = useState('');
+    const [yamlUploadMessageTypeGuided, setYamlUploadMessageTypeGuided] = useState('');
 
     // Telemetry states
     const [predefinedMetrics, setPredefinedMetrics] = useState([]);         // list of predefined metrics
@@ -100,6 +104,8 @@ export default function Experiment({username, reservation_id}) {
     const [telemetryCreateMessage, setTelemetryCreateMessage] = useState('');               // message of the metrics button
     const [telemetryCreateMessageType, setTelemetryCreateMessageType] = useState('');
     const [validatingMetrics, setValidatingMetrics] = useState(false);                    // true if some metrics are under validation
+    const [yamlUploadMessageTelemetry, setYamlUploadMessageTelemetry] = useState('');
+    const [yamlUploadMessageTypeTelemetry, setYamlUploadMessageTypeTelemetry] = useState('');
 
     // Experiment controls states
     const [experimentTimer, setExperimentTimer] = useState('--:--:--');                 // timer
@@ -274,6 +280,10 @@ export default function Experiment({username, reservation_id}) {
                         refreshExperiments={refreshExperiments}
                         createDownload={createDownload}
                         idCounter={idCounter}
+                        yamlUploadMessage={yamlUploadMessage}
+                        yamlUploadMessageType={yamlUploadMessageType}
+                        setYamlUploadMessage={setYamlUploadMessage}
+                        setYamlUploadMessageType={setYamlUploadMessageType}
                     />
                 )}
 
@@ -302,6 +312,10 @@ export default function Experiment({username, reservation_id}) {
                         refreshExperiments={refreshExperiments}
                         createDownload={createDownload}
                         iperfFlowIdCounter={iperfFlowIdCounter}
+                        yamlUploadMessageGuided={yamlUploadMessageGuided}
+                        yamlUploadMessageTypeGuided={yamlUploadMessageTypeGuided}
+                        setYamlUploadMessageGuided={setYamlUploadMessageGuided}
+                        setYamlUploadMessageTypeGuided={setYamlUploadMessageTypeGuided}
                     />
                 )}
 
@@ -344,6 +358,10 @@ export default function Experiment({username, reservation_id}) {
                     deviceList={deviceList}
                     createDownload={createDownload}
                     metricIdCounter={metricIdCounter}
+                    yamlUploadMessageTelemetry={yamlUploadMessageTelemetry}
+                    yamlUploadMessageTypeTelemetry={yamlUploadMessageTypeTelemetry}
+                    setYamlUploadMessageTelemetry={setYamlUploadMessageTelemetry}
+                    setYamlUploadMessageTypeTelemetry={setYamlUploadMessageTypeTelemetry}
                 />
 
                 {/* Experiment Controls */}

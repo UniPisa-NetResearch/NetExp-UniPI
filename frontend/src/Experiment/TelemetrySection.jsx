@@ -1,5 +1,6 @@
 // TelemetrySection.jsx
-import React from 'react';
+import React, {useRef} from 'react';
+import jsyaml from 'js-yaml';
 
 export default function TelemetrySection({
     predefinedMetrics,
@@ -38,8 +39,126 @@ export default function TelemetrySection({
     reservation_id,
     deviceList,
     createDownload,
-    metricIdCounter
+    metricIdCounter,
+    yamlUploadMessageTelemetry,
+    yamlUploadMessageTypeTelemetry,
+    setYamlUploadMessageTelemetry,
+    setYamlUploadMessageTypeTelemetry
 }) {
+    const yamlUploadRef = useRef(null);
+
+    const handleYamlUpload = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            try {
+            const yamlContent = event.target.result;
+            const parsed = jsyaml.load(yamlContent);
+
+            // validate required fields
+            if (!parsed.metric || !Array.isArray(parsed.metric)) {
+              setYamlUploadMessageTelemetry('Invalid YAML format: metric field must be an array');
+              setYamlUploadMessageTypeTelemetry('error');
+              return;
+            }
+
+            // validate numeric fields
+            for (const metricDef of parsed.metric) {
+                if ((metricDef.sampling_period && isNaN(metricDef.sampling_period)) || metricDef.sampling_period <= 0) {
+                    setYamlUploadMessageTelemetry('Invalid YAML format: sampling_period must be a number > 0');
+                    setYamlUploadMessageTypeTelemetry('error');
+                    return;
+                }
+            }
+
+            // set telemetry type to "After experiment" (telemetry_type: 1)
+            setTelemetryType('After experiment mode');
+
+            // set sampling mode to per-metric
+            setSamplingMode('per-metric');
+
+            // create a set of valid device names for quick lookup (only non-host devices)
+            const validDeviceNames = new Set(nonHostDevices.map(d => d.name));
+            const newSelectedMetrics = [];
+            const newMetricIntervals = {};
+            const newMetricDevices = {};
+            const metricsToAdd = [];
+            const allInvalidDevices = new Set();
+
+            parsed.metric.forEach((metricDef) => {
+                const metricPath = metricDef.name;
+                const samplingPeriod = metricDef.sampling_period || 5;
+                const targets = metricDef.targets || [];
+
+                // filter targets to only include devices that exist in nonHostDevices
+                const validTargets = targets.filter(target => {
+                    const isValid = validDeviceNames.has(target);
+                    if (!isValid) {
+                        allInvalidDevices.add(target);
+                    }
+                    return isValid;
+                });
+                // check if metric exists in predefined or custom metrics
+                const isPredefined = predefinedMetrics.some(m => m.path === metricPath);
+                const isCustom = customMetrics.some(m => m.path === metricPath);
+
+                if (isPredefined || isCustom) {
+                    // select existing metric
+                    newSelectedMetrics.push(metricPath);
+                } else {
+                    // add to "add metrics" section for user to validate
+                    metricsToAdd.push(metricPath);
+                }
+
+                // set sampling period and devices for the metric
+                newMetricIntervals[metricPath] = samplingPeriod;
+                newMetricDevices[metricPath] = validTargets;
+            });
+
+            // update selected metrics
+            setSelectedMetrics(newSelectedMetrics);
+            setMetricIntervals(newMetricIntervals);
+            setMetricDevices(newMetricDevices);
+
+            // add unknown metrics to metric rows for validation
+            if (metricsToAdd.length > 0) {
+                setMetricRows(prev => {
+                    const newRows = [];
+                    // create rows for new metrics, reusing existing IDs where possible
+                    for (let i = 0; i < metricsToAdd.length; i++) {
+                        const rowId = i < prev.length ? prev[i].id : ++metricIdCounter.current;
+                        newRows.push({id: rowId, path: metricsToAdd[i], status: '', message: ''});
+                   }
+
+                  // keep remaining existing rows unchanged
+                  if (prev.length > metricsToAdd.length) {
+                    newRows.push(...prev.slice(metricsToAdd.length));
+                  }
+
+                  return newRows;
+                });
+
+                setYamlUploadMessageTelemetry(`YAML loaded - ${newSelectedMetrics.length} metrics selected - ` +
+                `${metricsToAdd.length} new metrics added to "Add Metrics" section - please validate them`);
+
+            } else {
+              setYamlUploadMessageTelemetry(`YAML loaded successfully. ${newSelectedMetrics.length} metrics selected`);
+            }
+            setYamlUploadMessageTypeTelemetry('success');
+
+            } catch (error) {
+                console.error('Error parsing YAML:', error);
+                setYamlUploadMessageTelemetry(`Invalid YAML format: ${error.message}`);
+                setYamlUploadMessageTypeTelemetry('error');
+            }
+        };
+
+        reader.readAsText(file);
+        e.target.value = null; // reset input
+    };
+
     // handler for experiment duration
     const handleNumericChange = (setter) => (e) => {
         const value = e.target.value;
@@ -323,6 +442,30 @@ export default function TelemetrySection({
         <div className="experiment-section">
             <h3 className="section-title">Telemetry</h3>
             <div className="section-content">
+                <div className="config-row">
+                    <label className="label-inline label-fixed-width label-output">Load metrics from YAML template:</label>
+                    <input
+                        type="file"
+                        ref={yamlUploadRef}
+                        accept=".yml,.yaml"
+                        onChange={handleYamlUpload}
+                        style={{display: 'none'}}
+                    />
+                    <button
+                        type="button"
+                        className="compile-form-button configuration-button"
+                        onClick={() => yamlUploadRef.current?.click()}
+                        disabled={runningExperiment}
+                        title="Upload telemetry configuration YAML file"
+                    >
+                        Upload template
+                    </button>
+                    {yamlUploadMessageTelemetry && (
+                        <span className={`message-inline ${yamlUploadMessageTypeTelemetry === 'error' ? 'error-validation' : 'success-validation'}`}>
+                            {yamlUploadMessageTelemetry}
+                        </span>
+                    )}
+                </div>
                 <div className="config-row">
                     <label className="label-inline label-fixed-width label-output">Choose metrics:</label>
                 </div>

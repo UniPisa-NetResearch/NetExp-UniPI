@@ -1,5 +1,6 @@
 // GuidedMode.jsx
-import React from 'react';
+import React, {useRef} from 'react';
+import jsyaml from 'js-yaml';
 
 export default function GuidedMode({
     guidedExperimentName,
@@ -23,8 +24,119 @@ export default function GuidedMode({
     reservation_id,
     refreshExperiments,
     createDownload,
-    iperfFlowIdCounter
+    iperfFlowIdCounter,
+    yamlUploadMessageGuided,
+    yamlUploadMessageTypeGuided,
+    setYamlUploadMessageGuided,
+    setYamlUploadMessageTypeGuided
 }) {
+    const yamlUploadRef = useRef(null);
+
+    const handleYamlUpload = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            try {
+                const yamlContent = event.target.result;
+                const parsed = jsyaml.load(yamlContent);
+
+                // validate required fields for iperf experiment
+                if (!parsed.experiment_id || !parsed.duration_s || !parsed.iperf_flows) {
+                  setYamlUploadMessageGuided('Invalid YAML format: required fields are experiment_id, duration_s, iperf_flows');
+                  setYamlUploadMessageTypeGuided('error');
+                  return;
+                }
+
+                if (!Array.isArray(parsed.iperf_flows) || parsed.iperf_flows.length === 0) {
+                  setYamlUploadMessageGuided('Invalid YAML format: iperf_flows must be a non-empty array');
+                  setYamlUploadMessageTypeGuided('error');
+                  return;
+                }
+
+                // validate numeric fields
+                if (isNaN(parsed.duration_s) || parsed.duration_s <= 0) {
+                    setYamlUploadMessageGuided('Invalid YAML format: duration_s must be a positive number');
+                    setYamlUploadMessageTypeGuided('error');
+                    return;
+               }
+
+               // validate iperf_flows numeric fields
+               for (const flow of parsed.iperf_flows) {
+                   if (flow.port && (isNaN(flow.port) || flow.port < 1024 || flow.port > 65535)) {
+                       setYamlUploadMessageGuided('Invalid YAML format: port must be between 1024 and 65535');
+                       setYamlUploadMessageTypeGuided('error');
+                       return;
+                   }
+                   if ((flow.bandwidth_mbps && isNaN(flow.bandwidth_mbps)) || flow.bandwidth_mbps <= 0) {
+                       setYamlUploadMessageGuided('Invalid YAML format: bandwidth_mbps must be a number > 0');
+                       setYamlUploadMessageTypeGuided('error');
+                       return;
+                   }
+                   if ((flow.start_offset_s !== undefined && isNaN(flow.start_offset_s)) || flow.start_offset_s < 0) {
+                       setYamlUploadMessageGuided('Invalid YAML format: start_offset_s must be a positive number');
+                       setYamlUploadMessageTypeGuided('error');
+                       return;
+                   }
+                   if ((flow.duration_s && isNaN(flow.duration_s)) || flow.duration_s <= 0) {
+                       setYamlUploadMessageGuided('Invalid YAML format: duration_s in flow must be a number > 0');
+                       setYamlUploadMessageTypeGuided('error');
+                       return;
+                   }
+               }
+
+                // populate experiment name and duration
+                setGuidedExperimentName(parsed.experiment_id);
+                setGuidedDuration(String(parsed.duration_s));
+
+                // create a set of valid device names for quick lookup
+                const validDeviceNames = new Set(deviceList.map(d => d.name));
+
+                // populate iperf flows
+                const newFlows = parsed.iperf_flows.map((flow, index) => {
+                  const newId = ++iperfFlowIdCounter.current;
+                  const client = flow.client || '';
+                  const server = flow.server || '';
+
+                  return {
+                    id: newId,
+                    client: validDeviceNames.has(client) ? client : '',
+                    server: validDeviceNames.has(server) ? server : '',
+                    serverIp: flow.server_ip || '',
+                    port: flow.port || 5201,
+                    bandwidth: flow.bandwidth_mbps ? flow.bandwidth_mbps : '',
+                    protocol: flow.protocol || 'tcp',
+                    startOffset: flow.start_offset_s !== undefined ? flow.start_offset_s : '',
+                    duration: flow.duration_s ? flow.duration_s : ''
+                  };
+                });
+
+                setIperfFlows(newFlows);
+
+                // extract unique clients and servers, filtering valid servers and clients
+                const allClients = [...new Set(parsed.iperf_flows.map(f => f.client).filter(Boolean))];
+                const allServers = [...new Set(parsed.iperf_flows.map(f => f.server).filter(Boolean))];
+                const clients = allClients.filter(c => validDeviceNames.has(c));
+                const servers = allServers.filter(s => validDeviceNames.has(s));
+
+                setIperfClients(clients);
+                setIperfServers(servers);
+
+                setYamlUploadMessageGuided('YAML loaded successfully');
+                setYamlUploadMessageTypeGuided('success');
+
+            } catch (error) {
+                console.error('Error parsing YAML:', error);
+                setYamlUploadMessageGuided(`Invalid YAML format: ${error.message}`);
+                setYamlUploadMessageTypeGuided('error');
+            }
+        };
+
+        reader.readAsText(file);
+        e.target.value = null; // reset input
+    };
+
     // experiment duration handler
     const handleNumericChange = (setter) => (e) => {
         const value = e.target.value;
@@ -214,6 +326,30 @@ export default function GuidedMode({
     return (
         <div className="experiment-section mode-content">
             <div className="section-content">
+                <div className="config-row">
+                    <label className="label-inline label-fixed-width">Load experiment from YAML template:</label>
+                    <input
+                        type="file"
+                        ref={yamlUploadRef}
+                        accept=".yml,.yaml"
+                        onChange={handleYamlUpload}
+                        style={{display: 'none'}}
+                    />
+                    <button
+                        type="button"
+                        className="compile-form-button configuration-button"
+                        onClick={() => yamlUploadRef.current?.click()}
+                        disabled={runningExperiment}
+                        title="Upload iperf experiment YAML file"
+                    >
+                        Upload template
+                    </button>
+                    {yamlUploadMessageGuided && (
+                        <span className={`message-inline ${yamlUploadMessageTypeGuided === 'error' ? 'error-validation' : 'success-validation'}`}>
+                            {yamlUploadMessageGuided}
+                        </span>
+                    )}
+                </div>
                 <div className="config-row">
                     <label className="label-inline label-fixed-width">Experiment name:</label>
                     <input

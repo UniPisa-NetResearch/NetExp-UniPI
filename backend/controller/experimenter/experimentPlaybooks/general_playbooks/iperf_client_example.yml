@@ -1,12 +1,8 @@
----
-# ==============================================================================
-# EXAMPLE PLAYBOOK: iperf3 Client with Automatic Output Capture
 # ==============================================================================
 #
-# This playbook demonstrates how to run iperf3 clients and automatically
+# This file shows how to run iperf3 clients and automatically
 # capture their output in a format compatible with the experiment results.
 #
-# IMPORTANT: To see iperf3 output in the GUI results, you MUST follow this format.
 # ==============================================================================
 
 - name: Run iperf3 clients with automatic output capture
@@ -14,14 +10,14 @@
   gather_facts: no
   become: yes
   tasks:
-    # Step 1: Create the results directory (REQUIRED)
+    # Create the results directory (REQUIRED /tmp/iperf3_results)
     - name: Create results directory
       file:
         path: /tmp/iperf3_results
         state: directory
         mode: '0755'
 
-    # Step 2: Run iperf3 for each flow with output capture (REQUIRED FORMAT)
+    # Run iperf3 for each flow with output capture (REQUIRED file format /tmp/iperf3_results/iperf_flow_...txt)
     - name: Start iperf3 client h4 to sw4 data link
       when: inventory_hostname == 'h4'
       shell: |
@@ -48,7 +44,7 @@
       poll: 0
 
 # ==============================================================================
-# FILE NAMING REQUIREMENTS (CRITICAL):
+# REQUIREMENTS:
 # ==============================================================================
 #
 # Files MUST be saved in: /tmp/iperf3_results/
@@ -57,29 +53,16 @@
 # Example valid filenames:
 #   - iperf_flow_h1_to_h2_h1.txt
 #   - iperf_flow_client1_h3.txt
-#   - iperf_flow_test_sw1.txt
+#   - iperf_flow_1_sw1.txt
 #
-# ==============================================================================
-# SIMPLE SINGLE FLOW EXAMPLE:
-# ==============================================================================
+# It is IMPORTANT to run the iperf client using the following mode:
 #
-# - name: Run single iperf3 flow
-#   shell: |
-#     result_file="/tmp/iperf3_results/iperf_flow_myflow_{{ inventory_hostname }}.txt"
+#      async: <FLOW_DURATION> + OFFSET
+#      poll: 0
 #
-#     if [ ! -f "$result_file" ]; then
-#       echo "=========================================================================" > "$result_file"
-#       echo "Flow myflow: {{ inventory_hostname }} -> 10.0.0.2:5201" >> "$result_file"
-#       echo "=========================================================================" >> "$result_file"
-#     fi
+# With async, a task is created and executed on the target device for the specified duration in seconds,
+# the duration must be at least the duration of the iperf flow, add also a small offset,
+# to allow the complete output collection
 #
-#     echo "" >> "$result_file"
-#     echo "--- Execution at $(date '+%Y-%m-%d %H:%M:%S') ---" >> "$result_file"
-#
-#     iperf3 -c 10.0.0.2 -p 5201 -t 60 >> "$result_file" 2>&1
-#
-#     echo "--- Completed at $(date '+%Y-%m-%d %H:%M:%S') ---" >> "$result_file"
-#   args:
-#     executable: /bin/bash
-#
+# The value of poll must be 0, so the playbook can terminate without wait the async task execution
 # ==============================================================================
