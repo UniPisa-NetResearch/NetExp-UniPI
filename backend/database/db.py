@@ -92,5 +92,7 @@ class Experiment(db.Model):
     # 'running', 'completed'
     status = db.Column(db.String(20), default='running', nullable=False)
 
+    batch_id = db.Column(db.String(100), nullable=True, index=True)
+
     def __repr__(self):
         return f'<ExperimentRun id={self.id} reservation={self.reservation_id} exp={self.experiment_name} status={self.status}>'

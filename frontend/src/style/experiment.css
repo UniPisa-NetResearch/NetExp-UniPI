@@ -881,3 +881,140 @@
   border: 1px solid #28a745;
   background-color: rgba(40, 167, 69, 0.1);
 }
+
+
+.batch-section {
+  margin-top: 15px;
+  padding: 15px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background-color: #f9f9f9;
+}
+
+.batch-list {
+  margin-top: 15px;
+}
+
+.batch-list h4 {
+  margin-bottom: 10px;
+  color: #333;
+}
+
+.batch-item {
+  display: flex;
+  align-items: center;
+  padding: 10px;
+  margin-bottom: 8px;
+  background-color: white;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+.batch-name {
+  flex: 1;
+  color: #333;
+}
+
+.batch-controls {
+  display: flex;
+  gap: 5px;
+}
+
+
+.btn-remove {
+  background-color: #fd5f5f;
+  padding: 4px 8px;
+  border: 1px solid #fd5f5f;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 3px;
+  color: white;
+}
+
+.btn-remove:hover:not(:disabled) {
+  background-color: #f33737;
+}
+
+.batch-info {
+  margin-top: 15px;
+  padding: 10px;
+  background-color: #e8f5e9;
+  border-left: 4px solid #4CAF50;
+  border-radius: 4px;
+}
+
+.batch-info strong {
+  color: #2e7d32;
+}
+
+.batch-order{
+  font-weight: bold;
+  margin-right: 10px;
+  min-width: 30px;
+}
+
+.batch-info small{
+  font-style: italic;
+}
+
+.mode-toggle-container {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 50px;
+    height: 24px;
+    cursor: pointer;
+}
+
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.toggle-slider {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #ccc;
+    border-radius: 24px;
+    transition: 0.3s;
+}
+
+.toggle-slider:before {
+    content: "";
+    position: absolute;
+    height: 18px;
+    width: 18px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    border-radius: 50%;
+    transition: 0.3s;
+}
+
+.toggle-switch input:checked + .toggle-slider {
+    background-color: #4CAF50;
+}
+
+.toggle-switch input:checked + .toggle-slider:before {
+    transform: translateX(26px);
+}
+
+.toggle-switch input:disabled + .toggle-slider {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.toggle-label {
+    font-size: 14px;
+    font-weight: 600;
+    min-width: 50px;
+}

@@ -21,6 +21,12 @@ export default function Evaluation({ username, reservation_id }) {
     const [selectedFlow, setSelectedFlow] = useState('');          // selected flow
     const [flowData, setFlowData] = useState(null);                       // selected flow data
 
+    // Batch experiment selection
+    const [batchExperiments, setBatchExperiments] = useState([]);                   // experiment list in the batch
+    const [selectedBatchExperiment, setSelectedBatchExperiment] = useState('');     // current experiment
+    const [isBatchResult, setIsBatchResult] = useState(false);                     // batch flag
+
+
     // extract unique metric names from telemetry results
     // telemetryResults is an Object with metric names as keys and returns an array of {name, label} objects
     const extractAvailableMetrics = (telemetryResults) => {
@@ -40,7 +46,7 @@ export default function Evaluation({ username, reservation_id }) {
 
     useEffect(() => {
         loadExperimentResults();
-    }, [reservation_id]);
+    }, [reservation_id, selectedBatchExperiment]);
 
     const allDevicesFromLog = useMemo(() => {
     if (!experimentData || !experimentData.execution_log) {
@@ -60,15 +66,45 @@ export default function Evaluation({ username, reservation_id }) {
     const loadExperimentResults = async () => {
         setLoadingData(true);
         setErrorMessage('');
+        setSelectedMetric('');
+        setSelectedDevice('');
+        setSelectedField('');
+        setAvailableDevices([]);
+        setAvailableFields([]);
+        setChartData(null);
+        setSelectedFlow('');
+        setFlowData(null);
 
         try {
+            const payload = { reservation_id };
+
+            // load selected experiment in batch
+            if (selectedBatchExperiment) {
+              payload.experiment_name = selectedBatchExperiment;
+            }
+
             const response = await fetch('http://localhost:5004/api/experimenter/getExperimentResults', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ reservation_id })
+                body: JSON.stringify(payload)
             });
 
             const data = await response.json();
+
+            if (data.is_batch) {
+                setIsBatchResult(true);
+                setBatchExperiments(data.batch_experiments || []);
+
+                // select first
+                if (!selectedBatchExperiment && data.batch_experiments && data.batch_experiments.length > 0) {
+                    setSelectedBatchExperiment(data.batch_experiments[0]);
+                    // reload with first experiment
+                    return;
+                }
+            } else {
+                setIsBatchResult(false);
+                setBatchExperiments([]);
+            }
 
             if (data.success && data.telemetry_results) {
                 setExperimentData(data);
@@ -467,6 +503,28 @@ export default function Evaluation({ username, reservation_id }) {
                     <>
                         {/* Experiment Info */}
                         <div className="experiment-info-card">
+                            {/* Batch Experiment Selection */}
+                            {isBatchResult && batchExperiments.length > 0 && (
+                                <div className="section-card">
+                                    <h2>Batch Experiment Selection</h2>
+                                    <div className="selection-row">
+                                        <label>Select experiment from batch:</label>
+                                        <select
+                                            value={selectedBatchExperiment}
+                                            onChange={(e) => {
+                                                setSelectedBatchExperiment(e.target.value);
+                                            }}
+                                        >
+                                            {batchExperiments.map((exp) => (
+                                                <option key={exp} value={exp}>{exp}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div className="info-message">
+                                        Viewing results for experiment: <strong>{selectedBatchExperiment}</strong>
+                                    </div>
+                                </div>
+                            )}
                             <h2>Experiment: {experimentData.experiment_name}</h2>
                             <div className="info-grid">
                                 <div className="info-item">

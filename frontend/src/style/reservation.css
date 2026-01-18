@@ -627,7 +627,7 @@ select {
 }
 .tab-button:hover {
   color: #2196F3;
-  background-color: rgba(219, 236, 255, 0.5);
+  background-color: rgba(224, 237, 251, 0.5);
 }
 .tab-content {
   padding: 30px 40px;

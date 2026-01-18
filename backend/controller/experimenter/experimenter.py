@@ -678,6 +678,45 @@ def get_devices():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/experimenter/calculateBatchDuration', methods=['POST'])
+def calculate_batch_duration():
+    # calculate total duration for batch experiments including transition time
+    try:
+        data = request.json
+        experiment_names = data.get('experiments', [])
+        reservation_id = data.get('reservation_id')
+
+        if not experiment_names or not reservation_id:
+            return jsonify({'success': False, 'error': 'Missing experiments or reservation_id'}), 400
+
+        total_duration = 0
+
+        for exp_name in experiment_names:
+            exp_path = os.path.join(EXPERIMENT_TEMPLATES_DIR, f'res_{reservation_id}', f'{exp_name}.yml')
+
+            if not os.path.exists(exp_path):
+                return jsonify({'success': False, 'error': f'Experiment {exp_name} not found'}), 404
+
+            with open(exp_path, 'r') as f:
+                exp_data = yaml.safe_load(f)
+
+            total_duration += exp_data.get('duration_s', 0)
+
+        # add 1 minute between each experiment
+        #if len(experiment_names) > 1:
+        total_duration += len(experiment_names) * 60
+
+        return jsonify({
+            'success': True,
+            'total_duration_s': total_duration,
+            'num_experiments': len(experiment_names)
+        }), 200
+
+    except Exception as e:
+        print(f"Error calculating batch duration: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 # function to indent yaml file
 class IndentedDumper(yaml.Dumper):
     def increase_indent(self, flow=False, indentless=False):
@@ -717,7 +756,6 @@ def download_experiment_template():
         as_attachment=True,
         download_name='experiment_template_package.zip'
     )
-
 
 @app.route('/api/experimenter/downloadIperfExample', methods=['GET'])
 def download_iperf_example():
@@ -1488,10 +1526,20 @@ def run_experiment():
     try:
         data = request.json
         experiment_name = data.get('experiment_name')
+        experiment_names = data.get('experiment_names')  # array for batch
         reservation_id = data.get('reservation_id')
 
-        if not experiment_name or not reservation_id:
-            return jsonify({'success': False, 'error': 'Missing experiment_name or reservation_id'}), 400
+        if not reservation_id:
+            return jsonify({'success': False, 'error': 'Missing reservation_id'}), 400
+
+        if experiment_names:
+            experiments_list = experiment_names
+            is_batch = True
+        elif experiment_name:
+            experiments_list = [experiment_name]
+            is_batch = False
+        else:
+            return jsonify({'success': False, 'error': 'Missing experiment_name or experiment_names'}), 400
 
         # check if there is a running experiment for that reservation
         existing_run = Experiment.query.filter_by(reservation_id=reservation_id, status='running').first()
@@ -1502,59 +1550,66 @@ def run_experiment():
                 'error': f'An experiment is already running: {existing_run.experiment_name}'
             }), 400
 
-        telemetry_file_path = os.path.join(EXPERIMENT_TELEMETRY_DIR, f'res_{reservation_id}', f'{experiment_name}_telemetry.yml')
-        # check if file exists
-        if not os.path.exists(telemetry_file_path):
-            return jsonify({
-                'success': False,
-                'error': f'Telemetry file not found: {experiment_name}_telemetry.yml'
-            }), 404
+        experiments_data = []
+        duration_s = 0
+        for exp_name in experiments_list:
+            telemetry_file_path = os.path.join(EXPERIMENT_TELEMETRY_DIR, f'res_{reservation_id}', f'{exp_name}_telemetry.yml')
+            # check if file exists
+            if not os.path.exists(telemetry_file_path):
+                return jsonify({'success': False, 'error': f'Telemetry file not found: {exp_name}_telemetry.yml'}), 404
 
-        experiment_file_path = os.path.join(EXPERIMENT_TEMPLATES_DIR, f'res_{reservation_id}', f'{experiment_name}.yml')
-        # get duration_s
-        try:
-            with open(telemetry_file_path, 'r') as f:
-                telemetry_data = yaml.safe_load(f)
+            experiment_file_path = os.path.join(EXPERIMENT_TEMPLATES_DIR, f'res_{reservation_id}', f'{exp_name}.yml')
+            # get duration_s
+            try:
+                with open(telemetry_file_path, 'r') as f:
+                    telemetry_data = yaml.safe_load(f)
 
-            with open(experiment_file_path, 'r') as f:
-                experiment_data = yaml.safe_load(f)
+                with open(experiment_file_path, 'r') as f:
+                    experiment_data = yaml.safe_load(f)
 
-            duration_s = experiment_data.get('duration_s')
+                exp_duration_s = experiment_data.get('duration_s')
 
-            if 'iperf_flows' in experiment_data and 'playbooks_base_path' in experiment_data:
-                print(f"[RUN] Detected guided mode (iperf) experiment", flush=True)
+                if 'iperf_flows' in experiment_data and 'playbooks_base_path' in experiment_data:
+                    print(f"[RUN] Detected guided mode (iperf) experiment", flush=True)
 
-                # convert in standard format
-                converted_schedule, playbooks_path = convert_iperf_experiment_to_schedule(experiment_data)
+                    # convert in standard format
+                    converted_schedule, playbooks_path = convert_iperf_experiment_to_schedule(experiment_data)
 
-                # change schedule with the converted one
-                experiment_data['schedule'] = converted_schedule
+                    # change schedule with the converted one
+                    experiment_data['schedule'] = converted_schedule
 
-                print(f"[RUN] Converted {len(converted_schedule)} schedule steps", flush=True)
-                print(f"[RUN] Using playbooks from: {playbooks_path}", flush=True)
+                    print(f"[RUN] Converted {len(converted_schedule)} schedule steps", flush=True)
+                    print(f"[RUN] Using playbooks from: {playbooks_path}", flush=True)
 
-            if duration_s is None:
-                return jsonify({
-                    'success': False,
-                    'error': 'duration_s field not found in telemetry file'
-                }), 400
+                if exp_duration_s is None:
+                    return jsonify({'success': False, 'error': 'duration_s field not found in telemetry file'}), 400
 
-            duration_s = int(duration_s)
+                exp_duration_s = int(exp_duration_s)
+                duration_s += exp_duration_s
 
-        except Exception as e:
-            return jsonify({
-                'success': False,
-                'error': f'Error reading telemetry file: {str(e)}'
-            }), 500
+                experiments_data.append({
+                    'name': exp_name,
+                    'experiment_data': experiment_data,
+                    'telemetry_data': telemetry_data,
+                    'duration': exp_duration_s
+                })
+
+            except Exception as e:
+                return jsonify({'success': False, 'error': f'Error reading telemetry file: {str(e)}'}), 500
+
+        batch_id = None
+        # add 1 minute after each experiment except the last one
+        if is_batch:
+            # unique batch id
+            batch_id = f"batch_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            if len(experiments_list) > 1:
+                duration_s += (len(experiments_list) - 1) * 60
 
         # find reservation
         reservation = Reservation.query.filter_by(id=reservation_id).first()
 
         if not reservation:
-            return jsonify({
-                'success': False,
-                'error': f'Reservation {reservation_id} not found'
-            }), 404
+            return jsonify({'success': False, 'error': f'Reservation {reservation_id} not found'}), 404
 
         # compute reservation end
         reservation_end = datetime.combine(reservation.endDate, reservation.endTime)
@@ -1577,36 +1632,55 @@ def run_experiment():
 
         # create record in database
         experiment_start = now
-        experiment_end = experiment_start + timedelta(seconds=duration_s)
+        created_experiment_ids = []
+        cumulative_time = 0
+        # create a record for each experiment in the batch
+        for idx, exp_info in enumerate(experiments_data):
+            exp_name = exp_info['name']
+            exp_duration = exp_info['duration']
 
-        # find next available id
-        next_id = get_next_available_id()
+            exp_start = experiment_start + timedelta(seconds=cumulative_time)
+            exp_end = exp_start + timedelta(seconds=exp_duration)
+            cumulative_time += exp_duration
+            if is_batch:
+                cumulative_time += 60
 
-        # find record inside the database
-        if next_id is not None:
-            new_experiment = Experiment(
-                id=next_id,
-                reservation_id=reservation_id,
-                experiment_name=experiment_name,
-                start_time=experiment_start,
-                end_time=experiment_end,
-                duration_s=duration_s,
-                status='running'
-            )
-        else:
-            new_experiment = Experiment(
-                reservation_id=reservation_id,
-                experiment_name=experiment_name,
-                start_time=experiment_start,
-                end_time=experiment_end,
-                duration_s=duration_s,
-                status='running'
-            )
+            # find next available id
+            next_id = get_next_available_id()
 
-        db.session.add(new_experiment)
+            # find record inside the database
+            if next_id is not None:
+                new_experiment = Experiment(
+                    id=next_id,
+                    reservation_id=reservation_id,
+                    experiment_name=exp_name,
+                    start_time=exp_start,
+                    end_time=exp_end,
+                    duration_s=exp_duration,
+                    status='running',
+                    batch_id=batch_id
+                )
+            else:
+                new_experiment = Experiment(
+                    reservation_id=reservation_id,
+                    experiment_name=exp_name,
+                    start_time=exp_start,
+                    end_time=exp_end,
+                    duration_s=exp_duration,
+                    status='running',
+                    batch_id=batch_id
+                )
+
+            db.session.add(new_experiment)
+            db.session.flush()
+
+            created_experiment_ids.append(new_experiment.id)
+
+            print(f"[DB] Created experiment record: {exp_name} (ID: {new_experiment.id}, batch: {batch_id})", flush=True)
+
         db.session.commit()
 
-        experiment_id = new_experiment.id
+        experiment_id = created_experiment_ids[0]
 
         # inventory path
         safe_res = safe_filename(f"res-{reservation_id}-inventory")
@@ -1622,76 +1696,103 @@ def run_experiment():
                         'stop_flag': stop_flag
                     }
 
-                with ThreadPoolExecutor(max_workers=2) as executor:
-                    # start experiment and telemetry execution
-                    experiment_future = executor.submit(
-                        execute_experiment_schedule,
-                        reservation_id,
-                        experiment_name,
-                        experiment_data,
-                        inventory_path
-                    )
-
-                    telemetry_future = executor.submit(
-                        collect_telemetry_data,
-                        reservation_id,
-                        experiment_name,
-                        telemetry_data,
-                        inventory_path,
-                        duration_s
-                    )
-
-                    # save Futures and flag
+                all_results = []
+                for id_x, experiment_info in enumerate(experiments_data):
+                    # check stop flag
                     with experiments_lock:
                         if reservation_id in running_experiments:
-                            running_experiments[reservation_id]['futures'] = [experiment_future, telemetry_future]
+                            if running_experiments[reservation_id]['stop_flag'].is_set():
+                                print(f"[EXPERIMENT] Stop requested, aborting remaining experiments", flush=True)
+                                """
+                                with app.app_context():
+                                    for remaining_idx in range(id_x, len(experiments_data)):
+                                        exp_id = created_experiment_ids[remaining_idx]
+                                        exp = Experiment.query.filter_by(id=exp_id).first()
+                                        if exp and exp.status == 'running':
+                                            exp.status = 'stopped'
+                                    db.session.commit()
+                                """
+                                break
 
-                    # wait completion
-                    experiment_success, experiment_error = experiment_future.result()
-                    telemetry_success, telemetry_error = telemetry_future.result()
+                    name_exp = experiment_info['name']
+                    data_exp = experiment_info['experiment_data']
+                    telemetry_exp = experiment_info['telemetry_data']
+                    id_exp = created_experiment_ids[id_x]
 
-                    # remove from dictionary when completed
-                    with experiments_lock:
-                        if reservation_id in running_experiments:
-                            del running_experiments[reservation_id]
+                    print(f"[EXPERIMENT] Starting {id_x + 1}/{len(experiments_data)}: {name_exp}", flush=True)
 
+                    with ThreadPoolExecutor(max_workers=2) as executor:
+                        # start experiment and telemetry execution
+                        experiment_future = executor.submit(
+                            execute_experiment_schedule,
+                      reservation_id,
+                            name_exp,
+                            data_exp,
+                            inventory_path
+                        )
+
+                        telemetry_future = executor.submit(
+                            collect_telemetry_data,
+                      reservation_id,
+                            name_exp,
+                            telemetry_exp,
+                            inventory_path,
+                            experiment_info['duration']
+                        )
+
+                        # save Futures and flag
+                        with experiments_lock:
+                            if reservation_id in running_experiments:
+                                running_experiments[reservation_id]['futures'] = [experiment_future, telemetry_future]
+
+                        # wait completion
+                        experiment_success, experiment_error = experiment_future.result()
+                        telemetry_success, telemetry_error = telemetry_future.result()
+
+                    # update experiment status
                     with app.app_context():
-                        # update experiment status
-                        exp = Experiment.query.filter_by(id=experiment_id).first()
+                        exp = Experiment.query.filter_by(id=id_exp).first()
                         if exp:
-                            # check if the termination is volunteered
                             is_user_stop = ((not experiment_success and experiment_error and "stopped by user" in experiment_error.lower()) or
-                                    (not telemetry_success and telemetry_error and "stopped by user" in telemetry_error.lower()))
+                                            (not telemetry_success and telemetry_error and "stopped by user" in telemetry_error.lower()))
 
                             if is_user_stop:
-                                exp.status = "stopped"
-                                print(f"[EXPERIMENT] {experiment_name} stopped by user", flush=True)
-
+                                #exp.status = "stopped"
+                                print(f"[EXPERIMENT] {name_exp} stopped by user", flush=True)
                             elif experiment_success and telemetry_success:
                                 exp.status = 'completed'
-                                print(f"[EXPERIMENT] {experiment_name} marked as completed", flush=True)
+                                print(f"[EXPERIMENT] {name_exp} completed", flush=True)
+                                db.session.commit()
                             else:
                                 exp.status = 'error'
                                 error_details = []
-                                if not experiment_success  and not (experiment_error and "stopped by user" in experiment_error.lower()):
+                                if not experiment_success and not (experiment_error and "stopped by user" in experiment_error.lower()):
                                     error_details.append(f"Experiment: {experiment_error}")
                                 if not telemetry_success and not (telemetry_error and "stopped by user" in telemetry_error.lower()):
                                     error_details.append(f"Telemetry: {telemetry_error}")
                                 if error_details:
-                                    print(f"[EXPERIMENT] {experiment_name} failed: {', '.join(error_details)}", flush=True)
-                                else:
-                                    print(f"[EXPERIMENT] {experiment_name} encountered an error", flush=True)
+                                    print(f"[EXPERIMENT] {name_exp} failed: {', '.join(error_details)}", flush=True)
 
-                            db.session.commit()
+                            #db.session.commit()
+
+                    # wait 1 minute between experiments
+                    if is_batch and id_x < len(experiments_data) - 1:
+                        print(f"[BATCH] Waiting 60s before next experiment...", flush=True)
+
+                # remove from dictionary when completed
+                with experiments_lock:
+                    if reservation_id in running_experiments:
+                        del running_experiments[reservation_id]
 
             except Exception as e:
                 print(f"[EXPERIMENT THREAD ERROR] {str(e)}", flush=True)
                 traceback.print_exc()
                 with app.app_context():
-                    exp = Experiment.query.filter_by(id=experiment_id).first()
-                    if exp:
-                        exp.status = 'error'
-                        db.session.commit()
+                    for exp_id in created_experiment_ids:
+                        exp = Experiment.query.filter_by(id=exp_id).first()
+                        if exp and exp.status == 'running':
+                            exp.status = 'error'
+                    db.session.commit()
 
         # start thread for execution
         thread = threading.Thread(target=run_experiment_with_telemetry, daemon=True)
@@ -1701,8 +1802,12 @@ def run_experiment():
             'success': True,
             'duration_s': duration_s,
             'start_time': experiment_start.isoformat(),
-            'end_time': experiment_end.isoformat(),
-            'experiment_id': new_experiment.id,
+            'end_time': (experiment_start + timedelta(seconds=duration_s)).isoformat(),
+            'experiment_id': created_experiment_ids[0],
+            'experiment_ids': created_experiment_ids,
+            'is_batch': is_batch,
+            'batch_id': batch_id,
+            'num_experiments': len(experiments_list),
             'message': 'Experiment started successfully'
         }), 200
 
@@ -1728,7 +1833,7 @@ def get_experiment_status():
         running_experiment = Experiment.query.filter_by(
             reservation_id=reservation_id,
             status='running'
-        ).first()
+        ).order_by(Experiment.start_time).first()
 
         if not running_experiment:
             return jsonify({
@@ -1754,19 +1859,56 @@ def get_experiment_status():
                 'message': 'Experiment completed'
             }), 200
 
-        # compute remaining time in seconds
-        remaining_seconds = int((running_experiment.end_time - now).total_seconds())
+        is_batch = running_experiment.batch_id is not None
 
-        return jsonify({
-            'success': True,
-            'running': True,
-            'experiment_name': running_experiment.experiment_name,
-            'remaining_seconds': remaining_seconds,
-            'total_duration_s': running_experiment.duration_s,
-            'start_time': running_experiment.start_time.isoformat(),
-            'end_time': running_experiment.end_time.isoformat(),
-            'experiment_id': running_experiment.id
-        }), 200
+        if is_batch:
+            # find every batch experiment
+            batch_experiments = Experiment.query.filter_by(
+                reservation_id=reservation_id,
+                batch_id=running_experiment.batch_id
+            ).order_by(Experiment.start_time).all()
+
+            # remaining time from the end of the last experiment
+            first_experiment = batch_experiments[0]
+            last_experiment = batch_experiments[-1]
+            remaining_seconds = int((last_experiment.end_time - datetime.now()).total_seconds())
+            remaining_seconds = max(0, remaining_seconds)
+
+            current_running = None
+            for exp in batch_experiments:
+                if exp.status == 'running':
+                    current_running = exp
+                    break
+
+            current_exp_name = current_running.experiment_name if current_running else running_experiment.experiment_name
+
+            return jsonify({
+                'success': True,
+                'running': True,
+                'experiment_id': running_experiment.id,
+                'experiment_name': running_experiment.experiment_name,
+                'remaining_seconds': remaining_seconds,
+                'is_batch': True,
+                'batch_id': running_experiment.batch_id,
+                'current_experiment': current_exp_name,
+                'total_experiments': len(batch_experiments)
+            }), 200
+        else:
+
+            # compute remaining time in seconds
+            remaining_seconds = int((running_experiment.end_time - now).total_seconds())
+
+            return jsonify({
+                'success': True,
+                'running': True,
+                'experiment_name': running_experiment.experiment_name,
+                'remaining_seconds': remaining_seconds,
+                'total_duration_s': running_experiment.duration_s,
+                'start_time': running_experiment.start_time.isoformat(),
+                'end_time': running_experiment.end_time.isoformat(),
+                'experiment_id': running_experiment.id,
+                'is_batch': False
+            }), 200
 
     except Exception as e:
         print(f"Error in getExperimentStatus: {str(e)}")
@@ -1798,7 +1940,6 @@ def finish_experiment():
             }), 404
 
         print(f"[FINISH] Stopping experiment for reservation {reservation_id}", flush=True)
-
 
         # set stop flag for threads
         with experiments_lock:
@@ -1882,18 +2023,45 @@ def finish_experiment():
             else:
                 print(f"[FINISH] Warning: cleanup playbook not found at {cleanup_playbook_path}", flush=True)
 
-        # remove record from database
-        print(f"[FINISH] Removing experiment from database", flush=True)
-        db.session.delete(running_experiment)
-        db.session.commit()
+        is_batch = running_experiment.batch_id is not None
 
-        print(f"[FINISH] Experiment finished and removed successfully", flush=True)
+        if is_batch:
+            # find and delete all experiments in the batch
+            batch_experiments = Experiment.query.filter_by(
+                reservation_id=reservation_id,
+                batch_id=running_experiment.batch_id
+            ).all()
 
-        return jsonify({
-            'success': True,
-            "message": f"Experiment stopped and removed. {cleanup_message}",
-            "cleanup_success": cleanup_success
-        }), 200
+            print(f"[FINISH] Removing batch {running_experiment.batch_id} with {len(batch_experiments)} experiments from database", flush=True)
+
+            for exp in batch_experiments:
+                db.session.delete(exp)
+
+            db.session.commit()
+
+            print(f"[FINISH] Batch finished and removed successfully ({len(batch_experiments)} experiments deleted)", flush=True)
+
+            return jsonify({
+                'success': True,
+                "message": f"Batch stopped and removed ({len(batch_experiments)} experiments). {cleanup_message}",
+                "cleanup_success": cleanup_success,
+                "is_batch": True,
+                "experiments_deleted": len(batch_experiments)
+            }), 200
+        else:
+            # remove record from database
+            print(f"[FINISH] Removing experiment from database", flush=True)
+            db.session.delete(running_experiment)
+            db.session.commit()
+
+            print(f"[FINISH] Experiment finished and removed successfully", flush=True)
+
+            return jsonify({
+                'success': True,
+                "message": f"Experiment stopped and removed. {cleanup_message}",
+                "cleanup_success": cleanup_success,
+                "is_batch": False
+            }), 200
 
     except Exception as e:
         db.session.rollback()
@@ -1944,6 +2112,7 @@ def get_experiment_results():
     try:
         data = request.json
         reservation_id = data.get('reservation_id')
+        specific_experiment_name = data.get('experiment_name')
 
         if not reservation_id:
             return jsonify({'success': False, 'error': 'Missing reservation_id'}), 400
@@ -1955,12 +2124,38 @@ def get_experiment_results():
         ).order_by(Experiment.end_time.desc()).first()
 
         if not completed_experiment:
-            return jsonify({
-                'success': False,
-                'error': 'No completed experiment found'
-            }), 404
+            return jsonify({'success': False, 'error': 'No completed experiment found'}), 404
 
-        experiment_name = completed_experiment.experiment_name
+        is_batch = completed_experiment.batch_id is not None
+        batch_experiments = []
+
+        if is_batch:
+            # find each experiment of the batch
+            batch_exps = Experiment.query.filter_by(
+                reservation_id=reservation_id,
+                batch_id=completed_experiment.batch_id
+            ).order_by(Experiment.start_time).all()
+
+            batch_experiments = [exp.experiment_name for exp in batch_exps]
+
+            print(f"[GET RESULTS] Found batch {completed_experiment.batch_id} with {len(batch_experiments)} experiments", flush=True)
+
+            if specific_experiment_name:
+                if specific_experiment_name not in batch_experiments:
+                    return jsonify({'success': False, 'error': f'Experiment {specific_experiment_name} not in batch'}), 404
+                experiment_name = specific_experiment_name
+                experiment = Experiment.query.filter_by(
+                    reservation_id=reservation_id,
+                    experiment_name=experiment_name,
+                    batch_id=completed_experiment.batch_id
+                ).first()
+            else:
+                experiment = batch_exps[0]
+                experiment_name = experiment.experiment_name
+        else:
+            experiment = completed_experiment
+            experiment_name = experiment.experiment_name
+
         results_dir = os.path.join(EXPERIMENT_RESULTS_DIR, f"res_{reservation_id}", experiment_name)
 
         # read telemetry files
@@ -1999,13 +2194,17 @@ def get_experiment_results():
         return jsonify({
             'success': True,
             'experiment_name': experiment_name,
-            'experiment_id': completed_experiment.id,
-            'start_time': completed_experiment.start_time.isoformat(),
-            'end_time': completed_experiment.end_time.isoformat(),
-            'duration_s': completed_experiment.duration_s,
+            'experiment_id': experiment.id,
+            'start_time': experiment.start_time.isoformat(),
+            'end_time': experiment.end_time.isoformat(),
+            'duration_s': experiment.duration_s,
+            'status': experiment.status,
             'telemetry_results': telemetry_results,
             'execution_log': execution_log,
-            'iperf_results': iperf_results
+            'iperf_results': iperf_results,
+            'is_batch': is_batch,
+            'batch_id': completed_experiment.batch_id if is_batch else None,
+            'batch_experiments': batch_experiments if is_batch else []
         }), 200
 
     except Exception as e:

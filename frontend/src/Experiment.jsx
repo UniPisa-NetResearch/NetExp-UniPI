@@ -115,6 +115,10 @@ export default function Experiment({username, reservation_id}) {
     const [selectedExperimentDefinitionRun, setSelectedExperimentDefinitionRun] = useState('');   // list of experiments on exp controls section
     const timerIntervalRef = useRef(null);
 
+    // Batch experiment states
+    const [batchMode, setBatchMode] = useState(false);                      // true = batch, false = single
+    const [selectedExperiments, setSelectedExperiments] = useState([]);      // array of {filename, order}
+    const [batchTotalDuration, setBatchTotalDuration] = useState(0);       // total duration
     // Load devices on mount
     useEffect(() => {
         const fetchDevices = async () => {
@@ -383,6 +387,12 @@ export default function Experiment({username, reservation_id}) {
                     setCurrentExperimentId={setCurrentExperimentId}
                     reservation_id={reservation_id}
                     timerIntervalRef={timerIntervalRef}
+                    batchMode={batchMode}
+                    setBatchMode={setBatchMode}
+                    selectedExperiments={selectedExperiments}
+                    setSelectedExperiments={setSelectedExperiments}
+                    batchTotalDuration={batchTotalDuration}
+                    setBatchTotalDuration={setBatchTotalDuration}
                 />
             </div>
         </div>
