@@ -297,7 +297,7 @@ function App() {
             }
 
             // Check risultati disponibili
-            const resultsResponse = await fetch('http://localhost:5004/api/experimenter/getExperimentResults', {
+            const resultsResponse = await fetch('http://localhost:5005/api/evaluator/getExperimentResults', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ reservation_id: reservationId })

@@ -83,7 +83,7 @@ export default function Evaluation({ username, reservation_id }) {
               payload.experiment_name = selectedBatchExperiment;
             }
 
-            const response = await fetch('http://localhost:5004/api/experimenter/getExperimentResults', {
+            const response = await fetch('http://localhost:5005/api/evaluator/getExperimentResults', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
@@ -138,7 +138,7 @@ export default function Evaluation({ username, reservation_id }) {
         if (!experimentData) return;
 
         try {
-            const response = await fetch('http://localhost:5004/api/experimenter/downloadResults', {
+            const response = await fetch('http://localhost:5005/api/evaluator/downloadResults', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

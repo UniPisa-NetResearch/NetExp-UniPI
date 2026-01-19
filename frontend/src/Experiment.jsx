@@ -96,10 +96,11 @@ export default function Experiment({username, reservation_id}) {
     ]);
     const [samplingMode, setSamplingMode] = useState('global');         // mode of sampling
     const [globalInterval, setGlobalInterval] = useState('5');          // global interval value
-    const [metricIntervals, setMetricIntervals] = useState({});            // list of per-metric intervals
+    //const [metricIntervals, setMetricIntervals] = useState({});            // list of per-metric intervals
     const [globalDevices, setGlobalDevices] = useState([]);             // global devices list
-    const [metricDevices, setMetricDevices] = useState({});               // list of devices per each metric
+    //const [metricDevices, setMetricDevices] = useState({});               // list of devices per each metric
     const [telemetryType, setTelemetryType] = useState('');            // type of telemetry
+    const [metricConfigurations, setMetricConfigurations] = useState([]);
     const [selectedExperimentDefinitionTelemetry, setSelectedExperimentDefinitionTelemetry] = useState('');     // list of experiment names
     const [telemetryCreateMessage, setTelemetryCreateMessage] = useState('');               // message of the metrics button
     const [telemetryCreateMessageType, setTelemetryCreateMessageType] = useState('');
@@ -339,10 +340,6 @@ export default function Experiment({username, reservation_id}) {
                     globalDevices={globalDevices}
                     setGlobalDevices={setGlobalDevices}
                     nonHostDevices={nonHostDevices}
-                    metricIntervals={metricIntervals}
-                    setMetricIntervals={setMetricIntervals}
-                    metricDevices={metricDevices}
-                    setMetricDevices={setMetricDevices}
                     telemetryType={telemetryType}
                     setTelemetryType={setTelemetryType}
                     experimentDefinitions={experimentDefinitions}
@@ -362,6 +359,8 @@ export default function Experiment({username, reservation_id}) {
                     deviceList={deviceList}
                     createDownload={createDownload}
                     metricIdCounter={metricIdCounter}
+                    metricConfigurations={metricConfigurations}
+                    setMetricConfigurations={ setMetricConfigurations}
                     yamlUploadMessageTelemetry={yamlUploadMessageTelemetry}
                     yamlUploadMessageTypeTelemetry={yamlUploadMessageTypeTelemetry}
                     setYamlUploadMessageTelemetry={setYamlUploadMessageTelemetry}

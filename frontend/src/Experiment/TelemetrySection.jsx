@@ -17,10 +17,6 @@ export default function TelemetrySection({
     globalDevices,
     setGlobalDevices,
     nonHostDevices,
-    metricIntervals,
-    setMetricIntervals,
-    metricDevices,
-    setMetricDevices,
     telemetryType,
     setTelemetryType,
     experimentDefinitions,
@@ -40,6 +36,8 @@ export default function TelemetrySection({
     deviceList,
     createDownload,
     metricIdCounter,
+    metricConfigurations,
+    setMetricConfigurations,
     yamlUploadMessageTelemetry,
     yamlUploadMessageTypeTelemetry,
     setYamlUploadMessageTelemetry,
@@ -82,10 +80,11 @@ export default function TelemetrySection({
             // create a set of valid device names for quick lookup (only non-host devices)
             const validDeviceNames = new Set(nonHostDevices.map(d => d.name));
             const newSelectedMetrics = [];
-            const newMetricIntervals = {};
-            const newMetricDevices = {};
             const metricsToAdd = [];
             const allInvalidDevices = new Set();
+            const metricConfigArray = [];
+            let configId = 1;
+
 
             parsed.metric.forEach((metricDef) => {
                 const metricPath = metricDef.name;
@@ -105,22 +104,30 @@ export default function TelemetrySection({
                 const isCustom = customMetrics.some(m => m.path === metricPath);
 
                 if (isPredefined || isCustom) {
-                    // select existing metric
-                    newSelectedMetrics.push(metricPath);
+                    // select existing metric avoiding duplicates
+                    if (!newSelectedMetrics.includes(metricPath)) {
+                        newSelectedMetrics.push(metricPath);
+                    }
                 } else {
-                    // add to "add metrics" section for user to validate
-                    metricsToAdd.push(metricPath);
+                    // add to "add metrics" section for user to validate avoiding duplicates
+                    if (!metricsToAdd.includes(metricPath)) {
+                        metricsToAdd.push(metricPath);
+                    }
                 }
 
-                // set sampling period and devices for the metric
-                newMetricIntervals[metricPath] = samplingPeriod;
-                newMetricDevices[metricPath] = validTargets;
+                 metricConfigArray.push({
+                     id: configId++,
+                     path: metricPath,
+                     interval: samplingPeriod,
+                     devices: validTargets
+                 });
             });
 
             // update selected metrics
             setSelectedMetrics(newSelectedMetrics);
-            setMetricIntervals(newMetricIntervals);
-            setMetricDevices(newMetricDevices);
+
+            setMetricConfigurations(metricConfigArray);
+
 
             // add unknown metrics to metric rows for validation
             if (metricsToAdd.length > 0) {
@@ -140,11 +147,11 @@ export default function TelemetrySection({
                   return newRows;
                 });
 
-                setYamlUploadMessageTelemetry(`YAML loaded - ${newSelectedMetrics.length} metrics selected - ` +
+                setYamlUploadMessageTelemetry(`YAML loaded - ${metricConfigArray.length} metrics selected - ` +
                 `${metricsToAdd.length} new metrics added to "Add Metrics" section - please validate them`);
 
             } else {
-              setYamlUploadMessageTelemetry(`YAML loaded successfully. ${newSelectedMetrics.length} metrics selected`);
+              setYamlUploadMessageTelemetry(`YAML loaded successfully. ${metricConfigArray.length} metrics selected`);
             }
             setYamlUploadMessageTypeTelemetry('success');
 
@@ -275,6 +282,25 @@ export default function TelemetrySection({
                 const metricsData = await metricsResponse.json();
                 setCustomMetrics(metricsData.custom || []);
 
+                const successfulMetrics = data.results.filter(r => r.status === 'success').map((r, idx) => metricsToSendWithIndex[idx].row.path.trim());
+
+                if (successfulMetrics.length > 0) {
+                    setMetricConfigurations(prev => {
+                        const maxId = prev.length > 0 ? Math.max(...prev.map(c => c.id)) : 0;
+                        let newId = maxId + 1;
+                        const newConfigs = successfulMetrics
+                            .filter(path => selectedMetrics.includes(path))
+                            .filter(path => !prev.some(c => c.path === path))
+                            .map(path => ({
+                                id: newId++,
+                                path: path,
+                                interval: 5,
+                                devices: []
+                            }));
+                        return [...prev, ...newConfigs];
+                    });
+                }
+
             } else {
                 alert(`Error: ${data.error}`);
             }
@@ -293,20 +319,6 @@ export default function TelemetrySection({
                 ? prev.filter(d => d !== deviceName)
                 : [...prev, deviceName]
         );
-    };
-    // select metrics
-    const handleMetricDeviceToggle = (metricPath, deviceName) => {
-        setMetricDevices(prev => {
-            const currentDevices = prev[metricPath] || [];
-            const isSelected = currentDevices.includes(deviceName);
-
-            return {
-                ...prev,
-                [metricPath]: isSelected
-                    ? currentDevices.filter(d => d !== deviceName)
-                    : [...currentDevices, deviceName]
-            };
-        });
     };
     // create telemetry file
     const handleCreateTelemetryFile = async () => {
@@ -331,17 +343,15 @@ export default function TelemetrySection({
                 return;
             }
         } else if (samplingMode === 'per-metric') {
-            for (const metricPath of selectedMetrics) {
-                const interval = metricIntervals?.[metricPath];
-                const devices = metricDevices?.[metricPath] || [];
+            for (const config of metricConfigurations) {
 
-                if (!interval || !String(interval).trim()) {
-                    setTelemetryCreateMessage(`Error: interval is required for ${metricPath}`);
+                if (!config.interval || !String(config.interval).trim()) {
+                    setTelemetryCreateMessage(`Error: interval is required for ${config.path}`);
                     setTelemetryCreateMessageType('error');
                     return;
                 }
-                if (!devices || devices.length === 0) {
-                    setTelemetryCreateMessage(`Error: select at least one device for ${metricPath}`);
+                if (!config.devices || config.devices.length === 0) {
+                    setTelemetryCreateMessage(`Error: select at least one device for ${config.path}`);
                     setTelemetryCreateMessageType('error');
                     return;
                 }
@@ -375,20 +385,25 @@ export default function TelemetrySection({
 
         const telemetryTypeNum = telemetryType === 'Real time mode' ? 0 : 1;
 
-        const metricsPayload = selectedMetrics.map((metricPath) => {
-            if (samplingMode === 'global') {
-                return {
+        const metricsPayload = samplingMode === 'global'
+            ? selectedMetrics.filter(metricPath =>
+                predefinedMetrics.some(m => m.path === metricPath) ||
+                customMetrics.some(m => m.path === metricPath)
+
+            ).map((metricPath) => ({
                     name: metricPath,
                     sampling_period: parseInt(globalInterval, 10),
                     targets: globalDevices
-                };
-            }
-            return {
-                name: metricPath,
-                sampling_period: parseInt(metricIntervals[metricPath], 10),
-                targets: metricDevices[metricPath] || []
-            };
-        });
+            }))
+            : metricConfigurations.filter(config =>
+                predefinedMetrics.some(m => m.path === config.path) ||
+                customMetrics.some(m => m.path === config.path)
+
+            ).map((config) => ({
+                name: config.path,
+                sampling_period: parseInt(config.interval, 10),
+                targets: config.devices || []
+            }));
 
         setWaitOperation(true);
         try {
@@ -482,8 +497,18 @@ export default function TelemetrySection({
                                         onChange={() => {
                                             if (selectedMetrics.includes(metric.path)) {
                                                 setSelectedMetrics(selectedMetrics.filter(m => m !== metric.path));
+                                                setMetricConfigurations(prev => prev.filter(c => c.path !== metric.path));
                                             } else {
                                                 setSelectedMetrics([...selectedMetrics, metric.path]);
+                                                setMetricConfigurations(prev => {
+                                                    const maxId = prev.length > 0 ? Math.max(...prev.map(c => c.id)) : 0;
+                                                    return [...prev, {
+                                                        id: maxId + 1,
+                                                        path: metric.path,
+                                                        interval: 5,
+                                                        devices: []
+                                                    }];
+                                                });
                                             }
                                         }}
                                         disabled={runningExperiment}
@@ -505,8 +530,18 @@ export default function TelemetrySection({
                                         onChange={() => {
                                             if (selectedMetrics.includes(metric.path)) {
                                                 setSelectedMetrics(selectedMetrics.filter(m => m !== metric.path));
+                                                setMetricConfigurations(prev => prev.filter(c => c.path !== metric.path));
                                             } else {
                                                 setSelectedMetrics([...selectedMetrics, metric.path]);
+                                                setMetricConfigurations(prev => {
+                                                    const maxId = prev.length > 0 ? Math.max(...prev.map(c => c.id)) : 0
+                                                    return [...prev, {
+                                                        id: maxId + 1,
+                                                        path: metric.path,
+                                                        interval: 5,
+                                                        devices: []
+                                                    }];
+                                                });
                                             }
                                         }}
                                         disabled={runningExperiment}
@@ -623,24 +658,27 @@ export default function TelemetrySection({
                     </>
                 )}
 
-                {samplingMode === 'per-metric' && selectedMetrics.length > 0 && (
+                {samplingMode === 'per-metric' && metricConfigurations.length > 0 && (
                     <div className="per-metric-intervals">
                         <h4>Interval and devices for each metric:</h4>
-                        {selectedMetrics.map((metricPath) => (
-                            <div key={metricPath} className="metric-interval-row">
-                                <span className="metric-path-small">{metricPath}</span>
+                        {metricConfigurations.filter(config =>
+                            predefinedMetrics.some(m => m.path === config.path) ||
+                            customMetrics.some(m => m.path === config.path)
+                        ).map((config) => (
+                            <div key={config.id} className="metric-interval-row">
+                                <span className="metric-path-small">{config.path}</span>
                                 <input
                                     type="text"
                                     className="interval-field-small"
-                                    value={metricIntervals[metricPath] || ''}
+                                    value={config.interval || ''}
                                     placeholder={5}
                                     onChange={(e) => {
                                         const value = e.target.value;
                                         if (value === '' || /^\d+$/.test(value)) {
-                                            setMetricIntervals({
-                                                ...metricIntervals,
-                                                [metricPath]: value
-                                            });
+                                            setMetricConfigurations(prev =>
+                                                prev.map(c => c.id === config.id
+                                                    ? {...c, interval: value} : c)
+                                            );
                                         }
                                     }}
                                     disabled={runningExperiment}
@@ -651,8 +689,18 @@ export default function TelemetrySection({
                                         <label key={device.name} className="device-checkbox-label">
                                             <input
                                                 type="checkbox"
-                                                checked={(metricDevices[metricPath] || []).includes(device.name)}
-                                                onChange={() => handleMetricDeviceToggle(metricPath, device.name)}
+                                                checked={config.devices.includes(device.name)}
+                                                onChange={() => setMetricConfigurations(prev =>
+                                                    prev.map(c => {
+                                                        if (c.id === config.id) {
+                                                            const isSelected = c.devices.includes(device.name);
+                                                            return {...c,
+                                                                devices: isSelected ? c.devices.filter(d => d !== device.name) : [...c.devices, device.name]
+                                                            };
+                                                        }
+                                                        return c;
+                                                    })
+                                                )}
                                                 disabled={runningExperiment}
                                             />
                                             <span>{device.name}</span>
