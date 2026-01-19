@@ -1080,13 +1080,28 @@ def run_experiment():
                                 running_experiments[reservation_id]['futures'] = [experiment_future, telemetry_future]
 
                         # wait completion
-                        experiment_success, experiment_error = experiment_future.result()
+                        experiment_success, experiment_error, actual_start_timestamp, actual_end_timestamp = experiment_future.result()
                         telemetry_success, telemetry_error = telemetry_future.result()
 
                     # update experiment status
                     with app.app_context():
                         exp = Experiment.query.filter_by(id=id_exp).first()
                         if exp:
+                            if actual_start_timestamp:
+                                actual_start_dt = datetime.fromtimestamp(actual_start_timestamp)
+                                exp.start_time = actual_start_dt
+                                print(f"[EXPERIMENT] {name_exp} - Updated with actual start time: {actual_start_dt.strftime('%H:%M:%S')}", flush=True)
+
+                            if actual_end_timestamp:
+                                actual_end_dt = datetime.fromtimestamp(actual_end_timestamp)
+                                exp.end_time = actual_end_dt
+                                print(f"[EXPERIMENT] {name_exp} - Updated with actual end time: {actual_end_dt.strftime('%H:%M:%S')}", flush=True)
+
+                            if actual_start_timestamp and actual_end_timestamp:
+                                actual_duration = int((actual_end_dt - actual_start_dt).total_seconds())
+                                exp.duration_s = actual_duration
+                                print(f"[EXPERIMENT] {name_exp} - Actual duration: {actual_duration}s", flush=True)
+
                             is_user_stop = ((not experiment_success and experiment_error and "stopped by user" in experiment_error.lower()) or
                                             (not telemetry_success and telemetry_error and "stopped by user" in telemetry_error.lower()))
 
@@ -1107,7 +1122,7 @@ def run_experiment():
                                 if error_details:
                                     print(f"[EXPERIMENT] {name_exp} failed: {', '.join(error_details)}", flush=True)
 
-                            #db.session.commit()
+                            db.session.commit()
 
                     # wait 1 minute between experiments
                     if is_batch and id_x < len(experiments_data) - 1:
@@ -1177,13 +1192,27 @@ def get_experiment_status():
             }), 200
 
         now = datetime.now()
-
+        """
         # check if the experiment is ended
         if now >= running_experiment.end_time:
             # update status to completed
             running_experiment.status = 'completed'
             db.session.commit()
 
+            return jsonify({
+                'success': True,
+                'running': False,
+                'just_completed': True,
+                'experiment_name': running_experiment.experiment_name,
+                'experiment_id': running_experiment.id,
+                'message': 'Experiment completed'
+            }), 200
+        """
+        is_actually_running = False
+        with experiments_lock:
+            is_actually_running = reservation_id in running_experiments
+
+        if not is_actually_running and running_experiment.status == 'completed':
             return jsonify({
                 'success': True,
                 'running': False,

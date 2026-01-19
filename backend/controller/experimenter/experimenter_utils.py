@@ -475,7 +475,7 @@ def execute_experiment_schedule(reservation_id, experiment_name, experiment_data
             with experiments_lock:
                 if reservation_id not in running_experiments:
                     print(f"[EXPERIMENT] Stop requested, aborting execution", flush=True)
-                    return False, "Experiment stopped by user"
+                    return False, "Experiment stopped by user", None, None
 
             step = item['step']
             time_offset = item['time_offset']
@@ -507,7 +507,7 @@ def execute_experiment_schedule(reservation_id, experiment_name, experiment_data
                         with experiments_lock:
                             if reservation_id not in running_experiments:
                                 print(f"[EXPERIMENT] Reservation removed after playbook - stopping now", flush=True)
-                                return False, "Experiment stopped by user during wait"
+                                return False, "Experiment stopped by user during wait", None, None
 
                         # sleep for maximum 0,2 seconds
                         remaining = end_wait_time - time.time()
@@ -520,7 +520,7 @@ def execute_experiment_schedule(reservation_id, experiment_name, experiment_data
             with experiments_lock:
                 if reservation_id not in running_experiments:
                     print(f"[EXPERIMENT] Stop requested before executing {step_name}, aborting", flush=True)
-                    return False, "Experiment stopped by user before playbook execution"
+                    return False, "Experiment stopped by user before playbook execution", None, None
 
             # effective time of execution
             actual_time = time.time()
@@ -578,7 +578,7 @@ def execute_experiment_schedule(reservation_id, experiment_name, experiment_data
             with experiments_lock:
                 if reservation_id not in running_experiments:
                     print(f"[EXPERIMENT] Reservation {reservation_id} removed before executing '{step_name}' - aborting", flush=True)
-                    return False, "Experiment stopped by user (reservation removed before playbook)"
+                    return False, "Experiment stopped by user (reservation removed before playbook)", None, None
 
                 running_experiments[reservation_id]['playbook_running'] = True
                 running_experiments[reservation_id]['current_playbook'] = playbook_name
@@ -600,7 +600,8 @@ def execute_experiment_schedule(reservation_id, experiment_name, experiment_data
                 'step': step_name,
                 'time_offset_s': time_offset,
                 'scheduled_absolute_time': absolute_time,
-                'actual_absolute_time': actual_time,
+                'actual_start_time': actual_time,
+                'actual_end_time': exec_end,
                 'playbook': playbook_name,
                 'targets': targets,
                 'returncode': returncode,
@@ -621,7 +622,7 @@ def execute_experiment_schedule(reservation_id, experiment_name, experiment_data
             with experiments_lock:
                 if reservation_id not in running_experiments:
                     print(f"[EXPERIMENT] Reservation removed after playbook - stopping now", flush=True)
-                    return False, "Experiment stopped by user (playbook completed safely)"
+                    return False, "Experiment stopped by user (playbook completed safely)", None, None
 
         # save execution log
         log_file = os.path.join(str(results_dir), f"{experiment_name}_execution_log.json")
@@ -629,16 +630,24 @@ def execute_experiment_schedule(reservation_id, experiment_name, experiment_data
             json.dump(execution_log, f, indent=2)
 
         print(f"[EXPERIMENT] Execution completed. Log saved to {log_file}", flush=True)
+
+        actual_end_timestamp = None
+        if execution_log:
+            last_step = execution_log[-1]
+            actual_end_timestamp = last_step.get('actual_end_time')
+            print(f"[EXPERIMENT] Experiment start timestamp (T+0.0s): {start_time}", flush=True)
+            print(f"[EXPERIMENT] Actual end timestamp: {actual_end_timestamp}", flush=True)
+
         if has_errors:
-            return True, "Experiment completed with some errors"
+            return True, "Experiment completed with some errors", start_time, actual_end_timestamp
         else:
-            return True, None
+            return True, None, start_time, actual_end_timestamp
 
     except Exception as e:
         error_msg = f"Experiment execution failed: {str(e)}"
         print(f"[EXPERIMENT ERROR] {error_msg}", flush=True)
         traceback.print_exc()
-        return False, error_msg
+        return False, error_msg, None, None
 
 def validate_experiment_template_schema(yaml_data):
 
