@@ -1180,6 +1180,23 @@ def get_experiment_status():
         if not reservation_id:
             return jsonify({'success': False, 'error': 'Missing reservation_id'}), 400
 
+        stopping_experiment = Experiment.query.filter_by(
+            reservation_id=reservation_id,
+            status='stopping'
+        ).order_by(Experiment.start_time).first()
+
+        if stopping_experiment:
+            return jsonify({
+                'success': True,
+                'running': False,
+                'stopping': True,
+                'clean_ended': False,
+                'experiment_name': stopping_experiment.experiment_name,
+                'experiment_id': stopping_experiment.id,
+                'is_batch': stopping_experiment.batch_id is not None,
+                'message': 'Experiment is stopping. Please wait...'
+            }), 200
+
         # find running experiment for the current reservation
         running_experiment = Experiment.query.filter_by(
             reservation_id=reservation_id,
@@ -1197,6 +1214,7 @@ def get_experiment_status():
                 return jsonify({
                     'success': True,
                     'running': False,
+                    'stopping': False,
                     'clean_ended': True,
                     'message': 'No experiment running'
                 }), 200
@@ -1221,6 +1239,7 @@ def get_experiment_status():
                     return jsonify({
                         'success': True,
                         'running': False,
+                        'stopping': False,
                         'clean_ended': True,
                         'just_completed': True,
                         'experiment_name': running_experiment.experiment_name,
@@ -1237,6 +1256,7 @@ def get_experiment_status():
                     return jsonify({
                         'success': True,
                         'running': False,
+                        'stopping': False,
                         'clean_ended': False,
                         'waiting_cleanup': True,
                         'experiment_name': running_experiment.experiment_name,
@@ -1249,6 +1269,7 @@ def get_experiment_status():
                     return jsonify({
                         'success': True,
                         'running': False,
+                        'stopping': False,
                         'clean_ended': True,
                         'just_completed': True,
                         'experiment_name': running_experiment.experiment_name,
@@ -1262,6 +1283,7 @@ def get_experiment_status():
                     return jsonify({
                         'success': True,
                         'running': False,
+                        'stopping': False,
                         'clean_ended': False,
                         'waiting_cleanup': True,
                         'experiment_name': running_experiment.experiment_name,
@@ -1294,6 +1316,7 @@ def get_experiment_status():
             return jsonify({
                 'success': True,
                 'running': True,
+                'stopping': False,
                 'clean_ended': False,
                 'experiment_id': running_experiment.id,
                 'experiment_name': running_experiment.experiment_name,
@@ -1311,6 +1334,7 @@ def get_experiment_status():
             return jsonify({
                 'success': True,
                 'running': True,
+                'stopping': False,
                 'clean_ended': False,
                 'experiment_name': running_experiment.experiment_name,
                 'remaining_seconds': remaining_seconds,
@@ -1348,6 +1372,8 @@ def finish_experiment():
             return jsonify({'success': False, 'error': 'No experiment found for this reservation'}), 400
 
         print(f"[FINISH] Stopping experiment for reservation {reservation_id}", flush=True)
+        running_experiment.status = 'stopping'
+        db.session.commit()
 
         # set stop flag for threads
         with experiments_lock:

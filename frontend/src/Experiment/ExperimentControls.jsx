@@ -1,5 +1,5 @@
 // ExperimentControls.jsx
-import React, {useEffect } from 'react';
+import React, {useEffect, useRef } from 'react';
 
 export default function ExperimentControls({
     experimentTimer,
@@ -28,6 +28,8 @@ export default function ExperimentControls({
 }) {
     const experimentEndTimeRef = React.useRef(null);
     const [currentExperimentName, setCurrentExperimentName] = React.useState('');
+    const [isExperimentStopping, setIsExperimentStopping] = React.useState(false);
+    const statusPollingIntervalRef = React.useRef(null);
 
     // function to format time for timer
     const formatTime = (totalSeconds) => {
@@ -72,6 +74,7 @@ export default function ExperimentControls({
     // check if there is an active experiment
     useEffect(() => {
         const checkExperimentStatus = async () => {
+
             if (!reservation_id) return;
 
             try {
@@ -82,11 +85,33 @@ export default function ExperimentControls({
                 });
 
                 const data = await response.json();
-                // the experiment is running and not concluded yet
-                if (data.success && data.running) {
+
+                if (data.success && data.stopping) {
+                    setRunningExperiment(true);
+                    setIsExperimentStopping(true);
+                    setCurrentExperimentId(data.experiment_id);
+                    setCurrentExperimentName(data.experiment_name);
+
+                    setExperimentRunMessage(`Experiment "${data.experiment_name}" is stopping. Please wait...`);
+                    setExperimentRunMessageType('warning');
+                    setExperimentTimer('--:--:--');
+
+                    if (timerIntervalRef.current) {
+                        clearInterval(timerIntervalRef.current);
+                        timerIntervalRef.current = null;
+                    }
+                    if (!statusPollingIntervalRef.current) {
+                        console.log('Starting polling for stopping experiment');
+                        statusPollingIntervalRef.current = setInterval(() => {
+                            checkExperimentStatus();
+                        }, 2000);
+                    }
+                } else if (data.success && data.running) {
+                    // the experiment is running and not concluded yet
                     const expId = data.experiment_id;
                     const remainingSeconds = data.remaining_seconds;
                     setRunningExperiment(true);
+                    setIsExperimentStopping(false);
                     setCurrentExperimentId(data.experiment_id);
                     setCurrentExperimentName(data.experiment_name);
                     if (data.is_batch) {
@@ -96,9 +121,13 @@ export default function ExperimentControls({
                     }
 
                     setExperimentRunMessageType('success');
-                    //setExperimentTimer(formatTime(remainingSeconds));
 
-                    //let timeLeft = remainingSeconds;
+                    if (statusPollingIntervalRef.current) {
+                        console.log('Stopping polling - experiment is running normally');
+                        clearInterval(statusPollingIntervalRef.current);
+                        statusPollingIntervalRef.current = null;
+                    }
+
                     experimentEndTimeRef.current = Date.now() + (remainingSeconds * 1000);
                     if (timerIntervalRef.current) {
                         clearInterval(timerIntervalRef.current);
@@ -153,6 +182,29 @@ export default function ExperimentControls({
                     setExperimentRunMessageType('success');
                     setExperimentTimer('--:--:--');
                     setRunningExperiment(false);
+                    setIsExperimentStopping(false);
+                    if (statusPollingIntervalRef.current) {
+                        console.log('Stopping polling - experiment completed');
+                        clearInterval(statusPollingIntervalRef.current);
+                        statusPollingIntervalRef.current = null;
+                    }
+                } else {
+
+                    console.log('Experiment removed after stopping - unlocking page');
+
+                    setRunningExperiment(false);
+                    setIsExperimentStopping(false);
+                    setCurrentExperimentId(null);
+                    setCurrentExperimentName('');
+                    setExperimentTimer('--:--:--');
+                    setExperimentRunMessage('');
+                    setExperimentRunMessageType('');
+
+                    if (statusPollingIntervalRef.current) {
+                        console.log('Stopping polling - no experiment found');
+                        clearInterval(statusPollingIntervalRef.current);
+                        statusPollingIntervalRef.current = null;
+                    }
                 }
 
             } catch (error) {
@@ -165,6 +217,9 @@ export default function ExperimentControls({
         return () => {
             if (timerIntervalRef.current) {
                 clearInterval(timerIntervalRef.current);
+            }
+            if (statusPollingIntervalRef.current) {
+                clearInterval(statusPollingIntervalRef.current);
             }
         };
     }, [reservation_id]);
@@ -319,6 +374,7 @@ export default function ExperimentControls({
         setExperimentRunMessageType('warning');
 
         setWaitOperation(true);
+        setIsExperimentStopping(true);
 
         try {
             const response = await fetch('http://localhost:5004/api/experimenter/finishExperiment', {
@@ -336,6 +392,7 @@ export default function ExperimentControls({
                 }
 
                 experimentEndTimeRef.current = null;
+                setIsExperimentStopping(false);
                 setRunningExperiment(false);
                 setCurrentExperimentId(null);
                 setExperimentTimer('--:--:--');
@@ -350,12 +407,14 @@ export default function ExperimentControls({
             } else {
                 setExperimentRunMessage(`Error: ${data.error || 'Failed to finish experiment'}`);
                 setExperimentRunMessageType('error');
+                setIsExperimentStopping(false);
             }
 
         } catch (error) {
             console.error('Error finishing experiment:', error);
             setExperimentRunMessage('Error: network/server error');
             setExperimentRunMessageType('error');
+            setIsExperimentStopping(false);
         } finally {
             setWaitOperation(false);
         }
@@ -480,7 +539,7 @@ export default function ExperimentControls({
                         type="button"
                         className="delete-button delete configuration-button"
                         onClick={handleFinishExperiment}
-                        disabled={(!runningExperiment && !currentExperimentId) || waitOperation}
+                        disabled={(!runningExperiment && !currentExperimentId) || waitOperation || isExperimentStopping}
                     >
                         Finish experiment
                     </button>
