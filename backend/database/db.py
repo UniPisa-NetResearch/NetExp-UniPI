@@ -83,16 +83,12 @@ class Experiment(db.Model):
         index=True
     )
     experiment_name = db.Column(db.String(255), nullable=False)
-
     start_time = db.Column(db.DateTime, nullable=False)
     end_time = db.Column(db.DateTime, nullable=False)
-
     duration_s = db.Column(db.Integer, nullable=False)
-
-    # 'running', 'completed'
-    status = db.Column(db.String(20), default='running', nullable=False)
-
+    status = db.Column(db.String(20), default='running', nullable=False)         # 'running', 'completed'
     batch_id = db.Column(db.String(100), nullable=True, index=True)
+    clean_ended = db.Column(db.Boolean, default=False, nullable=False)
 
     def __repr__(self):
         return f'<ExperimentRun id={self.id} reservation={self.reservation_id} exp={self.experiment_name} status={self.status}>'

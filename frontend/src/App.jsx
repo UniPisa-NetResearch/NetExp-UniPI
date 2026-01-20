@@ -295,6 +295,10 @@ function App() {
                 setIsEvaluationAccessGranted(false);
                 return false;
             }
+            if (statusData.success && !statusData.clean_ended) {
+                setIsEvaluationAccessGranted(false);
+                return false;
+            }
 
             // Check risultati disponibili
             const resultsResponse = await fetch('http://localhost:5005/api/evaluator/getExperimentResults', {

@@ -997,7 +997,8 @@ def run_experiment():
                     end_time=exp_end,
                     duration_s=exp_duration,
                     status='running',
-                    batch_id=batch_id
+                    batch_id=batch_id,
+                    clean_ended=False
                 )
             else:
                 new_experiment = Experiment(
@@ -1007,7 +1008,8 @@ def run_experiment():
                     end_time=exp_end,
                     duration_s=exp_duration,
                     status='running',
-                    batch_id=batch_id
+                    batch_id=batch_id,
+                    clean_ended=False
                 )
 
             db.session.add(new_experiment)
@@ -1111,6 +1113,10 @@ def run_experiment():
                             elif experiment_success and telemetry_success:
                                 exp.status = 'completed'
                                 print(f"[EXPERIMENT] {name_exp} completed", flush=True)
+
+                                exp.clean_ended = True
+                                print(f"[EXPERIMENT] {name_exp} - Cleanup completed, clean_ended set to True", flush=True)
+
                                 db.session.commit()
                             else:
                                 exp.status = 'error'
@@ -1123,10 +1129,6 @@ def run_experiment():
                                     print(f"[EXPERIMENT] {name_exp} failed: {', '.join(error_details)}", flush=True)
 
                             db.session.commit()
-
-                    # wait 1 minute between experiments
-                    if is_batch and id_x < len(experiments_data) - 1:
-                        print(f"[BATCH] Waiting 60s before next experiment...", flush=True)
 
                 # remove from dictionary when completed
                 with experiments_lock:
@@ -1185,42 +1187,87 @@ def get_experiment_status():
         ).order_by(Experiment.start_time).first()
 
         if not running_experiment:
-            return jsonify({
-                'success': True,
-                'running': False,
-                'message': 'No experiment running'
-            }), 200
+            running_experiment = Experiment.query.filter_by(
+                reservation_id=reservation_id,
+                status='completed',
+                clean_ended=False
+            ).order_by(Experiment.start_time).first()
+
+            if not running_experiment:
+                return jsonify({
+                    'success': True,
+                    'running': False,
+                    'clean_ended': True,
+                    'message': 'No experiment running'
+                }), 200
 
         now = datetime.now()
-        """
-        # check if the experiment is ended
-        if now >= running_experiment.end_time:
-            # update status to completed
-            running_experiment.status = 'completed'
-            db.session.commit()
 
-            return jsonify({
-                'success': True,
-                'running': False,
-                'just_completed': True,
-                'experiment_name': running_experiment.experiment_name,
-                'experiment_id': running_experiment.id,
-                'message': 'Experiment completed'
-            }), 200
-        """
-        is_actually_running = False
         with experiments_lock:
             is_actually_running = reservation_id in running_experiments
 
-        if not is_actually_running and running_experiment.status == 'completed':
-            return jsonify({
-                'success': True,
-                'running': False,
-                'just_completed': True,
-                'experiment_name': running_experiment.experiment_name,
-                'experiment_id': running_experiment.id,
-                'message': 'Experiment completed'
-            }), 200
+        if running_experiment.status == 'completed':
+            is_batch = running_experiment.batch_id is not None
+
+            if is_batch:
+                batch_experiments = Experiment.query.filter_by(
+                    reservation_id=reservation_id,
+                    batch_id=running_experiment.batch_id
+                ).all()
+
+                all_clean_ended = all(exp.clean_ended for exp in batch_experiments)
+
+                if not is_actually_running and all_clean_ended:
+                    return jsonify({
+                        'success': True,
+                        'running': False,
+                        'clean_ended': True,
+                        'just_completed': True,
+                        'experiment_name': running_experiment.experiment_name,
+                        'experiment_id': running_experiment.id,
+                        'is_batch': True,
+                        'batch_id': running_experiment.batch_id,
+                        'message': 'Batch completed and cleanup finished'
+                    }), 200
+                else:
+                    not_cleaned = [exp.experiment_name for exp in batch_experiments if not exp.clean_ended]
+                    print(f"[STATUS] Batch {running_experiment.batch_id}: waiting for cleanup. Pending: {not_cleaned}",
+                          flush=True)
+
+                    return jsonify({
+                        'success': True,
+                        'running': False,
+                        'clean_ended': False,
+                        'waiting_cleanup': True,
+                        'experiment_name': running_experiment.experiment_name,
+                        'is_batch': True,
+                        'batch_id': running_experiment.batch_id,
+                        'message': 'Batch completed. Waiting for cleanup to finish...'
+                    }), 200
+            else:
+                if not is_actually_running and running_experiment.clean_ended:
+                    return jsonify({
+                        'success': True,
+                        'running': False,
+                        'clean_ended': True,
+                        'just_completed': True,
+                        'experiment_name': running_experiment.experiment_name,
+                        'experiment_id': running_experiment.id,
+                        'is_batch': False,
+                        'message': 'Experiment completed and cleanup finished'
+                    }), 200
+                else:
+                    print(f"[STATUS] Experiment {running_experiment.experiment_name}: waiting for cleanup", flush=True)
+
+                    return jsonify({
+                        'success': True,
+                        'running': False,
+                        'clean_ended': False,
+                        'waiting_cleanup': True,
+                        'experiment_name': running_experiment.experiment_name,
+                        'is_batch': False,
+                        'message': 'Experiment completed. Waiting for cleanup to finish...'
+                    }), 200
 
         is_batch = running_experiment.batch_id is not None
 
@@ -1247,6 +1294,7 @@ def get_experiment_status():
             return jsonify({
                 'success': True,
                 'running': True,
+                'clean_ended': False,
                 'experiment_id': running_experiment.id,
                 'experiment_name': running_experiment.experiment_name,
                 'remaining_seconds': remaining_seconds,
@@ -1263,6 +1311,7 @@ def get_experiment_status():
             return jsonify({
                 'success': True,
                 'running': True,
+                'clean_ended': False,
                 'experiment_name': running_experiment.experiment_name,
                 'remaining_seconds': remaining_seconds,
                 'total_duration_s': running_experiment.duration_s,
