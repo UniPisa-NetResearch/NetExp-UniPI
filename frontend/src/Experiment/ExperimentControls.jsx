@@ -1,5 +1,5 @@
 // ExperimentControls.jsx
-import React, {useEffect, useRef } from 'react';
+import React, {useEffect} from 'react';
 
 export default function ExperimentControls({
     experimentTimer,
@@ -29,7 +29,9 @@ export default function ExperimentControls({
     const experimentEndTimeRef = React.useRef(null);
     const [currentExperimentName, setCurrentExperimentName] = React.useState('');
     const [isExperimentStopping, setIsExperimentStopping] = React.useState(false);
+    const [isCleaningUp, setIsCleaningUp] = React.useState(false);
     const statusPollingIntervalRef = React.useRef(null);
+    const cleanupPollingIntervalRef = React.useRef(null);
 
     // function to format time for timer
     const formatTime = (totalSeconds) => {
@@ -86,6 +88,50 @@ export default function ExperimentControls({
 
                 const data = await response.json();
 
+                if (data.success && !data.clean_ended && !data.stopping && !data.running) {
+                    // cleanup
+                    setRunningExperiment(true);
+                    setIsCleaningUp(true);
+                    setCurrentExperimentId(data.experiment_id);
+                    setCurrentExperimentName(data.experiment_name);
+                    setExperimentRunMessage(`Experiment "${data.experiment_name}" completed with success, waiting for cleanup...`);
+                    setExperimentRunMessageType('success');
+                    setExperimentTimer('--:--:--');
+
+                    if (timerIntervalRef.current) {
+                        clearInterval(timerIntervalRef.current);
+                        timerIntervalRef.current = null;
+                    }
+                    // start cleanup polling
+                    if (!cleanupPollingIntervalRef.current) {
+                        console.log('Starting cleanup polling after page reload');
+                        cleanupPollingIntervalRef.current = setInterval(() => {
+                            pollCleanupStatus(data.experiment_id, data.experiment_name);
+                        }, 2000);
+                    }
+                    return;
+                }
+                if (data.success && data.clean_ended && !data.stopping && !data.running) {
+                    // cleanup completed, apply reset
+                    setRunningExperiment(false);
+                    setIsCleaningUp(false);
+                    setCurrentExperimentId(null);
+                    setCurrentExperimentName('');
+                    setExperimentTimer('--:--:--');
+                    setExperimentRunMessage('');
+                    setExperimentRunMessageType('');
+
+                    if (cleanupPollingIntervalRef.current) {
+                        clearInterval(cleanupPollingIntervalRef.current);
+                        cleanupPollingIntervalRef.current = null;
+                    }
+                    if (statusPollingIntervalRef.current) {
+                        clearInterval(statusPollingIntervalRef.current);
+                        statusPollingIntervalRef.current = null;
+                    }
+                    return;
+                }
+
                 if (data.success && data.stopping) {
                     setRunningExperiment(true);
                     setIsExperimentStopping(true);
@@ -114,12 +160,12 @@ export default function ExperimentControls({
                     setIsExperimentStopping(false);
                     setCurrentExperimentId(data.experiment_id);
                     setCurrentExperimentName(data.experiment_name);
+
                     if (data.is_batch) {
                         setExperimentRunMessage(`Batch in progress: "${data.current_experiment}" (${data.total_experiments} experiments total)`);
                     } else {
                         setExperimentRunMessage(`Experiment "${data.experiment_name}" in progress`);
                     }
-
                     setExperimentRunMessageType('success');
 
                     if (statusPollingIntervalRef.current) {
@@ -148,10 +194,10 @@ export default function ExperimentControls({
                             timerIntervalRef.current = null;
                             experimentEndTimeRef.current = null;
                             setExperimentTimer('--:--:--');
-                            setRunningExperiment(false);
-                            setCurrentExperimentId(null);
-                            setExperimentRunMessage(`Experiment "${data.experiment_name}" completed`);
+                            setIsCleaningUp(true);
+                            setExperimentRunMessage(`Experiment "${data.experiment_name}" completed with success, waiting for cleanup...`);
                             setExperimentRunMessageType('success');
+
                             // update the experiment status on database if it is ended
                             fetch('http://localhost:5004/api/experimenter/updateExperimentStatus', {
                                 method: 'POST',
@@ -162,6 +208,11 @@ export default function ExperimentControls({
                                 })
                             }).then(() => {
                                 console.log('Experiment status updated to completed');
+                                if (!cleanupPollingIntervalRef.current) {
+                                    cleanupPollingIntervalRef.current = setInterval(() => {
+                                        pollCleanupStatus(expId, data.experiment_name);
+                                    }, 2000);
+                                }
                             }).catch(error => {
                                 console.error('Error updating experiment status:', error);
                             });
@@ -188,6 +239,10 @@ export default function ExperimentControls({
                         clearInterval(statusPollingIntervalRef.current);
                         statusPollingIntervalRef.current = null;
                     }
+                    if (cleanupPollingIntervalRef.current) {
+                        clearInterval(cleanupPollingIntervalRef.current);
+                        cleanupPollingIntervalRef.current = null;
+                    }
                 } else {
 
                     console.log('Experiment removed after stopping - unlocking page');
@@ -205,6 +260,10 @@ export default function ExperimentControls({
                         clearInterval(statusPollingIntervalRef.current);
                         statusPollingIntervalRef.current = null;
                     }
+                    if (cleanupPollingIntervalRef.current) {
+                        clearInterval(cleanupPollingIntervalRef.current);
+                        cleanupPollingIntervalRef.current = null;
+                    }
                 }
 
             } catch (error) {
@@ -221,6 +280,9 @@ export default function ExperimentControls({
             if (statusPollingIntervalRef.current) {
                 clearInterval(statusPollingIntervalRef.current);
             }
+            if (cleanupPollingIntervalRef.current) {
+                clearInterval(cleanupPollingIntervalRef.current);
+            }
         };
     }, [reservation_id]);
     // update timer
@@ -231,6 +293,41 @@ export default function ExperimentControls({
             }
         };
     }, []);
+    // check cleanup status
+    const pollCleanupStatus = async (expId, expName) => {
+        try {
+            const response = await fetch('http://localhost:5004/api/experimenter/getExperimentStatus', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ reservation_id })
+            });
+
+            const data = await response.json();
+
+            if (data.success && data.clean_ended === true) {
+                if (cleanupPollingIntervalRef.current) {
+                    clearInterval(cleanupPollingIntervalRef.current);
+                    cleanupPollingIntervalRef.current = null;
+                }
+
+                setIsCleaningUp(false);
+                setRunningExperiment(false);
+                setCurrentExperimentId(null);
+                setCurrentExperimentName('');
+                setExperimentTimer('--:--:--');
+                setExperimentRunMessage(`Cleanup of ${expName} completed`);
+                setExperimentRunMessageType('success');
+
+                setTimeout(() => {
+                    setExperimentRunMessage('');
+                    setExperimentRunMessageType('');
+                }, 2000);
+            }
+        } catch (error) {
+            console.error('Error polling cleanup status:', error);
+        }
+    };
+
     // run the selected experiment
     const handleRunExperiment = async () => {
         setExperimentRunMessage('');
@@ -248,7 +345,6 @@ export default function ExperimentControls({
                 setExperimentRunMessageType('error');
                 return;
             }
-
             if (!selectedExperimentDefinitionRun || selectedExperimentDefinitionRun === '') {
                 setExperimentRunMessage('Error: please select an experiment to run');
                 setExperimentRunMessageType('error');
@@ -301,7 +397,6 @@ export default function ExperimentControls({
                 setExperimentRunMessageType('success');
 
                 experimentEndTimeRef.current = Date.now() + (durationSeconds * 1000);
-                //setExperimentTimer(formatTime(durationSeconds));
 
                 if (timerIntervalRef.current) {
                     clearInterval(timerIntervalRef.current);
@@ -322,11 +417,10 @@ export default function ExperimentControls({
                         timerIntervalRef.current = null;
                         experimentEndTimeRef.current = null;
                         setExperimentTimer('--:--:--');
-                        setRunningExperiment(false);
-                        setCurrentExperimentId(null);
-                        setCurrentExperimentName('');
-                        setExperimentRunMessage(data.is_batch ? 'Batch completed' : `Experiment ${payload.experiment_name} completed`);
+                        setIsCleaningUp(true);
+                        setExperimentRunMessage(data.is_batch ? 'Batch completed' : `Experiment ${payload.experiment_name} completed, waiting for cleanup...`);
                         setExperimentRunMessageType('success');
+
                         // experiment completed, update status
                         fetch('http://localhost:5004/api/experimenter/updateExperimentStatus', {
                             method: 'POST',
@@ -337,6 +431,11 @@ export default function ExperimentControls({
                             })
                         }).then(() => {
                             console.log('Experiment status updated to completed');
+                            if (!cleanupPollingIntervalRef.current) {
+                                cleanupPollingIntervalRef.current = setInterval(() => {
+                                    pollCleanupStatus(expId, data.is_batch ? 'Batch' : payload.experiment_name);
+                                }, 2000);
+                            }
                         }).catch(error => {
                             console.error('Error updating experiment status:', error);
                         });
@@ -390,7 +489,14 @@ export default function ExperimentControls({
                     clearInterval(timerIntervalRef.current);
                     timerIntervalRef.current = null;
                 }
-
+                if (statusPollingIntervalRef.current) {
+                    clearInterval(statusPollingIntervalRef.current);
+                    statusPollingIntervalRef.current = null;
+                }
+                if (cleanupPollingIntervalRef.current) {
+                    clearInterval(cleanupPollingIntervalRef.current);
+                    cleanupPollingIntervalRef.current = null;
+                }
                 experimentEndTimeRef.current = null;
                 setIsExperimentStopping(false);
                 setRunningExperiment(false);
@@ -539,7 +645,7 @@ export default function ExperimentControls({
                         type="button"
                         className="delete-button delete configuration-button"
                         onClick={handleFinishExperiment}
-                        disabled={(!runningExperiment && !currentExperimentId) || waitOperation || isExperimentStopping}
+                        disabled={(!runningExperiment && !currentExperimentId) || waitOperation || isExperimentStopping || isCleaningUp}
                     >
                         Finish experiment
                     </button>
