@@ -18,6 +18,14 @@ USER_CONFIGS_DIR = os.path.join(BASE_DIR, "userConfigs")
 SNAPSHOTS_DIR = os.path.join(BASE_DIR, "snapshots")
 TEMPLATES_DIR = os.path.join(CONTROLLER_PLAYBOOKS_DIR, "templates")
 WRAPPERS_DIR = os.path.join(CONTROLLER_PLAYBOOKS_DIR, "wrappers")
+
+# experimenter dirs
+EXPERIMENTER_BASE_DIR = os.path.join(BASE_DIR, "experimenter")
+EXPERIMENT_PLAYBOOKS_DIR = os.path.join(EXPERIMENTER_BASE_DIR, "experimentPlaybooks")
+EXPERIMENT_RESULTS_DIR = os.path.join(EXPERIMENTER_BASE_DIR, "experimentResults")
+EXPERIMENT_TELEMETRY_DIR = os.path.join(EXPERIMENTER_BASE_DIR, "experimentTelemetry")
+EXPERIMENT_TEMPLATES_DIR = os.path.join(EXPERIMENTER_BASE_DIR, "experimentTemplates")
+
 # playbook template schema
 INPUT_TEMPLATE_CONTENT = r"""- name: Apply per-host commands
   hosts: all
@@ -38,6 +46,7 @@ INPUT_TEMPLATE_CONTENT = r"""- name: Apply per-host commands
 """
 
 ANSIBLE_EXTRA_ARGS = ""            #  extra args (ex. -c paramiko)
+
 # default credentials per role
 SONIC_USER = "admin"
 SONIC_PASS = "YourPaSsWoRd"
@@ -126,6 +135,7 @@ def write_inventory(reservation_id: int, devices: list):
             hosts_written.append(host_key)
 
     return inv_path, hosts_written
+
 # function to convert window path into wsl compatible
 def win_to_wsl_path(path):
     return "/mnt/" + path.replace("\\", "/").replace(":", "").lower()
@@ -419,8 +429,16 @@ def revoke_access():
     safe_res_snapshots_dir = safe_filename(f"res_{reservation_id}_snapshots")
     res_snapshots_path = os.path.join(SNAPSHOTS_DIR, safe_res_snapshots_dir)
 
+    # get experimenter directories for this reservation
+    # get reservation folder
+    experimenter_res_prefix = safe_filename(f"res_{reservation_id}")
+    exp_playbooks_path = os.path.join(EXPERIMENT_PLAYBOOKS_DIR, experimenter_res_prefix)
+    exp_results_path = os.path.join(EXPERIMENT_RESULTS_DIR, experimenter_res_prefix)
+    exp_telemetry_path = os.path.join(EXPERIMENT_TELEMETRY_DIR, experimenter_res_prefix)
+    exp_templates_path = os.path.join(EXPERIMENT_TEMPLATES_DIR, experimenter_res_prefix)
+
     out, err = None, None
-    # skip revoke and rollback playbook if
+    # skip revoke and rollback playbook
     if run_rollback:
         # execute revoke playbook
         pb_path = get_playbook_template_path("revoke")
@@ -467,6 +485,18 @@ def revoke_access():
 
     # remove <res_id>_snapshots folder
     remove_files(res_snapshots_path, "folder")
+
+    # remove experimentPlaybooks/res_<reservation_id>
+    remove_files(exp_playbooks_path, "folder")
+
+    # remove experimentResults/res_<reservation_id>
+    remove_files(exp_results_path, "folder")
+
+    # remove experimentTelemetry/res_<reservation_id>
+    remove_files(exp_telemetry_path, "folder")
+
+    # remove experimentTemplates/res_<reservation_id>
+    remove_files(exp_templates_path, "folder")
 
     # remove active res file
     remove_files(f"res{reservation_id}", "file")

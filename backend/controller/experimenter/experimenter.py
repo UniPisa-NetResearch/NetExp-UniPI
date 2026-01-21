@@ -15,7 +15,7 @@ from ...database.db import db, UserMetrics, Reservation, Experiment
 from pygnmi.client import gNMIclient
 from ...app import app
 from ..controller import (safe_filename, INVENTORY_DIR, TEST)
-from .experimenter_utils import (ensure_experiment_dirs, get_next_available_id, collect_telemetry_data, convert_iperf_experiment_to_schedule, execute_experiment_schedule, validate_experiment_template_schema, IndentedDumper, finish_cleanup_and_remove)
+from .experimenter_utils import (ensure_experiment_dirs, get_next_available_id, collect_telemetry_data, convert_iperf_experiment_to_schedule, execute_experiment_schedule, validate_experiment_template_schema, IndentedDumper, finish_cleanup_and_remove, finalize_batch_results, cleanup_batch_temp_results)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 EXPERIMENT_TEMPLATES_DIR = os.path.join(BASE_DIR, "experimentTemplates")
@@ -1054,26 +1054,17 @@ def run_experiment():
                         experiment_future = executor.submit(
                             execute_experiment_schedule,
                       reservation_id,
-                            name_exp,
-                            data_exp,
-                            inventory_path,
-                            EXPERIMENT_RESULTS_DIR,
-                            EXPERIMENT_PLAYBOOKS_DIR,
-                            running_experiments,
-                            experiments_lock,
-                            TEST
+                            name_exp, data_exp, inventory_path,
+                            EXPERIMENT_RESULTS_DIR, EXPERIMENT_PLAYBOOKS_DIR,
+                            running_experiments, experiments_lock, TEST,is_batch
                         )
 
                         telemetry_future = executor.submit(
                             collect_telemetry_data,
                       reservation_id,
-                            name_exp,
-                            telemetry_exp,
-                            inventory_path,
-                            experiment_info['duration'],
-                            EXPERIMENT_RESULTS_DIR,
-                            running_experiments,
-                            experiments_lock
+                            name_exp, telemetry_exp, inventory_path,
+                            experiment_info['duration'], EXPERIMENT_RESULTS_DIR,
+                            running_experiments, experiments_lock, is_batch
                         )
 
                         # save Futures and flag
@@ -1108,7 +1099,6 @@ def run_experiment():
                                             (not telemetry_success and telemetry_error and "stopped by user" in telemetry_error.lower()))
 
                             if is_user_stop:
-                                #exp.status = "stopped"
                                 print(f"[EXPERIMENT] {name_exp} stopped by user", flush=True)
                             elif experiment_success and telemetry_success:
                                 exp.status = 'completed'
@@ -1128,6 +1118,24 @@ def run_experiment():
                                 if error_details:
                                     print(f"[EXPERIMENT] {name_exp} failed: {', '.join(error_details)}", flush=True)
 
+                            # if all experiments are completed, write results
+                            if is_batch:
+                                all_completed_successfully = all(
+                                    exp.status == 'completed' for exp in
+                                    db.session.query(Experiment).filter_by(reservation_id=reservation_id, batch_id=batch_id).all()
+                                )
+
+                                if all_completed_successfully:
+                                    print(f"[BATCH] All experiments completed successfully, finalizing results...", flush=True)
+                                    finalize_success, finalize_error = finalize_batch_results(
+                                        reservation_id,
+                                        [info['name'] for info in experiments_data],
+                                        EXPERIMENT_RESULTS_DIR
+                                    )
+                                    if not finalize_success:
+                                        print(f"[BATCH] Warning: Failed to finalize results: {finalize_error}", flush=True)
+                                else:
+                                    print(f"[BATCH] Some experiments failed, keeping temporary results", flush=True)
                             db.session.commit()
 
                 # remove from dictionary when completed
@@ -1379,7 +1387,7 @@ def finish_experiment():
         with experiments_lock:
             if reservation_id not in running_experiments:
                 print(f"[FINISH] Warning: No running experiment tracked for reservation {reservation_id}", flush=True)
-                return finish_cleanup_and_remove(reservation_id, running_experiment, EXPERIMENT_PLAYBOOKS_DIR, experiments_lock, running_experiments)
+                return finish_cleanup_and_remove(reservation_id, running_experiment, EXPERIMENT_PLAYBOOKS_DIR, experiments_lock, running_experiments, EXPERIMENT_RESULTS_DIR)
 
         playbook_running = False
         current_playbook = None
@@ -1421,7 +1429,7 @@ def finish_experiment():
         print(f"[FINISH] Waiting for threads to complete...", flush=True)
         time.sleep(2.0)
 
-        return finish_cleanup_and_remove(reservation_id, running_experiment, EXPERIMENT_PLAYBOOKS_DIR, experiments_lock, running_experiments)
+        return finish_cleanup_and_remove(reservation_id, running_experiment, EXPERIMENT_PLAYBOOKS_DIR, experiments_lock, running_experiments, EXPERIMENT_RESULTS_DIR)
 
     except Exception as e:
         db.session.rollback()

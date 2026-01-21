@@ -5,12 +5,14 @@ import yaml
 import time
 import threading
 import traceback
+import shutil
 from datetime import datetime
 
 from flask import jsonify
 from pygnmi.client import gNMIclient
 from ...database.db import db, Experiment
 from ..controller import run_ansible_playbook, win_to_wsl_path, safe_filename, INVENTORY_DIR
+from ...app import app
 
 # function to indent yaml file
 class IndentedDumper(yaml.Dumper):
@@ -46,10 +48,65 @@ def get_next_available_id():
         print(f"Error finding next available ID: {str(e)}")
         return None
 
-def collect_telemetry_data(reservation_id, experiment_name, telemetry_config, inventory_path, duration_s, results_base_dir, running_experiments, experiments_lock):
+
+def finalize_batch_results(reservation_id, experiment_names, results_base_dir):
+    # copy temporary results to final location and remove temp directories
+
+    try:
+        for exp_name in experiment_names:
+            temp_dir = os.path.join(results_base_dir, f"res_{reservation_id}", f"temp_{exp_name}")
+            final_dir = os.path.join(results_base_dir, f"res_{reservation_id}", exp_name)
+
+            if os.path.exists(temp_dir):
+                print(f"[BATCH FINALIZE] Copying results from temp_{exp_name} to {exp_name}", flush=True)
+
+                # if final directory exists, remove it first
+                if os.path.exists(final_dir):
+                    shutil.rmtree(final_dir)
+
+                # copy temp directory to final location
+                shutil.copytree(temp_dir, str(final_dir))
+
+                # remove temp directory
+                shutil.rmtree(temp_dir)
+                print(f"[BATCH FINALIZE] Finalized results for {exp_name}", flush=True)
+
+        return True, None
+    except Exception as e:
+        error_msg = f"Error finalizing batch results: {str(e)}"
+        print(f"[BATCH FINALIZE] ERROR: {error_msg}", flush=True)
+        traceback.print_exc()
+        return False, error_msg
+
+
+def cleanup_batch_temp_results(reservation_id, experiment_names, results_base_dir):
+    # remove temporary result directories when a batch is terminated
+
+    try:
+        import shutil
+        removed_count = 0
+        for exp_name in experiment_names:
+            temp_dir = os.path.join(results_base_dir, f"res_{reservation_id}", f"temp_{exp_name}")
+
+            if os.path.exists(temp_dir):
+                print(f"[BATCH CLEANUP] Removing temporary results for temp_{exp_name}", flush=True)
+                shutil.rmtree(temp_dir)
+                removed_count += 1
+
+        print(f"[BATCH CLEANUP] Removed {removed_count} temporary result directories", flush=True)
+        return True, None
+    except Exception as e:
+        error_msg = f"Error cleaning up batch temp results: {str(e)}"
+        print(f"[BATCH CLEANUP] ERROR: {error_msg}", flush=True)
+        traceback.print_exc()
+        return False, error_msg
+
+
+def collect_telemetry_data(reservation_id, experiment_name, telemetry_config, inventory_path, duration_s, results_base_dir, running_experiments, experiments_lock, is_batch=False):
     # collect telemetry data during experiment
     try:
-        results_dir = os.path.join(results_base_dir, f"res_{reservation_id}", experiment_name)
+        exp_dir_name = f"temp_{experiment_name}" if is_batch else experiment_name
+        results_dir = os.path.join(results_base_dir, f"res_{reservation_id}", exp_dir_name)
         os.makedirs(results_dir, exist_ok=True)
 
         print(f"[TELEMETRY] Starting collection for {experiment_name}", flush=True)
@@ -407,7 +464,7 @@ def convert_iperf_experiment_to_schedule(experiment_data):
 
     return standard_schedule, playbooks_base_path
 
-def execute_experiment_schedule(reservation_id, experiment_name, experiment_data, inventory_path, results_base_dir, playbooks_base_dir, running_experiments, experiments_lock, test_mode):
+def execute_experiment_schedule(reservation_id, experiment_name, experiment_data, inventory_path, results_base_dir, playbooks_base_dir, running_experiments, experiments_lock, test_mode, is_batch=False):
     # execute experiment schedule
     with experiments_lock:
         if reservation_id in running_experiments:
@@ -415,7 +472,8 @@ def execute_experiment_schedule(reservation_id, experiment_name, experiment_data
             running_experiments[reservation_id]['next_step_time'] = None
             running_experiments[reservation_id]['current_playbook'] = None
     try:
-        results_dir = os.path.join(results_base_dir, f"res_{reservation_id}", experiment_name)
+        exp_dir_name = f"temp_{experiment_name}" if is_batch else experiment_name
+        results_dir = os.path.join(results_base_dir, f"res_{reservation_id}", exp_dir_name)
         os.makedirs(results_dir, exist_ok=True)
         # get schedule section values and global duration
         schedule = experiment_data.get('schedule', [])
@@ -706,7 +764,7 @@ def validate_experiment_template_schema(yaml_data):
 
     return True, None
 
-def finish_cleanup_and_remove(reservation_id, running_experiment, playbooks_base_dir, experiments_lock, running_experiments):
+def finish_cleanup_and_remove(reservation_id, running_experiment, playbooks_base_dir, experiments_lock, running_experiments, results_base_dir ):
     # cleanup and remove experiment from database
     print(f"[FINISH] Running cleanup playbook", flush=True)
 
@@ -760,8 +818,18 @@ def finish_cleanup_and_remove(reservation_id, running_experiment, playbooks_base
             reservation_id=reservation_id,
             batch_id=running_experiment.batch_id
         ).all()
-
+        # collect experiment names before deleting them
+        experiment_names = [exp.experiment_name for exp in batch_experiments]
         print(f"[FINISH] Removing batch {running_experiment.batch_id} with {len(batch_experiments)} experiments from database", flush=True)
+
+        with app.app_context():
+            cleanup_success_temp, cleanup_error_temp = cleanup_batch_temp_results(
+                reservation_id,
+                experiment_names,
+                results_base_dir
+            )
+            if not cleanup_success_temp:
+                print(f"[FINISH] Warning: Failed to cleanup temp results: {cleanup_error_temp}", flush=True)
 
         for exp in batch_experiments:
             db.session.delete(exp)

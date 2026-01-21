@@ -469,6 +469,12 @@ export default function ExperimentControls({
         }
 
         const expName = currentExperimentName || 'Current experiment';
+        if (timerIntervalRef.current) {
+            clearInterval(timerIntervalRef.current);
+            timerIntervalRef.current = null;
+        }
+        experimentEndTimeRef.current = null;
+        setExperimentTimer('--:--:--');
         setExperimentRunMessage(`Stopping ${expName}...`);
         setExperimentRunMessageType('warning');
 
@@ -485,10 +491,6 @@ export default function ExperimentControls({
             const data = await response.json();
 
             if (data.success) {
-                if (timerIntervalRef.current) {
-                    clearInterval(timerIntervalRef.current);
-                    timerIntervalRef.current = null;
-                }
                 if (statusPollingIntervalRef.current) {
                     clearInterval(statusPollingIntervalRef.current);
                     statusPollingIntervalRef.current = null;
@@ -497,11 +499,10 @@ export default function ExperimentControls({
                     clearInterval(cleanupPollingIntervalRef.current);
                     cleanupPollingIntervalRef.current = null;
                 }
-                experimentEndTimeRef.current = null;
+
                 setIsExperimentStopping(false);
                 setRunningExperiment(false);
-                setCurrentExperimentId(null);
-                setExperimentTimer('--:--:--');
+                setCurrentExperimentId(null)
                 setCurrentExperimentName('');
                 setExperimentRunMessage(`Experiment ${expName} finished and removed`);
                 setExperimentRunMessageType('success');
