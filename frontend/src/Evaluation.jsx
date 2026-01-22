@@ -25,9 +25,13 @@ export default function Evaluation({ username, reservation_id }) {
     const [batchExperiments, setBatchExperiments] = useState([]);                   // experiment list in the batch
     const [selectedBatchExperiment, setSelectedBatchExperiment] = useState('');     // current experiment
     const [isBatchResult, setIsBatchResult] = useState(false);                     // batch flag
+    // download nfs section
+    const [downloadingNFS, setDownloadingNFS] = useState(false);
+    const [downloadNFSSuccess, setDownloadNFSSuccess] = useState(false);
+    const [deviceList, setDeviceList] = useState([]);
+    const [selectedNFSDevices, setSelectedNFSDevices] = useState([]);
 
-
-    // extract unique metric names from telemetry results
+     // extract unique metric names from telemetry results
     // telemetryResults is an Object with metric names as keys and returns an array of {name, label} objects
     const extractAvailableMetrics = (telemetryResults) => {
       const metricsSet = new Set();
@@ -47,6 +51,28 @@ export default function Evaluation({ username, reservation_id }) {
     useEffect(() => {
         loadExperimentResults();
     }, [reservation_id, selectedBatchExperiment]);
+
+    useEffect(() => {
+        const fetchDevices = async () => {
+            try {
+                const response = await fetch('http://localhost:5004/api/experimenter/getDevices', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ reservation_id })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    const deviceNames = data.devices.map(device => device.name);
+                    setDeviceList(deviceNames || []);
+                    setSelectedNFSDevices([]);
+                }
+            } catch (error) {
+                console.error('Error fetching devices:', error);
+            }
+        };
+        fetchDevices();
+    }, [reservation_id]);
 
     const allDevicesFromLog = useMemo(() => {
     if (!experimentData || !experimentData.execution_log) {
@@ -163,6 +189,50 @@ export default function Evaluation({ username, reservation_id }) {
         } catch (error) {
             console.error('Error downloading results:', error);
             alert('Error downloading results');
+        }
+    };
+
+    // download NFS mounted directories data
+    const handleDownloadNFSData = async () => {
+        if (!experimentData) return;
+
+        setDownloadingNFS(true);
+        setDownloadNFSSuccess(false);
+        try {
+            const response = await fetch('http://localhost:5005/api/evaluator/downloadNFSData', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    reservation_id,
+                    selected_devices: selectedNFSDevices
+                })
+            });
+
+            if (response.ok) {
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `nfs_data_${experimentData.experiment_name}.zip`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+
+                setDownloadNFSSuccess(true);
+                setTimeout(() => {
+                    setDownloadNFSSuccess(false);
+                }, 2000);
+
+            } else {
+                const error = await response.json();
+                alert(`Failed to download NFS data: ${error.error || 'Unknown error'}`);
+            }
+        } catch (error) {
+            console.error('Error downloading NFS data:', error);
+            alert('Error downloading NFS data');
+        } finally {
+            setDownloadingNFS(false);
         }
     };
 
@@ -489,6 +559,25 @@ export default function Evaluation({ username, reservation_id }) {
         setFlowData(iperfResults[flowName]);
     };
 
+    const handleDeviceToggle = (deviceName) => {
+        if (selectedNFSDevices.includes(deviceName)) {
+            setSelectedNFSDevices(selectedNFSDevices.filter(d => d !== deviceName));
+        } else {
+            setSelectedNFSDevices([...selectedNFSDevices, deviceName]);
+        }
+    };
+
+    // select/deselect all devices
+    const handleSelectAllDevices = () => {
+        if (selectedNFSDevices.length === deviceList.length) {
+            // deselect all
+            setSelectedNFSDevices([]);
+        } else {
+            // select all
+            setSelectedNFSDevices([...deviceList]);
+        }
+    };
+
     return (
         <div className="evaluation-wrapper">
             <div className="card evaluation-card">
@@ -562,7 +651,8 @@ export default function Evaluation({ username, reservation_id }) {
                                                 </span>
                                                 </div>
                                                 <div className="log-details">
-                                                    <div><strong>Playbook:</strong> {step.playbook.split('/').pop()}</div>
+                                                    <div><strong>Playbook:</strong> {step.playbook.split('/').pop()}
+                                                    </div>
                                                     <div>
                                                         <strong>Targets:</strong> {(step.targets && step.targets.length > 0) ? step.targets.join(', ') : allDevicesFromLog.join(', ') || 'N/A'}
                                                     </div>
@@ -679,9 +769,11 @@ export default function Evaluation({ username, reservation_id }) {
                                     {/* Select flow */}
                                     <div className="selection-row">
                                         <label>Select Flow:</label>
-                                        <select value={selectedFlow} onChange={(e) => handleFlowSelection(e.target.value)}>
+                                        <select value={selectedFlow}
+                                                onChange={(e) => handleFlowSelection(e.target.value)}>
                                             <option value="">-- Select Flow --</option>
-                                            {availableFlows.map(flow => (<option key={flow} value={flow}>{flow}</option>))}
+                                            {availableFlows.map(flow => (
+                                                <option key={flow} value={flow}>{flow}</option>))}
                                         </select>
                                     </div>
                                     {/* Full txt output */}
@@ -695,6 +787,48 @@ export default function Evaluation({ username, reservation_id }) {
                                     )}
                                 </>
                             )}
+                        </div>
+                        <div className="section-card">
+                            <h2>NFS Captured Data</h2>
+                            <p className="card-description">
+                                Select devices and download data collected from NFS mounted directories during experiment:
+                            </p>
+                            {deviceList.length > 0 ? (
+                                <>
+                                    <div className="nfs-select-all-container">
+                                        <button className="btn-secondary btn-select-all" onClick={handleSelectAllDevices}>
+                                            {selectedNFSDevices.length === deviceList.length ? 'Deselect All' : 'Select All'}
+                                        </button>
+
+                                        <span className="selected-count">{selectedNFSDevices.length} of {deviceList.length} devices selected</span>
+                                    </div>
+                                    <div className="nfs-devices-list">
+                                        {deviceList.map(device => (
+                                            <label key={device} className="nfs-device-item">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={selectedNFSDevices.includes(device)}
+                                                    onChange={() => handleDeviceToggle(device)}
+                                                />
+                                                <span className="device-name">{device}</span>
+                                            </label>
+                                        ))}
+                                    </div>
+                                <button className="btn-primary btn-nfs" onClick={handleDownloadNFSData} disabled={downloadingNFS || selectedNFSDevices.length === 0}>Download NFS Data</button>
+
+                                {downloadingNFS && (
+                                    <div className="nfs-status-message nfs-downloading">Downloading nfs data, please wait...</div>)}
+
+                                    {downloadNFSSuccess && (
+                                        <div className="nfs-status-message nfs-success">Download completed</div>
+                                    )}
+                                </>
+                            ) : (
+                                <div className="no-data-message">No devices available for this reservation</div>
+                            )}
+                            <p className="download-note">
+                                <strong>Note:</strong> Archive includes data from all devices configured in the reservation inventory
+                            </p>
                         </div>
                     </>
                 )}

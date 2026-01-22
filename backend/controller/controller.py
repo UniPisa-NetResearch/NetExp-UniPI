@@ -52,6 +52,9 @@ SONIC_USER = "admin"
 SONIC_PASS = "YourPaSsWoRd"
 MINIPC_USER = "oem"
 MINIPC_PASS = "oem123"
+NAS_IP = "192.168.1.164"            # IP of the nfs server
+NAS_MOUNT_BASE = "/mnt/nas"         # local mount point on devices
+NFS_OPTS = "rw,sync,hard,intr,timeo=600,retrans=2"
 active_reservations = {}    # dictionary that contains active and usable (after key insertion) reservation
 TEST = True                 # if true uses wsl on windows (/mnt), otherwise normal paths
 
@@ -327,7 +330,7 @@ def grant_access():
     print("Using playbook:", pb_path)
 
     # run ansible-playbook
-    extra_vars = {"username": username, "ssh_key": ssh_key, "full_user": bool(full_user)}
+    extra_vars = {"username": username, "ssh_key": ssh_key, "full_user": bool(full_user), "nas_ip": NAS_IP, "nas_mount_base": NAS_MOUNT_BASE, "nfs_opts": NFS_OPTS }
     rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars)
 
     if rc == 0:
@@ -438,23 +441,24 @@ def revoke_access():
     exp_templates_path = os.path.join(EXPERIMENT_TEMPLATES_DIR, experimenter_res_prefix)
 
     out, err = None, None
-    # skip revoke and rollback playbook
+
+    # execute revoke playbook
+    pb_path = get_playbook_template_path("revoke")
+    if not pb_path:
+        print("Revoke playbook template not found in", INVENTORY_DIR, "- aborting")
+        return jsonify({"ok": False, "message": "Revoke playbook template missing on controller"}), 500
+    print("Using revoke playbook:", pb_path)
+
+    extra_vars = {"username": username, "ssh_key": ssh_key, "nas_ip": NAS_IP, "nas_mount_base": NAS_MOUNT_BASE}
+    rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars)
+
+    if rc != 0:
+        return jsonify({"ok": False, "message": "Ansible revoke failed", "rc": rc, "stdout": out, "stderr": err}), 500
+
+    print("Successful revoke playbook")
+
+    # skip rollback playbook
     if run_rollback:
-        # execute revoke playbook
-        pb_path = get_playbook_template_path("revoke")
-        if not pb_path:
-            print("Revoke playbook template not found in", INVENTORY_DIR, "- aborting")
-            return jsonify({"ok": False, "message": "Revoke playbook template missing on controller"}), 500
-        print("Using revoke playbook:", pb_path)
-
-        extra_vars = {"username": username, "ssh_key": ssh_key}
-        rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars)
-
-        if rc != 0:
-            return jsonify({"ok": False, "message": "Ansible revoke failed", "rc": rc, "stdout": out, "stderr": err}), 500
-
-        print("Successful revoke playbook")
-
         pb_filename = "rollback_playbook.yml"
         pb_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, pb_filename)
         # run rollback playbook with extra_vars required by client

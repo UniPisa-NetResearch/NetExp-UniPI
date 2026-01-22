@@ -278,6 +278,32 @@ export default function GuidedMode({
             return;
         }
 
+        const filename = `${guidedExperimentName.trim().toLowerCase().replace(/ /g, '_')}.yml`;
+        try {
+            const checkResponse = await fetch('http://localhost:5004/api/experimenter/checkFileExists', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    reservation_id: reservation_id,
+                    filename: filename,
+                    file_type: 'template'
+                })
+            });
+
+            const checkData = await checkResponse.json();
+
+            if (checkData.success && checkData.exists) {
+                const overwrite = window.confirm(
+                    `An iperf experiment named "${filename}" already exists. Do you want to overwrite it?`
+                );
+                if (!overwrite) {
+                    return; // user chose not to overwrite
+                }
+            }
+        } catch (error) {
+            console.error('Error checking file existence:', error);
+        }
+
         setWaitOperation(true);
         try {
             const response = await fetch('http://localhost:5004/api/experimenter/createIperfExperiment', {

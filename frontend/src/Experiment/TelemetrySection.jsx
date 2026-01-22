@@ -383,6 +383,32 @@ export default function TelemetrySection({
         const expName = experimentDefinitions.find(e => e.filename === selectedExperimentDefinitionTelemetry)?.label || selectedExperimentDefinitionTelemetry;
         const telemetryBaseName = `${expName}_telemetry`;
 
+        const filename = `${telemetryBaseName}.yml`;
+        try {
+            const checkResponse = await fetch('http://localhost:5004/api/experimenter/checkFileExists', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    reservation_id: reservation_id,
+                    filename: filename,
+                    file_type: 'telemetry'
+                })
+            });
+
+            const checkData = await checkResponse.json();
+
+            if (checkData.success && checkData.exists) {
+                const overwrite = window.confirm(
+                    `A telemetry file named "${filename}" already exists. Do you want to overwrite it?`
+                );
+                if (!overwrite) {
+                    return; // user chose not to overwrite
+                }
+            }
+        } catch (error) {
+            console.error('Error checking file existence:', error);
+        }
+
         const telemetryTypeNum = telemetryType === 'Real time mode' ? 0 : 1;
 
         const metricsPayload = samplingMode === 'global'

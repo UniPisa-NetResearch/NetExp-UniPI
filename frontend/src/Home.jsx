@@ -418,6 +418,8 @@ const AdminReservationManager = () => {
                 if (rollback) {
                     setDeletingWithRollback(true);
                     setMessage('Deleting reservation with rollback... This may take a few minutes.');
+                } else {
+                    setMessage('Deleting reservation without rollback...');
                 }
                 // get ssh_key from the user
                 const userResponse = await fetch('/api/auth/user/show_user', {

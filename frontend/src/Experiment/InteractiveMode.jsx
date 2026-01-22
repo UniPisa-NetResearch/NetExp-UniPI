@@ -240,6 +240,30 @@ export default function InteractiveMode({
             return;
         }
 
+        const filename = `${experimentName.trim().toLowerCase().replace(/ /g, '_')}.yml`;
+        try {
+            const checkResponse = await fetch('http://localhost:5004/api/experimenter/checkFileExists', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    reservation_id: reservation_id,
+                    filename: filename,
+                    file_type: 'template'
+                })
+            });
+
+            const checkData = await checkResponse.json();
+
+            if (checkData.success && checkData.exists) {
+                const overwrite = window.confirm(`An experiment named "${filename}" already exists. Do you want to overwrite it?`);
+                if (!overwrite) {
+                    return; // user chose not to overwrite
+                }
+            }
+        } catch (error) {
+            console.error('Error checking file existence:', error);
+        }
+
         const formData = new FormData();
         formData.append('experiment_name', experimentName.trim());
         formData.append('duration', experimentDuration);

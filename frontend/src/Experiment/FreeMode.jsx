@@ -60,6 +60,31 @@ export default function FreeMode({
     };
     // validate loaded template
     const validateExperimentTemplate = async (templateFile) => {
+        // check if file already exists
+        const filename = templateFile.name;
+        try {
+            const checkResponse = await fetch('http://localhost:5004/api/experimenter/checkFileExists', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    reservation_id: reservation_id,
+                    filename: filename,
+                    file_type: 'template'
+                })
+            });
+
+            const checkData = await checkResponse.json();
+
+            if (checkData.success && checkData.exists) {
+                const overwrite = window.confirm(`A file named "${filename}" already exists. Do you want to overwrite it?`);
+                if (!overwrite) {
+                    return; // user chose not to overwrite
+                }
+            }
+        } catch (error) {
+            console.error('Error checking file existence:', error);
+        }
+
         const formData = new FormData();
         formData.append('experiment_description', templateFile);
         formData.append('reservation_id', reservation_id);

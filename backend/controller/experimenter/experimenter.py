@@ -1474,5 +1474,32 @@ def update_experiment_status():
         print(f"Error updating experiment status: {str(e)}")
         return jsonify({'success': False, 'error': f'Server error: {str(e)}'}), 500
 
+@app.route('/api/experimenter/checkFileExists', methods=['POST'])
+def check_file_exists():
+    # check if a file already exists in experimentTemplate or experimentTelemetry
+    try:
+        data = request.get_json()
+        reservation_id = data.get('reservation_id')
+        filename = data.get('filename')
+        file_type = data.get('file_type')  # 'template' or 'telemetry'
+
+        if not reservation_id or not filename or not file_type:
+            return jsonify({'success': False, 'error': 'Missing required fields'}), 400
+
+        if file_type == 'template':
+            file_path = os.path.join(EXPERIMENT_TEMPLATES_DIR, f'res_{reservation_id}', filename)
+        elif file_type == 'telemetry':
+            file_path = os.path.join(EXPERIMENT_TELEMETRY_DIR, f'res_{reservation_id}', filename)
+        else:
+            return jsonify({'success': False, 'error': 'Invalid file_type'}), 400
+
+        exists = os.path.exists(file_path)
+        return jsonify({'success': True, 'exists': exists}), 200
+
+    except Exception as e:
+        print(f"CHECK FILE EXISTS ERROR: {str(e)}", flush=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 if __name__ == '__main__':
     app.run(debug=False, host='0.0.0.0', port=5004, use_reloader=False)

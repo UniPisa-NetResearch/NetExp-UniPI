@@ -1,10 +1,17 @@
 import os
 import json
 import traceback
+import zipfile
+from io import BytesIO
+import paramiko
+from stat import S_ISDIR, S_ISREG
 from flask import request, send_file, jsonify
 from ...database.db import Experiment
 from ..experimenter.experimenter import EXPERIMENT_RESULTS_DIR
+from ...controller.controller import NAS_IP, MINIPC_USER, MINIPC_PASS, INVENTORY_DIR, safe_filename
 from ...app import app
+
+NAS_EXPORT_BASE = "/export"
 
 @app.route('/api/evaluator/getExperimentResults', methods=['POST'])
 def get_experiment_results():
@@ -156,6 +163,140 @@ def download_results():
         print(f"Error in downloadResults: {str(e)}")
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/evaluator/downloadNFSData', methods=['POST'])
+def download_nfs_data():
+    # download all NFS mounted directories data for the experiment
+    try:
+
+        data = request.json
+        reservation_id = data.get('reservation_id')
+        selected_devices = data.get('selected_devices', [])
+
+        if not reservation_id:
+            return jsonify({'success': False, 'error': 'Missing reservation_id'}), 400
+
+        if not selected_devices or not isinstance(selected_devices, list):
+            return jsonify({'success': False, 'error': 'No devices selected'}), 400
+
+        # parse inventory to extract device asset_tags
+        device_tags = selected_devices
+
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+        try:
+            print(f"[NFS DOWNLOAD] Connecting to NAS {NAS_IP}...", flush=True)
+            ssh.connect(
+                hostname=NAS_IP,
+                username=MINIPC_USER,
+                password=MINIPC_PASS,
+                timeout=10,
+                allow_agent=False,
+                look_for_keys=False
+            )
+            print(f"[NFS DOWNLOAD] Connected to NAS", flush=True)
+
+            # create SFTP client
+            sftp = ssh.open_sftp()
+
+            # create in-memory ZIP file
+            memory_file = BytesIO()
+            files_added = 0
+
+            with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
+                # download NFS data for each device
+                for device_tag in device_tags:
+                    nfs_device_path = f"{NAS_EXPORT_BASE}/{device_tag}"
+
+                    print(f"[NFS DOWNLOAD] Processing device: {device_tag}", flush=True)
+
+                    try:
+                        # check if directory exists
+                        try:
+                            sftp.stat(nfs_device_path)
+                            print(f"[NFS DOWNLOAD] Found directory: {nfs_device_path}", flush=True)
+                        except FileNotFoundError:
+                            print(f"[NFS DOWNLOAD] Directory not found: {nfs_device_path}", flush=True)
+                            zf.writestr(f"{device_tag}/NO_DATA.txt",f"Directory not found on NAS: {nfs_device_path}")
+                            continue
+
+                        # recursively download all files from device directory
+                        def download_recursive(remote_path, zip_base_path=""):
+                            nonlocal files_added
+
+                            try:
+                                items = sftp.listdir_attr(remote_path)
+
+                                for item in items:
+                                    remote_item_path = f"{remote_path}/{item.filename}"
+                                    zip_item_path = f"{zip_base_path}/{item.filename}" if zip_base_path else item.filename
+
+                                    if S_ISDIR(item.st_mode):
+                                        # recursively download directory
+                                        print(f"[NFS DOWNLOAD]   Entering directory: {remote_item_path}", flush=True)
+                                        download_recursive(remote_item_path, zip_item_path)
+                                    elif S_ISREG(item.st_mode):
+                                        # download file
+                                        print(
+                                            f"[NFS DOWNLOAD]   Downloading: {remote_item_path} ({item.st_size} bytes)", flush=True)
+
+                                        # download file to memory
+                                        file_buffer = BytesIO()
+                                        sftp.getfo(remote_item_path, file_buffer)
+                                        file_buffer.seek(0)
+
+                                        # add to ZIP
+                                        zf.writestr(zip_item_path, file_buffer.read())
+                                        files_added += 1
+
+                                        print(f"[NFS DOWNLOAD]   Added: {zip_item_path}", flush=True)
+
+                            except Exception as e:
+                                print(f"[NFS DOWNLOAD ERROR] Failed to process {remote_path}: {str(e)}", flush=True)
+
+                        # start recursive download from device root
+                        download_recursive(nfs_device_path, device_tag)
+
+                        print(f"[NFS DOWNLOAD] Completed {device_tag} ({files_added} files total so far)", flush=True)
+
+                    except Exception as e:
+                        print(f"[NFS DOWNLOAD ERROR] {device_tag}: {str(e)}", flush=True)
+                        traceback.print_exc()
+                        zf.writestr(f"{device_tag}/ERROR.txt",f"Error downloading {device_tag}: {str(e)}")
+
+            sftp.close()
+
+        except Exception as e:
+            print(f"[NFS DOWNLOAD ERROR] SSH/SFTP error: {str(e)}", flush=True)
+            traceback.print_exc()
+            return jsonify({'success': False, 'error': f'SSH connection failed: {str(e)}'}), 500
+
+        finally:
+            ssh.close()
+
+        memory_file.seek(0)
+
+        download_filename = f'nfs_data_res_{reservation_id}.zip'
+
+        print(f"[NFS DOWNLOAD] Archive ready: {download_filename} ({files_added} files)", flush=True)
+
+        if files_added == 0:
+            print(f"[NFS DOWNLOAD WARNING] No files were added to archive!", flush=True)
+
+        return send_file(
+            memory_file,
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name=download_filename
+        )
+
+    except Exception as e:
+        print(f"Error in downloadNFSData: {str(e)}", flush=True)
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5005, use_reloader=False)
