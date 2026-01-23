@@ -103,20 +103,24 @@ export default function InteractiveMode({
         e.target.value = null; // reset input
     };
 
-    // download iperf3 example playbook
+    // download iperf3 and nfs example playbook
     const downloadIperfExample = async () => {
         try {
-            const response = await fetch('http://localhost:5004/api/experimenter/downloadIperfExample', {
-                method: 'GET'
+            const response = await fetch('http://localhost:5004/api/experimenter/downloadTemplate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    experiment_mode: "interactive"
+                })
             });
 
             if (!response.ok) {
-                console.error('Failed to download iperf example');
+                console.error('Failed to download iperf and nfs example');
                 return;
             }
 
             const blob = await response.blob();
-            createDownload(blob, 'iperf_client_example.yml');
+            createDownload(blob, 'experiment_template_package.zip');
         } catch (error) {
             console.error('Error downloading iperf example:', error);
         }
@@ -357,8 +361,7 @@ export default function InteractiveMode({
                         readOnly={runningExperiment}
                         placeholder="e.g., My Experiment"
                     />
-                    <label className="label-inline label-fixed-width label-output">Download client iperf
-                        example:</label>
+                    <label className="label-inline label-fixed-width label-output">Download description template package:</label>
                     <button
                         type="button"
                         className="template-button configuration-button"
@@ -407,8 +410,7 @@ export default function InteractiveMode({
                         >
                             Choose file
                         </button>
-                        <div
-                            className={`selected-file-name-compact file-status-${row.fileType}`}>{row.fileName}</div>
+                        <div className={`selected-file-name-compact file-status-${row.fileType}`}>{row.fileName}</div>
                         <input
                             type="file"
                             ref={(el) => (playbookFileRefs.current[row.id] = el)}

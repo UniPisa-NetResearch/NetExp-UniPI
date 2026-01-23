@@ -8,6 +8,43 @@
       ansible.builtin.set_fact:
         target_user: "{{ username }}"
 
+    - name: Check if this device is the NAS itself (skip cleanup if true)
+      ansible.builtin.set_fact:
+        is_nas_device: "{{ ansible_host == nas_ip }}"
+      when: nas_ip is defined
+
+    - name: NFS cleanup operations (skip if device is NAS)
+      block:
+        - name: Check if NFS mount point exists
+          ansible.builtin.stat:
+            path: "{{ nas_mount_base }}/{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}"
+          register: nfs_mount_check
+
+        - name: Stop processes with open files on NFS mount
+          ansible.builtin.shell: |
+            lsof +D {{ nas_mount_base }}/{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }} 2>/dev/null | \
+            awk 'NR>1 {print $2}' | sort -u | xargs -r kill -9 2>/dev/null || true
+          when: nfs_mount_check.stat.exists
+          ignore_errors: yes
+
+        - name: Clean all files from NFS share (preserve mount)
+          ansible.builtin.shell: |
+            find {{ nas_mount_base }}/{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }} -mindepth 1 -delete
+          when: nfs_mount_check.stat.exists
+          ignore_errors: yes
+          register: nfs_cleanup_result
+
+        - name: Log NFS cleanup status
+          ansible.builtin.debug:
+            msg: "NFS cleanup {{ 'completed' if nfs_cleanup_result is succeeded else 'failed' }} for {{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}"
+          when: nfs_mount_check.stat.exists
+
+      when:
+        - nas_ip is defined
+        - nas_mount_base is defined
+        - is_nas_device is defined
+        - not is_nas_device | bool
+
     - name: Attempt to kill all processes belonging to the user
       ansible.builtin.shell: |
         if command -v loginctl >/dev/null 2>&1; then

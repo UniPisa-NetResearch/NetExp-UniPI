@@ -32,6 +32,7 @@ def get_devices():
     try:
         data = request.get_json()
         reservation_id = data.get('reservation_id')
+        only_device_name = data.get('only_device_name')
 
         if not reservation_id:
             return jsonify({'error': 'reservation_id is required'}), 400
@@ -73,18 +74,21 @@ def get_devices():
                     ip_address = None
                     role = None
 
-                    # extract ansible_host and role from the line
-                    for part in parts[1:]:
-                        if part.startswith('ansible_host='):
-                            ip_address = part.split('=', 1)[1]
-                        elif part.startswith('role='):
-                            role = part.split('=', 1)[1]
+                    if only_device_name:
+                        devices.append(device_name)
+                    else:
+                        # extract ansible_host and role from the line
+                        for part in parts[1:]:
+                            if part.startswith('ansible_host='):
+                                ip_address = part.split('=', 1)[1]
+                            elif part.startswith('role='):
+                                role = part.split('=', 1)[1]
 
-                    devices.append({
-                        'name': device_name,
-                        'ip': ip_address,
-                        'role': role
-                    })
+                        devices.append({
+                            'name': device_name,
+                            'ip': ip_address,
+                            'role': role
+                        })
 
         return jsonify({'devices': devices}), 200
 
@@ -129,28 +133,38 @@ def calculate_batch_duration():
         print(f"Error calculating batch duration: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
-@app.route('/api/experimenter/downloadTemplate', methods=['GET'])
+@app.route('/api/experimenter/downloadTemplate', methods=['POST'])
 def download_experiment_template():
+    data = request.json
+    experiment_mode = data.get('experiment_mode')
+
     # return experiment template
     template_yaml_path = os.path.join(EXPERIMENT_PLAYBOOKS_DIR, 'general_playbooks', 'experiment_template.yml')
     example_playbook_path = os.path.join(EXPERIMENT_PLAYBOOKS_DIR, 'general_playbooks', 'iperf_client_example.yml')
+    example_nfs_playbook_path = os.path.join(EXPERIMENT_PLAYBOOKS_DIR, 'general_playbooks', 'nfs_write_example.yml')
     readme_path = os.path.join(EXPERIMENT_PLAYBOOKS_DIR, 'general_playbooks', 'README.txt')
 
     # create temporary file
     buffer = BytesIO()
 
     with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as b:
-        if os.path.exists(template_yaml_path):
-            with open(template_yaml_path, 'r') as f:
-                b.writestr('experiment_template.yml', f.read())
+        if experiment_mode == 'free':
+            if os.path.exists(template_yaml_path):
+                with open(template_yaml_path, 'r') as f:
+                    b.writestr('experiment_template.yml', f.read())
 
         if os.path.exists(example_playbook_path):
             with open(example_playbook_path, 'r') as f:
                 b.writestr('iperf_client_example.yml', f.read())
 
-        if os.path.exists(readme_path):
-            with open(readme_path, 'r') as f:
-                b.writestr('README.txt', f.read())
+        if os.path.exists( example_nfs_playbook_path):
+            with open( example_nfs_playbook_path, 'r') as f:
+                b.writestr('nfs_write_example.yml', f.read())
+
+        if experiment_mode == 'free':
+            if os.path.exists(readme_path):
+                with open(readme_path, 'r') as f:
+                    b.writestr('README.txt', f.read())
 
     buffer.seek(0)
 
@@ -160,28 +174,6 @@ def download_experiment_template():
         as_attachment=True,
         download_name='experiment_template_package.zip'
     )
-
-@app.route('/api/experimenter/downloadIperfExample', methods=['GET'])
-def download_iperf_example():
-    # download only the iperf3 example playbook (for interactive mode)
-
-    try:
-        example_playbook_path = os.path.join(EXPERIMENT_PLAYBOOKS_DIR, 'general_playbooks', 'iperf_client_example.yml')
-
-        if not os.path.exists(example_playbook_path):
-            return jsonify({'error': 'Example playbook not found'}), 404
-
-        return send_file(
-            example_playbook_path,
-            mimetype='application/x-yaml',
-            as_attachment=True,
-            download_name='iperf_client_example.yml'
-        )
-
-    except Exception as e:
-        print(f"[DOWNLOAD IPERF EXAMPLE ERROR] {str(e)}", flush=True)
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/experimenter/validateTemplate', methods=['POST'])
 def validate_experiment_template():

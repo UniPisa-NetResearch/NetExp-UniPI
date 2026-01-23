@@ -1,0 +1,74 @@
+# ==============================================================================
+# Example Playbook: NFS Write Test
+# ==============================================================================
+# This playbook demonstrates how to write data to NFS mounted directories
+# during an experiment. Use this as a template for your custom data collection.
+#
+#
+# NFS Mount Structure:
+#   Each device has a dedicated NFS mount at: /mnt/nas/<asset_tag>/
+#   Example: /mnt/nas/sw4/, /mnt/nas/sw6/, /mnt/nas/h4/
+#
+# ==============================================================================
+
+- name: NFS Write Test - Example Data Collection
+  hosts: all
+  gather_facts: yes
+  become: yes
+  strategy: free  # parallel execution on all devices
+
+  vars:
+    # NFS base mount path (configured by system)
+    nas_mount_base: /mnt/nas
+
+  tasks:
+    # ========================================================================
+    # Verify NFS mount is accessible
+    # ========================================================================
+    - name: Check if NFS mount exists and is writable
+      ansible.builtin.stat:
+        path: "{{ nas_mount_base }}/{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}"
+      register: nfs_mount_check
+      failed_when: not nfs_mount_check.stat.exists or not nfs_mount_check.stat.isdir
+
+    - name: Display NFS mount path
+      ansible.builtin.debug:
+        msg: "NFS mount available at: {{ nas_mount_base }}/{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}"
+
+    # ========================================================================
+    # Create subdirectories for organized data storage
+    # ========================================================================
+    - name: Create pcap directory on NFS mount
+      file:
+        path: "{{ nas_mount_base }}/{{ device_tag }}/pcap"
+        state: directory
+        owner: root
+        group: root
+        mode: '0775'
+      ignore_errors: yes
+
+    # ========================================================================
+    # Start packet capture to NFS
+    # ========================================================================
+    - name: Determine capture interface for sw4
+      when: inventory_hostname == 'sw4'
+      set_fact:
+        capture_iface: "Ethernet0"
+        pcap_file: "{{ nas_mount_base }}/{{ device_tag }}/pcap/sw4_ingress_{{ ansible_date_time.epoch }}.pcap"
+
+    - name: Start tcpdump on sw4 (capture ingress traffic)
+      when: inventory_hostname == 'sw4'
+      shell: |
+        nohup timeout 285 tcpdump -i {{ capture_iface }} \
+          -w {{ pcap_file }} \
+          -s 0 \
+          -G 285 \
+          tcp or udp \
+          > {{ nas_mount_base }}/{{ device_tag }}/pcap/tcpdump_sw4.log 2>&1 &
+
+      register: sw4_tcpdump
+
+    - name: Show sw4 tcpdump status
+      when: inventory_hostname == 'sw4'
+      debug:
+        msg: "{{ sw4_tcpdump.stdout_lines }}"

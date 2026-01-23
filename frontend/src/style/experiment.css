@@ -814,6 +814,7 @@
     font-weight: 500;
     width: 170px;
     display: inline-block;
+    overflow: hidden;
     text-overflow: ellipsis;
     padding: 4px 8px;
     margin-right: 8px;

@@ -58,13 +58,12 @@ export default function Evaluation({ username, reservation_id }) {
                 const response = await fetch('http://localhost:5004/api/experimenter/getDevices', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ reservation_id })
+                    body: JSON.stringify({ reservation_id, only_device_name: true })
                 });
 
                 if (response.ok) {
                     const data = await response.json();
-                    const deviceNames = data.devices.map(device => device.name);
-                    setDeviceList(deviceNames || []);
+                    setDeviceList(data.devices || []);
                     setSelectedNFSDevices([]);
                 }
             } catch (error) {

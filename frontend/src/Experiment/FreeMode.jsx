@@ -22,7 +22,11 @@ export default function FreeMode({
         setWaitOperation(true);
         try {
             const response = await fetch(`http://localhost:5004/api/experimenter/downloadTemplate`, {
-                method: 'GET',
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    experiment_mode: "free"
+                })
             });
 
             if (!response.ok) {
@@ -156,8 +160,7 @@ export default function FreeMode({
                     </button>
                     <label className="label-inline label-fixed-width additional-margin">Load experiment description:</label>
                     <button type="button" className="template-button configuration-button choose-button"
-                            onClick={() => document.getElementById('experiment_description_input').click()} disabled={runningExperiment || waitOperation}>Choose
-                        description
+                            onClick={() => document.getElementById('experiment_description_input').click()} disabled={runningExperiment || waitOperation}>Choose description
                     </button>
                     <input id="experiment_description_input" type="file" style={{display: 'none'}}
                            accept=".yml,.yaml"

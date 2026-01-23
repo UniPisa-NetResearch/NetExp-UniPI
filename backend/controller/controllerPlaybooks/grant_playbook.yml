@@ -139,7 +139,57 @@
         system: no
         groups: "{{ res_group }}"
         append: yes
+    # ------------------------------------------------------------------
+    - name: Check if this device is the NAS itself (skip mount if true)
+      ansible.builtin.set_fact:
+        is_nas_device: "{{ ansible_host == nas_ip }}"
+      when: nas_ip is defined
 
+    - name: NFS mount operations (skip if device is NAS)
+      block:
+        - name: Check if nfs-common is installed
+          ansible.builtin.package_facts:
+            manager: apt
+          when: ansible_facts.packages is not defined
+
+        - name: Install NFS client packages if not installed
+          ansible.builtin.apt:
+            name:
+              - nfs-common
+            state: present
+            update_cache: no
+          when: "'nfs-common' not in ansible_facts.packages"
+
+        - name: Create device-specific mount point using asset_tag
+          ansible.builtin.file:
+            path: "{{ nas_mount_base }}/{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}"
+            state: directory
+            owner: root
+            group: "{{ res_group }}"
+            mode: '2775'
+
+        - name: Check if NFS share is already mounted
+          ansible.builtin.shell: |
+            mountpoint -q "{{ nas_mount_base }}/{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}"
+          register: nfs_already_mounted
+          failed_when: false
+          changed_when: false
+
+        - name: Mount NFS share from NAS (skips if already mounted)
+          ansible.posix.mount:
+            path: "{{ nas_mount_base }}/{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}"
+            src: "{{ nas_ip }}:/export/{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}"
+            fstype: nfs
+            opts: "{{ nfs_opts }}"
+            state: mounted
+            backup: no
+          when: nfs_already_mounted.rc != 0
+
+      when:
+        - nas_ip is defined
+        - is_nas_device is defined
+        - not is_nas_device | bool
+    # ------------------------------------------------------------------
     # detect real paths for candidate commands using `command -v`, create a script that perform the command for each value of the list with one ssh connection
     - name: Detect all candidate commands at once
       ansible.builtin.shell: |
@@ -194,12 +244,16 @@
           tcpdump: tcpdump
           tshark: tshark
 
+    - name: Create list of packages to install
+      ansible.builtin.set_fact:
+        pkgs_to_install: "{{ missing_cmds | intersect(pkg_map.keys() | list) |  map('extract', pkg_map) | list}}"
+
     # install missing packages
     - name: Install packages for missing commands (batch)
       ansible.builtin.apt:
-        name: "{{ missing_cmds | map('extract', pkg_map, default=missing_cmds) | list }}"
+        name: "{{ pkgs_to_install }}"
         state: present
-      when: missing_cmds | length > 0
+      when: pkgs_to_install | length > 0
       ignore_errors: yes
       async: 300  # timeout of 5 minutes (for slow tasks)
       poll: 0     # don't wait completion
