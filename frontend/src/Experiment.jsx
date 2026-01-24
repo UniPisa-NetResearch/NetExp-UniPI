@@ -384,6 +384,7 @@ export default function Experiment({username, reservation_id}) {
                     setWaitOperation={setWaitOperation}
                     currentExperimentId={currentExperimentId}
                     setCurrentExperimentId={setCurrentExperimentId}
+                    username={username}
                     reservation_id={reservation_id}
                     timerIntervalRef={timerIntervalRef}
                     batchMode={batchMode}

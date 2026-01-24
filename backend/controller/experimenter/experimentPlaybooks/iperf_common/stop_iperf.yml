@@ -47,6 +47,10 @@
       changed_when: false
       ignore_errors: yes
 
+    - name: Kill any existing tcpdump processes
+      shell: pkill -9 tcpdump
+      ignore_errors: yes
+
     - name: Remove custom TC rules (htb/netem/tbf) in one command
       shell: |
         tc qdisc show | grep -E 'qdisc (htb|netem|tbf)' | awk '{print $5}' | sort -u | while read iface; do

@@ -17,6 +17,7 @@ export default function ExperimentControls({
     setWaitOperation,
     currentExperimentId,
     setCurrentExperimentId,
+    username,
     reservation_id,
     timerIntervalRef,
     batchMode,
@@ -356,7 +357,8 @@ export default function ExperimentControls({
 
         try {
             const payload = {
-                reservation_id: reservation_id
+                reservation_id: reservation_id,
+                username: username
             };
 
             if (batchMode) {

@@ -15,7 +15,7 @@ from ...database.db import db, UserMetrics, Reservation, Experiment
 from pygnmi.client import gNMIclient
 from ...app import app
 from ..controller import (safe_filename, INVENTORY_DIR, TEST)
-from .experimenter_utils import (ensure_experiment_dirs, get_next_available_id, collect_telemetry_data, convert_iperf_experiment_to_schedule, execute_experiment_schedule, validate_experiment_template_schema, IndentedDumper, finish_cleanup_and_remove, finalize_batch_results, cleanup_batch_temp_results)
+from .experimenter_utils import (ensure_experiment_dirs, get_next_available_id, collect_telemetry_data, convert_iperf_experiment_to_schedule, execute_experiment_schedule, validate_experiment_template_schema, IndentedDumper, finish_cleanup_and_remove, finalize_batch_results)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 EXPERIMENT_TEMPLATES_DIR = os.path.join(BASE_DIR, "experimentTemplates")
@@ -859,6 +859,7 @@ def run_experiment():
         experiment_name = data.get('experiment_name')
         experiment_names = data.get('experiment_names')  # array for batch
         reservation_id = data.get('reservation_id')
+        username = data.get('username')
 
         if not reservation_id:
             return jsonify({'success': False, 'error': 'Missing reservation_id'}), 400
@@ -1045,7 +1046,7 @@ def run_experiment():
                         # start experiment and telemetry execution
                         experiment_future = executor.submit(
                             execute_experiment_schedule,
-                      reservation_id,
+                      reservation_id, username,
                             name_exp, data_exp, inventory_path,
                             EXPERIMENT_RESULTS_DIR, EXPERIMENT_PLAYBOOKS_DIR,
                             running_experiments, experiments_lock, TEST,is_batch

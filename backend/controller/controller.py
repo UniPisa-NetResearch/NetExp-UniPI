@@ -143,7 +143,7 @@ def write_inventory(reservation_id: int, devices: list):
 def win_to_wsl_path(path):
     return "/mnt/" + path.replace("\\", "/").replace(":", "").lower()
 
-def run_ansible_playbook(inventory_path: str, playbook_path: str, extra_vars: dict = None, timeout: int = 300):
+def run_ansible_playbook(inventory_path: str, playbook_path: str, extra_vars: dict = None, timeout: int = 300, remote_user: str = None):
     # function to run ansible-playbook
     if TEST:
         inv_path_wsl = win_to_wsl_path(inventory_path)  #convert paths if test mode, otherwise use normal path
@@ -154,6 +154,18 @@ def run_ansible_playbook(inventory_path: str, playbook_path: str, extra_vars: di
         cmd = ["ansible-playbook", "-i", inventory_path, playbook_path]
 
     cmd += ["--forks", "15"]                                # useful for parallel operations
+
+    if extra_vars is None:
+        extra_vars = {}
+
+    if remote_user:
+        extra_vars['ansible_become'] = True
+        extra_vars['ansible_become_user'] = remote_user         # execute playbook as remote user
+        extra_vars['ansible_become_method'] = 'sudo'
+        extra_vars['ansible_ssh_pipelining'] = True             # avoid interactive prompts
+        extra_vars['ansible_become_timeout'] = 5                # wait only 5 seconds if user does not insert the password
+
+        print(f"[ANSIBLE] Forcing remote_user={remote_user}", flush=True)
 
     if ANSIBLE_EXTRA_ARGS:
         cmd += ANSIBLE_EXTRA_ARGS.split()                   # add extra args if present

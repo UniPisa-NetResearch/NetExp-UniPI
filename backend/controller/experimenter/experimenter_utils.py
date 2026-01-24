@@ -48,7 +48,6 @@ def get_next_available_id():
         print(f"Error finding next available ID: {str(e)}")
         return None
 
-
 def finalize_batch_results(reservation_id, experiment_names, results_base_dir):
     # copy temporary results to final location and remove temp directories
 
@@ -78,7 +77,6 @@ def finalize_batch_results(reservation_id, experiment_names, results_base_dir):
         traceback.print_exc()
         return False, error_msg
 
-
 def cleanup_batch_temp_results(reservation_id, experiment_names, results_base_dir):
     # remove temporary result directories when a batch is terminated
 
@@ -100,7 +98,6 @@ def cleanup_batch_temp_results(reservation_id, experiment_names, results_base_di
         print(f"[BATCH CLEANUP] ERROR: {error_msg}", flush=True)
         traceback.print_exc()
         return False, error_msg
-
 
 def collect_telemetry_data(reservation_id, experiment_name, telemetry_config, inventory_path, duration_s, results_base_dir, running_experiments, experiments_lock, is_batch=False):
     # collect telemetry data during experiment
@@ -464,7 +461,7 @@ def convert_iperf_experiment_to_schedule(experiment_data):
 
     return standard_schedule, playbooks_base_path
 
-def execute_experiment_schedule(reservation_id, experiment_name, experiment_data, inventory_path, results_base_dir, playbooks_base_dir, running_experiments, experiments_lock, test_mode, is_batch=False):
+def execute_experiment_schedule(reservation_id, username, experiment_name, experiment_data, inventory_path, results_base_dir, playbooks_base_dir, running_experiments, experiments_lock, test_mode, is_batch=False):
     # execute experiment schedule
     with experiments_lock:
         if reservation_id in running_experiments:
@@ -608,6 +605,13 @@ def execute_experiment_schedule(reservation_id, experiment_name, experiment_data
 
             print(f"[EXPERIMENT] Executing step '{step_name}' - playbook: {playbook_name}", flush=True)
 
+            # check if the playbook is predefined or loaded by user
+            is_user_playbook = f"res_{reservation_id}" in playbook_path and "iperf_common" not in playbook_path
+            if is_user_playbook:
+                remote_user = username
+            else:
+                remote_user = None
+
             # Timestamp before execution
             exec_start = time.time()
             exec_elapsed = exec_start - start_time
@@ -641,7 +645,7 @@ def execute_experiment_schedule(reservation_id, experiment_name, experiment_data
                 running_experiments[reservation_id]['playbook_running'] = True
                 running_experiments[reservation_id]['current_playbook'] = playbook_name
 
-            returncode, stdout, stderr = run_ansible_playbook(inventory_path=inventory_path, playbook_path=playbook_path, extra_vars=extra_vars, timeout=300)
+            returncode, stdout, stderr = run_ansible_playbook(inventory_path=inventory_path, playbook_path=playbook_path, extra_vars=extra_vars, timeout=300, remote_user=remote_user)
             # reset flag after execution
             with experiments_lock:
                 if reservation_id in running_experiments:
@@ -860,3 +864,110 @@ def finish_cleanup_and_remove(reservation_id, running_experiment, playbooks_base
             "cleanup_success": cleanup_success,
             "is_batch": False
         }), 200
+
+def modify_playbook_with_user(playbook_path):
+
+    # modify playbooks added by user adding remote_user
+    try:
+        print(f"[PLAYBOOK] Processing: {os.path.basename(playbook_path)}", flush=True)
+        with open(playbook_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        lines = content.split('\n')
+        modified = False
+        new_lines = []
+
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            stripped = line.strip()
+
+            if stripped.startswith('- name:'):
+                # find start play
+                new_lines.append(line)
+                i += 1
+
+                while i < len(lines):
+                    current_line = lines[i]
+                    current_stripped = current_line.strip()
+
+                    # check 'tasks:' (end of play)
+                    if current_stripped.startswith('tasks:'):
+                        new_lines.append(current_line)
+                        i += 1
+                        break
+
+                    if current_stripped.startswith('become:'):
+                        # change become: yes -> become: no
+                        if 'yes' in current_stripped.lower() or 'true' in current_stripped.lower():
+                            current_indent = len(current_line) - len(current_line.lstrip())
+                            new_lines.append(f"{' ' * current_indent}become: no")
+                            modified = True
+                            print(f"[PLAYBOOK] Changed become: yes -> become: no", flush=True)
+                        else:
+                            new_lines.append(current_line)
+                    else:
+                        new_lines.append(current_line)
+
+                    i += 1
+
+                continue
+
+            new_lines.append(line)
+            i += 1
+
+        # rewrite the playbook only if modified
+        if modified:
+            print(f"[PLAYBOOK] Writing modified playbook to disk...", flush=True)
+
+            with open(playbook_path, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(new_lines))
+            print(f"[PLAYBOOK] Successfully modified", flush=True)
+        else:
+            print(f"[PLAYBOOK] No modifications needed for {playbook_path}", flush=True)
+
+        return True
+
+    except Exception as e:
+        print(f"[ERROR] Failed to modify playbook {playbook_path}: {str(e)}", flush=True)
+        traceback.print_exc()
+        return False
+
+
+def validate_and_modify_user_playbooks(playbooks_dir):
+    # validate and modify every playbook inside the directory
+    try:
+        if not os.path.isdir(playbooks_dir):
+            return False, f"Directory not found: {playbooks_dir}"
+
+        # find every YAML
+        playbook_files = []
+        for filename in os.listdir(playbooks_dir):
+            if filename.endswith('.yml') or filename.endswith('.yaml'):
+                playbook_files.append(os.path.join(playbooks_dir, filename))
+
+        if not playbook_files:
+            print(f"[PLAYBOOK] No YAML files found in {playbooks_dir}", flush=True)
+            return True, None
+
+        print(f"[PLAYBOOK] Found {len(playbook_files)} playbook(s) to modify", flush=True)
+
+        # modify every playbook
+        failed_playbooks = []
+        for playbook_path in playbook_files:
+            if not modify_playbook_with_user(playbook_path):
+                failed_playbooks.append(os.path.basename(playbook_path))
+
+        if failed_playbooks:
+            error_msg = f"Failed to modify playbooks: {', '.join(failed_playbooks)}"
+            print(f"[ERROR] {error_msg}", flush=True)
+            return False, error_msg
+
+        print(f"[PLAYBOOK] Successfully modified all playbooks", flush=True)
+        return True, None
+
+    except Exception as e:
+        error_msg = f"Error validating/modifying playbooks: {str(e)}"
+        print(f"[ERROR] {error_msg}", flush=True)
+        traceback.print_exc()
+        return False, error_msg
