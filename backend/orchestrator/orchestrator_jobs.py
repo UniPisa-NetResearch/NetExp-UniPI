@@ -16,15 +16,10 @@ def reservation_start_job(reservation_id):
                 print(f"Error: Reservation {reservation_id} not found.")
                 return
 
-            new_token = str(uuid.uuid4())
-            res.token = new_token                                            # add token to the reservation
-
-            db.session.commit()
-            print(f"Start Job: Token '{new_token[:8]}...' assigned to Reservation {reservation_id} (User: {res.username})")
-
             # publish start reservation event on redis
             user = User.query.filter_by(username=res.username).first()
             if user:
+                new_token = str(uuid.uuid4())
                 payload = {
                     "type": "granted",
                     "reservation_id": reservation_id,

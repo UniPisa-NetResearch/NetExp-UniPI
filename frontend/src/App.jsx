@@ -165,6 +165,7 @@ function App() {
 
         if (payload.type === "granted") {
             // event granted: start timer and permit access
+            console.log(`Grant for ${payload.reservation_id} received`);
             setIsReservationActive(true);
             setActiveReservationExpiration(payload.expires_at);
             setReservationId(payload.reservation_id);

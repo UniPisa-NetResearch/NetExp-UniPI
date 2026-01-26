@@ -278,6 +278,10 @@ select {
     background-color: #76f8b2;
     opacity: 0.8;
 }
+.reservation-item.waiting {
+    background-color: #e1ec4f;
+    opacity: 0.8;
+}
 .reservation-top-row {
   display: flex;
   box-sizing: border-box;

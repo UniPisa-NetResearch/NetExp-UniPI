@@ -12,6 +12,7 @@ from sqlalchemy.exc import SQLAlchemyError
 import os
 import pynetbox
 from redis import Redis
+from redis.lock import Lock
 from rq import Queue
 import json
 import requests
@@ -23,9 +24,10 @@ NETBOX_URL = os.getenv("NETBOX_URL", "http://localhost:8080")
 NETBOX_TOKEN = os.getenv("NETBOX_TOKEN", "6152fbb91529522c72307b194a690c4ca5253e93")
 
 MAX_HOURS = 72
-TEST = True                  #test mode, each reservation starts at current date + 2 min
+TEST = True                    # test mode, each reservation starts at current date + 2 min
+TEST_DOUBLE_RES = False        # test two consecutive reservations mode
 CONTAINERLAB_TEST = False      # useful to test pingall
-EXPERIMENT_DURATION = 180       #expressed in minutes
+EXPERIMENT_DURATION = 180      # expressed in minutes
 NETBOX_SITE = "testbed"        # useful to change site of netbox
 #NETBOX_SITE = "containerlab"
 nb = pynetbox.api(NETBOX_URL, token=NETBOX_TOKEN)
@@ -34,136 +36,170 @@ REDIS_URL = "redis://localhost:6379"
 redis = Redis.from_url(REDIS_URL)
 
 #function to send reservation data to the controller
-def send_to_controller(msg_type, user_id, reservation_id):
+def send_to_controller(msg_type, user_id, reservation_id, job_data):
+    lock_key = "controller_playbook_execution_lock"
+    lock_timeout = 600  # 10 minuti max per playbook execution (revoke + rollback può durare)
+    blocking_timeout = 720  # 12 minuti max di attesa per acquisire il lock
+
     with app.app_context():
         try:
-            # fetch username and ssh_key
-            user = db.session.get(User, user_id)
-            if not user:
-                print(f"User id {user_id} not found in DB; skipping controller call.")
+            # Acquire lock to serialize playbook execution
+            lock = Lock(
+                redis,
+                lock_key,
+                timeout=lock_timeout,
+                blocking=True,
+                blocking_timeout=blocking_timeout
+            )
+
+            acquired = lock.acquire(blocking=True, blocking_timeout=blocking_timeout)
+
+            if not acquired:
+                print(f"Failed to acquire lock for {msg_type} reservation {reservation_id} after {blocking_timeout}s")
                 return
-            username = getattr(user, "username", None)
-            ssh_key = getattr(user, "ssh_key", None)
-            full_user = getattr(user, "full_user", None)
 
-            if msg_type == "granted":
-                # read reservation devices
-                try:
-                    res_devs = ReservationDevice.query.filter_by(reservation_id=reservation_id).all()
-                    asset_tags = [rd.asset_tag for rd in res_devs]
-                except Exception as e:
-                    print(f"Error reading ReservationDevice for reservation {reservation_id}: {e}")
-                    asset_tags = []
+            try:
+                # fetch username and ssh_key
+                user = db.session.get(User, user_id)
+                if not user:
+                    print(f"User id {user_id} not found in DB; skipping controller call.")
+                    return
+                username = getattr(user, "username", None)
+                ssh_key = getattr(user, "ssh_key", None)
+                full_user = getattr(user, "full_user", None)
 
-                # build list of { "id_device": <asset_tag>, "ip_device": <ip>, "role": <role> }
-                devices_list = []
-                for at in asset_tags:
-                    ip_addr = None
-                    role = None
-                    interface = None
+                if msg_type == "granted":
+                    # assign token to the reservation
+                    res = db.session.get(Reservation, reservation_id)
+                    if res:
+                        res.token = job_data.get("token")
+                        db.session.commit()
+                        print(f"Token saved to DB for reservation {reservation_id}")
+                    # read reservation devices
                     try:
-                        # try to fetch device by asset_tag first
-                        dev = nb.dcim.devices.get(site=NETBOX_SITE, asset_tag=at)
-                        if not dev:
-                            # fallback: try by name
-                            devs = nb.dcim.devices.filter(site=NETBOX_SITE, name=at)
-                            dev = devs[0] if devs else None
-
-                        if dev:
-                            # primary_ip can be object-like or dict depending on pynetbox version
-                            primary_ip = getattr(dev, "primary_ip", None)
-                            if primary_ip:
-                                ip = getattr(primary_ip, "address", None) or (
-                                    primary_ip.get("address") if isinstance(primary_ip, dict) else None)
-                                if ip:
-                                    ip_addr = str(ip).split("/")[0]
-
-                            role_obj = getattr(dev, "role", None)
-                            # when it is an object with attributes
-                            role = getattr(role_obj, "slug", None) or getattr(role_obj, "name", None)
-
-                            role = role.lower() if role else None
-
-                        if ip_addr:
-                            try:
-                                ip_objs = None
-
-                                if ip:
-                                    ip_objs = nb.ipam.ip_addresses.filter(address=ip)
-                                # normalize ip_obj extraction
-                                ip_obj = None
-                                if ip_objs:
-                                    if hasattr(ip_objs, "first"):
-                                        ip_obj = ip_objs.first()
-                                    else:
-                                        ip_list = list(ip_objs)
-                                        ip_obj = ip_list[0] if ip_list else None
-
-                                if ip_obj:
-                                    assigned = getattr(ip_obj, "assigned_object", None) or (
-                                        ip_obj.get("assigned_object") if isinstance(ip_obj, dict) else None)
-                                    if assigned:
-                                        if isinstance(assigned, dict):
-                                            interface = assigned.get("name") or assigned.get("display")
-                                        else:
-                                            interface = getattr(assigned, "name", None) or getattr(assigned, "display",
-                                                                                                   None)
-                            except Exception as e:
-                                print(f"NetBox ip lookup error for ip {ip_addr}: {e}")
+                        res_devs = ReservationDevice.query.filter_by(reservation_id=reservation_id).all()
+                        asset_tags = [rd.asset_tag for rd in res_devs]
                     except Exception as e:
-                        print(f"NetBox lookup error for asset_tag {at}: {e}")
+                        print(f"Error reading ReservationDevice for reservation {reservation_id}: {e}")
+                        asset_tags = []
 
-                    devices_list.append({
-                        "id_device": at,
-                        "ip_device": ip_addr,
-                        "role": role,
-                        "interface": interface
-                    })
+                    # build list of { "id_device": <asset_tag>, "ip_device": <ip>, "role": <role> }
+                    devices_list = []
+                    for at in asset_tags:
+                        ip_addr = None
+                        role = None
+                        interface = None
+                        try:
+                            # try to fetch device by asset_tag first
+                            dev = nb.dcim.devices.get(site=NETBOX_SITE, asset_tag=at)
+                            if not dev:
+                                # fallback: try by name
+                                devs = nb.dcim.devices.filter(site=NETBOX_SITE, name=at)
+                                dev = devs[0] if devs else None
 
-                # prepare payload for controller
-                grant_payload = {
-                    "ssh_key": ssh_key,
-                    "user_id": user_id,
-                    "username": username,
-                    "full_user": full_user,
-                    "reservation_id": reservation_id,
-                    "devices": devices_list,
-                    "containerlab_test": CONTAINERLAB_TEST
-                }
+                            if dev:
+                                # primary_ip can be object-like or dict depending on pynetbox version
+                                primary_ip = getattr(dev, "primary_ip", None)
+                                if primary_ip:
+                                    ip = getattr(primary_ip, "address", None) or (
+                                        primary_ip.get("address") if isinstance(primary_ip, dict) else None)
+                                    if ip:
+                                        ip_addr = str(ip).split("/")[0]
 
-                # send to controller
-                try:
-                    resp = requests.post("http://localhost:5002/api/controller/grantAccess", json=grant_payload, timeout=10)
-                    if resp.status_code == 200:
-                        print(f"grantAccess successful for user {user_id} reservation {reservation_id}: {resp.status_code}")
+                                role_obj = getattr(dev, "role", None)
+                                # when it is an object with attributes
+                                role = getattr(role_obj, "slug", None) or getattr(role_obj, "name", None)
+
+                                role = role.lower() if role else None
+
+                            if ip_addr:
+                                try:
+                                    ip_objs = None
+
+                                    if ip:
+                                        ip_objs = nb.ipam.ip_addresses.filter(address=ip)
+                                    # normalize ip_obj extraction
+                                    ip_obj = None
+                                    if ip_objs:
+                                        if hasattr(ip_objs, "first"):
+                                            ip_obj = ip_objs.first()
+                                        else:
+                                            ip_list = list(ip_objs)
+                                            ip_obj = ip_list[0] if ip_list else None
+
+                                    if ip_obj:
+                                        assigned = getattr(ip_obj, "assigned_object", None) or (
+                                            ip_obj.get("assigned_object") if isinstance(ip_obj, dict) else None)
+                                        if assigned:
+                                            if isinstance(assigned, dict):
+                                                interface = assigned.get("name") or assigned.get("display")
+                                            else:
+                                                interface = getattr(assigned, "name", None) or getattr(assigned, "display",
+                                                                                                       None)
+                                except Exception as e:
+                                    print(f"NetBox ip lookup error for ip {ip_addr}: {e}")
+                        except Exception as e:
+                            print(f"NetBox lookup error for asset_tag {at}: {e}")
+
+                        devices_list.append({
+                            "id_device": at,
+                            "ip_device": ip_addr,
+                            "role": role,
+                            "interface": interface
+                        })
+
+                    # prepare payload for controller
+                    grant_payload = {
+                        "ssh_key": ssh_key,
+                        "user_id": user_id,
+                        "username": username,
+                        "full_user": full_user,
+                        "reservation_id": reservation_id,
+                        "devices": devices_list,
+                        "containerlab_test": CONTAINERLAB_TEST
+                    }
+
+                    # send to controller
+                    try:
+                        resp = requests.post("http://localhost:5002/api/controller/grantAccess", json=grant_payload, timeout=420)
+                        if resp.status_code == 200:
+                            print(f"grantAccess successful for user {user_id} reservation {reservation_id}: {resp.status_code}")
+                        else:
+                            print(f"grantAccess returned {resp.status_code} for user {user_id} reservation {reservation_id}: {resp.text}")
+                    except Exception as e:
+                        print(f"Error calling grantAccess for reservation {reservation_id}: {e}")
+
+                elif msg_type == "revoked":
+                    # run rollback if we do not use containerlab
+                    if CONTAINERLAB_TEST:
+                        rollback = False
                     else:
-                        print(f"grantAccess returned {resp.status_code} for user {user_id} reservation {reservation_id}: {resp.text}")
-                except Exception as e:
-                    print(f"Error calling grantAccess for reservation {reservation_id}: {e}")
+                        rollback = True
 
-            elif msg_type == "revoked":
-                # run rollback if we do not use containerlab
-                if CONTAINERLAB_TEST:
-                    rollback = False
-                else:
-                    rollback = True
+                    revoke_payload = {
+                        "ssh_key": ssh_key,
+                        "username": username,
+                        "reservation_id": reservation_id,
+                        "rollback": rollback                       # always run rollback when reservation expires (if the admin revoke the reservation, can choose to run rollback or not)
+                    }
 
-                revoke_payload = {
-                    "ssh_key": ssh_key,
-                    "username": username,
-                    "reservation_id": reservation_id,
-                    "rollback": rollback                       # always run rollback when reservation expires (if the admin revoke the reservation, can choose to run rollback or not)
-                }
+                    try:
+                        resp = requests.post("http://localhost:5002/api/controller/revokeAccess", json=revoke_payload, timeout=420)
+                        if resp.status_code == 200:
+                            print(f"revokeAccess successful for user {user_id} reservation {reservation_id}: {resp.status_code}")
+                        else:
+                            print(
+                                f"revokeAccess returned {resp.status_code} for user {user_id} reservation {reservation_id}: {resp.text}")
+                    except Exception as e:
+                        print(f"Error calling revokeAccess for reservation {reservation_id}: {e}")
 
-                try:
-                    resp = requests.post("http://localhost:5002/api/controller/revokeAccess", json=revoke_payload, timeout=10)
-                    if resp.status_code == 200:
-                        print(f"revokeAccess successful for user {user_id} reservation {reservation_id}: {resp.status_code}")
-                    else:
-                        print(
-                            f"revokeAccess returned {resp.status_code} for user {user_id} reservation {reservation_id}: {resp.text}")
-                except Exception as e:
-                    print(f"Error calling revokeAccess for reservation {reservation_id}: {e}")
+                print(f"Lock releasing for {msg_type} reservation {reservation_id}")
+
+            finally:
+                # always release the lock
+                lock.release()
+                print(f"Lock released for {msg_type} reservation {reservation_id}")
+                      
         except Exception as e:
             print("Unexpected error processing reservation event:", e)
             return
@@ -205,7 +241,7 @@ def _redis_listener():
         # emit reservation event to the client in the connected user room
         socketio.emit("reservation_event", data, room=user_room)
         # send data to controller
-        send_to_controller(msg_type, user_id, reservation_id)
+        send_to_controller(msg_type, user_id, reservation_id, data)
 
 socketio.init_app(app, cors_allowed_origins="http://localhost:5173")
 import backend.orchestrator.orchestrator_ws_server                   # necessary to import socket handler after socketio initialization
@@ -347,17 +383,104 @@ def check_reservation():
     if not all([username, start_date, start_time, end_date, end_time]):
         return jsonify({"ok": False, "message": "Missing fields"}), 400
 
+    if TEST_DOUBLE_RES:
+        rome_tz = ZoneInfo("Europe/Rome")
+        now_local = datetime.now(rome_tz).replace(second=0, microsecond=0)
+
+        # first reservation: starts now, duration specified
+        first_start_dt = now_local + timedelta(minutes=2)
+        first_end_dt = first_start_dt + timedelta(minutes=EXPERIMENT_DURATION)
+
+        # second reservation: starts when first ends, same duration
+        second_start_dt = first_end_dt
+        second_end_dt = second_start_dt + timedelta(minutes=25)
+
+        first_start_dt_utc = first_start_dt.astimezone(timezone.utc)
+        first_end_dt_utc = (first_end_dt - timedelta(seconds=1)).astimezone(timezone.utc)
+
+        second_start_dt_utc = second_start_dt.astimezone(timezone.utc)
+        second_end_dt_utc = (second_end_dt - timedelta(seconds=1)).astimezone(timezone.utc)
+
+        # create first reservation
+        next_id_1 = get_next_available_id(Reservation)
+        res1 = Reservation(
+            id=next_id_1,
+            username=username,
+            startDate=first_start_dt.date(),
+            endDate=first_end_dt.date(),
+            startTime=first_start_dt.time().replace(second=0, microsecond=0),
+            endTime=first_end_dt.time().replace(second=0, microsecond=0),
+            token=None
+        )
+
+        db.session.add(res1)
+        reservation_id = res1.id
+        db.session.flush()
+
+        for at in devices:
+            rd = ReservationDevice(reservation_id=res1.id, asset_tag=at)
+            db.session.add(rd)
+
+        # create second reservation for verstappen
+        next_id_2 = get_next_available_id(Reservation)
+        res2 = Reservation(
+            id=next_id_2,
+            username="verstappen",
+            startDate=second_start_dt.date(),
+            endDate=second_end_dt.date(),
+            startTime=second_start_dt.time().replace(second=0, microsecond=0),
+            endTime=second_end_dt.time().replace(second=0, microsecond=0),
+            token=None
+        )
+        db.session.add(res2)
+        db.session.flush()
+
+        for at in devices:
+            rd = ReservationDevice(reservation_id=res2.id, asset_tag=at)
+            db.session.add(rd)
+
+        db.session.commit()
+
+        # reset sequence
+        db.session.execute(db.text("""
+                SELECT setval(pg_get_serial_sequence('reservation', 'id'), 
+                             (SELECT MAX(id) FROM reservation), true);
+            """))
+        db.session.commit()
+
+        # schedule jobs for first reservation
+        start_job_id_1 = f"res-{res1.id}-start"
+        queue.enqueue_at(first_start_dt_utc, reservation_start_job, res1.id, job_id=start_job_id_1)
+        end_job_id_1 = f"res-{res1.id}-end"
+        queue.enqueue_at(first_end_dt_utc, reservation_end_job, res1.id, job_id=end_job_id_1)
+
+        # schedule jobs for second reservation
+        start_job_id_2 = f"res-{res2.id}-start"
+        queue.enqueue_at(second_start_dt_utc, reservation_start_job, res2.id, job_id=start_job_id_2)
+        end_job_id_2 = f"res-{res2.id}-end"
+        queue.enqueue_at(second_end_dt_utc, reservation_end_job, res2.id, job_id=end_job_id_2)
+
+        print(f"TEST2: Created two reservations - ID {res1.id} ({username}) and ID {res2.id} (verstappen)")
+
+        return jsonify({
+            "ok": True,
+            "message": "Reservation created",
+            "id": reservation_id,
+            "start": f"{first_start_dt.date()} {first_start_dt.time()}",
+            "end": f"{first_end_dt.date()} {first_end_dt.time()}"
+        }), 201
+
     # if true, create a reservation from now + 2 minutes (start) to start + EXPERIMENT_DURATION
     if TEST:
-
-        now = datetime.now()
-        start_dt = now.replace(second=0, microsecond=0) + timedelta(minutes=2)
-        end_dt = start_dt + timedelta(minutes=EXPERIMENT_DURATION)
         # necessary for date mismatch between server and redis
-        now = datetime.now().astimezone(ZoneInfo("Europe/Rome"))
-        future_start_dt = (now.replace(second=0, microsecond=0) + timedelta(minutes=2))
-        start_dt_utc = future_start_dt.astimezone(timezone.utc)
-        end_dt_utc = start_dt_utc + timedelta(minutes=EXPERIMENT_DURATION) - timedelta(seconds=1)   # -1 second to execute an end job before a start job scheduled at the same hour
+        rome_tz = ZoneInfo("Europe/Rome")
+        now_local = datetime.now(rome_tz).replace(second=0, microsecond=0)
+
+        start_dt = now_local + timedelta(minutes=2)
+        end_dt = start_dt + timedelta(minutes=EXPERIMENT_DURATION)
+
+        start_dt_utc = start_dt.astimezone(timezone.utc)
+        end_dt_utc = (end_dt - timedelta(seconds=1)).astimezone(timezone.utc)        # -1 second to execute an end job before a start job scheduled at the same hour
 
         print("start_date = ", start_dt.strftime("%Y-%m-%d"))
         print("start_time = ", start_dt.strftime("%H:%M"))
@@ -366,16 +489,16 @@ def check_reservation():
 
     else:
         try:
-            start_dt = datetime.strptime(f"{start_date} {start_time}", "%Y-%m-%d %H:%M")
-            end_dt = datetime.strptime(f"{end_date} {end_time}", "%Y-%m-%d %H:%M")
+            temp_start_dt = datetime.strptime(f"{start_date} {start_time}", "%Y-%m-%d %H:%M")
+            temp_end_dt = datetime.strptime(f"{end_date} {end_time}", "%Y-%m-%d %H:%M")
+
             # format date for RQ
             rome_tz = ZoneInfo("Europe/Rome")
-            temp_start_dt = start_dt
-            temp_end_dt = end_dt
+            start_dt = temp_start_dt.replace(tzinfo=rome_tz)
+            end_dt = temp_end_dt.replace(tzinfo=rome_tz)
 
-            start_dt_utc = temp_start_dt.replace(tzinfo=rome_tz).astimezone(timezone.utc)
-            end_dt_utc = temp_end_dt.replace(tzinfo=rome_tz).astimezone(timezone.utc)
-            end_dt_utc = end_dt_utc - timedelta(seconds=1)     # -1 second to execute an end job before a start job scheduled at the same hour
+            start_dt_utc = start_dt.astimezone(timezone.utc)
+            end_dt_utc = (end_dt - timedelta(seconds=1)).astimezone(timezone.utc)        # -1 second to execute an end job before a start job scheduled at the same hour
 
         except ValueError:
             return jsonify({"ok": False, "message": "Invalid date/time format"}), 400

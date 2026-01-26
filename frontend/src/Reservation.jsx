@@ -75,7 +75,7 @@ const CustomToolbar = ({ date, onNavigate }) => {
   );
 };
 
-export default function Reservation({ username, isReservationActive }) {
+export default function Reservation({ username, isReservationActive}) {
   // calendar state
   const [allReservations, setAllReservations] = useState([]);               // every reservation
   const [selectedEvent, setSelectedEvent] = useState(null);                       // selected event to show details
@@ -665,12 +665,14 @@ export default function Reservation({ username, isReservationActive }) {
                       const startDateObj = new Date(res.startDate);
                       const endDateObj = new Date(res.endDate);
                       const remainingMs = startDateObj.getTime() - now;
-                      const isActive = remainingMs <= 0 && endDateObj.getTime() > now;
+                      const shouldBeActive = remainingMs <= 0 && endDateObj.getTime() > now;
+                      const isActive = shouldBeActive && isReservationActive;
                       const isExpired = endDateObj.getTime() <= now;
+                      const isWaiting = shouldBeActive && !isReservationActive;
                       const resDevices = Array.isArray(res.devices) ? res.devices : [];
                       return (
                           <li key={res.id} id={`reservation-item-${res.id}`}
-                              className={`reservation-item ${isExpired || !isReservationActive ? 'expired' : isActive ? 'active' : ''}`}>
+                              className={`reservation-item ${isWaiting ? 'waiting' : isActive ? 'active' : 'expired'}`}>
                             <div className="reservation-top-row">
                               <span className="reservation-info">
                                 <span className="date">{formatLocalDate(startDateObj)}</span>
@@ -694,7 +696,7 @@ export default function Reservation({ username, isReservationActive }) {
                                     className="timer-display-list">{isActive || isExpired ? '--:--' : formatDuration(remainingMs)}</span>
 
                               <button id={`delete-btn-${res.id}`} className="delete-button"
-                                      disabled={isActive || isExpired || res.deleting}
+                                      disabled={isActive || isExpired || res.deleting || isWaiting}
                                       onClick={() => deleteReservation(res.id)} data-reservation-id={res.id}>
                                 {res.deleting ? 'Deleting...' : 'Delete'}
                               </button>
