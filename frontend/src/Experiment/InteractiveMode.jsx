@@ -1,6 +1,7 @@
 // InteractiveMode.jsx
 import React, { useRef } from 'react';
 import jsyaml from 'js-yaml';
+import JSZip from 'jszip';
 
 export default function InteractiveMode({
     experimentName,
@@ -23,10 +24,62 @@ export default function InteractiveMode({
     yamlUploadMessage,
     yamlUploadMessageType,
     setYamlUploadMessage,
-    setYamlUploadMessageType
+    setYamlUploadMessageType,
+    zipUploadMessage,
+    zipUploadMessageType,
+    setZipUploadMessage,
+    setZipUploadMessageType
 }) {
     const playbookFileRefs = useRef({});
     const yamlUploadRef = useRef(null);
+    const zipUploadRef = useRef(null);
+
+    // funzione condivisa per validare e processare il template YAML
+    const processYamlTemplate = (yamlContent) => {
+        try {
+            const parsed = jsyaml.load(yamlContent);
+
+            if (!parsed.experiment_id || !parsed.duration_s || !parsed.schedule) {
+                return {
+                    success: false,
+                    error: 'Invalid YAML format: required fields are experiment_id, duration_s, schedule'
+                };
+            }
+
+            if (!Array.isArray(parsed.schedule) || parsed.schedule.length === 0) {
+                return {
+                    success: false,
+                    error: 'Invalid YAML format: schedule must be a non-empty array'
+                };
+            }
+
+            if (isNaN(parsed.duration_s) || parsed.duration_s <= 0) {
+                return {
+                    success: false,
+                    error: 'Invalid YAML format: duration_s must be a positive number'
+                };
+            }
+
+            for (const item of parsed.schedule) {
+                if (item.time_offset_s === undefined || isNaN(item.time_offset_s) || item.time_offset_s < 0) {
+                    return {
+                        success: false,
+                        error: 'Invalid YAML format: time_offset_s must be a non-negative number'
+                    };
+                }
+            }
+
+            return {
+                success: true,
+                data: parsed
+            };
+        } catch (error) {
+            return {
+                success: false,
+                error: `Invalid YAML format: ${error.message}`
+            };
+        }
+    };
 
     const handleYamlUpload = (e) => {
         const file = e.target.files[0];
@@ -34,73 +87,148 @@ export default function InteractiveMode({
 
         const reader = new FileReader();
         reader.onload = (event) => {
-            try {
-                const yamlContent = event.target.result;
-                const parsed = jsyaml.load(yamlContent);
 
-                // validate required fields
-                if (!parsed.experiment_id || !parsed.duration_s || !parsed.schedule) {
-                    setYamlUploadMessage('Invalid YAML format: required fields are experiment_id, duration_s, schedule');
-                    setYamlUploadMessageType('error');
-                    return;
-                }
+            const result = processYamlTemplate(event.target.result);
 
-                if (!Array.isArray(parsed.schedule) || parsed.schedule.length === 0) {
-                    setYamlUploadMessage('Invalid YAML format: schedule must be a non-empty array');
-                    ssetYamlUploadMessageType('error');
-                    return;
-                }
-
-                // validate that duration_s is a number
-                if (isNaN(parsed.duration_s) || parsed.duration_s <= 0) {
-                    setYamlUploadMessage('Invalid YAML format: duration_s must be a positive number');
-                    setYamlUploadMessageType('error');
-                    return;
-                }
-
-              // validate time_offset_s in schedule items
-                for (const item of parsed.schedule) {
-                    if (item.time_offset_s === undefined || isNaN(item.time_offset_s) || item.time_offset_s < 0) {
-                        setYamlUploadMessage('Invalid YAML format: time_offset_s must be a non-negative number');
-                        setYamlUploadMessageType('error');
-                        return;
-                    }
-               }
-
-                // populate experiment name and duration
-                setExperimentName(parsed.experiment_id);
-                setExperimentDuration(parsed.duration_s);
-
-                // populate playbook rows from schedule
-                const newRows = parsed.schedule.map((item, index) => {
-                    const newId = ++idCounter.current;
-                    // filter targets to only include devices that exist in deviceList
-                    const validDevices = (item.targets || []).filter(target =>
-                        deviceList.some(device => device.name === target)
-                    );
-                    return {
-                        id: newId,
-                        executionTime: item.time_offset_s,
-                        file: null, // file needs to be uploaded separately
-                        fileName: item.playbook || '',
-                        fileType: '', // will be set when user uploads the actual file
-                        selectedDevices: validDevices
-                    };
-                });
-
-                setPlaybookRows(newRows);
-                setYamlUploadMessage('YAML loaded successfully. Please upload the playbook files for each step');
-                setYamlUploadMessageType('success');
-
-            } catch (error) {
-                console.error('Error parsing YAML:', error);
-                setYamlUploadMessage(`Invalid YAML format: ${error.message}`);
-                setYamlUploadMessageType('error');
+            if (!result.success) {
+              setYamlUploadMessage(result.error);
+              setYamlUploadMessageType('error');
+              return;
             }
+
+            const parsed = result.data;
+
+            // populate experiment name and duration
+            setExperimentName(parsed.experiment_id);
+            setExperimentDuration(parsed.duration_s);
+
+            // populate playbook rows from schedule
+            const newRows = parsed.schedule.map((item) => {
+                const newId = ++idCounter.current;
+                // filter targets to only include devices that exist in deviceList
+                const validDevices = (item.targets || []).filter(target =>
+                    deviceList.some(device => device.name === target)
+                );
+                return {
+                    id: newId,
+                    executionTime: item.time_offset_s,
+                    file: null, // file needs to be uploaded separately
+                    fileName: item.playbook || '',
+                    fileType: '', // will be set when user uploads the actual file
+                    selectedDevices: validDevices
+                };
+            });
+
+            setPlaybookRows(newRows);
+            setYamlUploadMessage('YAML loaded successfully. Please upload the playbook files for each step');
+            setYamlUploadMessageType('success');
         };
 
         reader.readAsText(file);
         e.target.value = null; // reset input
+    };
+
+    const handleZipUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        try {
+            const zip = new JSZip();
+            const contents = await zip.loadAsync(file);
+
+            const yamlFiles = Object.keys(contents.files).filter(
+                name => !contents.files[name].dir && (name.endsWith('.yml') || name.endsWith('.yaml'))
+            );
+
+            if (yamlFiles.length === 0) {
+                setZipUploadMessage('No YAML files found in zip');
+                setZipUploadMessageType('error');
+                return;
+            }
+
+            // find template
+            let templateFile = null;
+            let parsed = null;
+
+            for (const fileName of yamlFiles) {
+                const content = await contents.files[fileName].async('text');
+                const result = processYamlTemplate(content);
+
+
+                if (result.success && result.data.experiment_id && result.data.duration_s && result.data.schedule) {
+                    if (templateFile) {
+                        setZipUploadMessage('Multiple experiment definition files found in zip');
+                        setZipUploadMessageType('error');
+                        return;
+                    }
+                    templateFile = fileName;
+                    parsed = result.data;
+                }
+            }
+
+            if (!templateFile || !parsed) {
+                setZipUploadMessage('No correct experiment definition file found in zip');
+                setZipUploadMessageType('error');
+                return;
+            }
+
+            setExperimentName(parsed.experiment_id);
+            setExperimentDuration(parsed.duration_s);
+
+            const requiredPlaybooks = parsed.schedule.map(item => item.playbook);
+            const playbookFiles = new Map();
+
+            for (const fileName of yamlFiles) {
+                if (fileName !== templateFile) {
+                    const baseName = fileName.split('/').pop();
+                    const content = await contents.files[fileName].async('blob');
+                    const fileObj = new File([content], baseName, { type: 'application/x-yaml' });
+                    playbookFiles.set(baseName, fileObj);
+                }
+            }
+
+            // check extra/missing files
+            const missingFiles = requiredPlaybooks.filter(pb => !playbookFiles.has(pb));
+            const extraFiles = Array.from(playbookFiles.keys()).filter(name => !requiredPlaybooks.includes(name));
+
+            const newRows = parsed.schedule.map((item) => {
+                const newId = ++idCounter.current;
+                const validDevices = (item.targets || []).filter(target =>
+                    deviceList.some(device => device.name === target)
+                );
+                const playbookFile = playbookFiles.get(item.playbook);
+
+                return {
+                    id: newId,
+                    executionTime: item.time_offset_s,
+                    file: playbookFile || null,
+                    fileName: item.playbook || '',
+                    fileType: playbookFile ? 'valid' : '',
+                    selectedDevices: validDevices
+                };
+            });
+
+            setPlaybookRows(newRows);
+
+            let message = 'Experiment template and playbooks loaded successfully';
+            if (missingFiles.length > 0 || extraFiles.length > 0) {
+                const warnings = [];
+                if (missingFiles.length > 0) warnings.push(`Missing: ${missingFiles.join(', ')}`);
+                if (extraFiles.length > 0) warnings.push(`Ignored: ${extraFiles.join(', ')}`);
+                message += '. Warning: ' + warnings.join('; ');
+                setZipUploadMessageType('warning');
+            } else {
+                setZipUploadMessageType('success');
+            }
+
+            setZipUploadMessage(message);
+
+        } catch (error) {
+            setZipUploadMessage(`Error processing zip: ${error.message}`);
+            setZipUploadMessageType('error');
+        }
+
+        e.target.value = null;
     };
 
     // download iperf3 and nfs example playbook
@@ -328,7 +456,8 @@ export default function InteractiveMode({
         <div className="experiment-section mode-content">
             <div className="section-content">
                 <div className="config-row">
-                    <label className="label-inline label-fixed-width label-output">Load experiment from YAML template:</label>
+                    <label className="label-inline label-fixed-width label-output">Load experiment from YAML
+                        template:</label>
                     <input
                         type="file"
                         ref={yamlUploadRef}
@@ -346,8 +475,34 @@ export default function InteractiveMode({
                         Upload template
                     </button>
                     {yamlUploadMessage && (
-                      <span className={`message-inline ${yamlUploadMessageType === 'error' ? 'error-validation' : 'success-validation'}`}>
+                        <span
+                            className={`message-inline ${yamlUploadMessageType === 'error' ? 'error-validation' : 'success-validation'}`}>
                         {yamlUploadMessage}
+                      </span>
+                    )}
+                </div>
+                <div className="config-row">
+                    <label className="label-inline label-fixed-width label-output">Load YAML templates zip folder:</label>
+                    <input
+                        type="file"
+                        ref={zipUploadRef}
+                        accept=".zip"
+                        onChange={handleZipUpload}
+                        style={{display: 'none'}}
+                    />
+                    <button
+                        type="button"
+                        className="compile-form-button configuration-button"
+                        onClick={() => zipUploadRef.current?.click()}
+                        disabled={runningExperiment}
+                        title="Upload experiment definition zip"
+                    >
+                        Upload template
+                    </button>
+                    {zipUploadMessage && (
+                        <span
+                            className={`message-inline ${zipUploadMessageType === 'error' ? 'error-validation' : 'success-validation'}`}>
+                        {zipUploadMessage}
                       </span>
                     )}
                 </div>
@@ -361,7 +516,8 @@ export default function InteractiveMode({
                         readOnly={runningExperiment}
                         placeholder="e.g., My Experiment"
                     />
-                    <label className="label-inline label-fixed-width label-output">Download description template package:</label>
+                    <label className="label-inline label-fixed-width label-output">Download description template
+                        package:</label>
                     <button
                         type="button"
                         className="template-button configuration-button"

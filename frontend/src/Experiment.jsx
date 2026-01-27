@@ -71,6 +71,8 @@ export default function Experiment({username, reservation_id}) {
     ]);
     const [yamlUploadMessage, setYamlUploadMessage] = useState('');
     const [yamlUploadMessageType, setYamlUploadMessageType] = useState('');
+    const [zipUploadMessage, setZipUploadMessage] = useState('');
+    const [zipUploadMessageType, setZipUploadMessageType] = useState('');
 
     // Guided mode states
     const [guidedDuration, setGuidedDuration] = useState('');               // experiment duration
@@ -289,6 +291,10 @@ export default function Experiment({username, reservation_id}) {
                         yamlUploadMessageType={yamlUploadMessageType}
                         setYamlUploadMessage={setYamlUploadMessage}
                         setYamlUploadMessageType={setYamlUploadMessageType}
+                        zipUploadMessage={zipUploadMessage}
+                        zipUploadMessageType={zipUploadMessageType}
+                        setZipUploadMessage={setZipUploadMessage}
+                        setZipUploadMessageType={setZipUploadMessageType}
                     />
                 )}
 

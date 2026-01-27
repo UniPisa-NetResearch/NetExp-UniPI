@@ -440,17 +440,39 @@ export default function Reservation({ username, isReservationActive}) {
 
   // transform reservations into calendar events
   const calendarEvents = useMemo(() => {
-    return allReservations.map(res => ({
-      id: res.id,
-      title: "Reserved", //res.username === username ? `My Reservation` : `Reserved by ${res.username}`,
-      start: new Date(res.startDate),
-      end: new Date(res.endDate),
-      resource: {
-        username: res.username,
-        devices: res.devices,
-        isCurrentUser: res.username === username
+    return allReservations.map(res => {
+      // get start time and duration
+      const startDate = new Date(res.startDate);
+      const endDate = new Date(res.endDate);
+
+      const durationMs = endDate.getTime() - startDate.getTime();
+      const totalMinutes = Math.floor(durationMs / (1000 * 60));
+      const hours = Math.floor(totalMinutes / 60);
+      const minutes = totalMinutes % 60;
+      let durationStr = '';
+
+      if (hours > 0 && minutes > 0) {
+        durationStr = `${hours}h ${minutes}m`;
+      } else if (hours > 0) {
+        durationStr = `${hours}h`;
+      } else {
+        durationStr = `${minutes}m`;
       }
-    }));
+
+      const startTime = formatLocalTime(startDate);
+
+      return {
+        id: res.id,
+        title: `${startTime} - ${durationStr}`,
+        start: new Date(res.startDate),
+        end: new Date(res.endDate),
+        resource: {
+          username: res.username,
+          devices: res.devices,
+          isCurrentUser: res.username === username
+        }
+      };
+    });
   }, [allReservations, username]);
 
   const handleSelectEvent = (event) => {
@@ -615,8 +637,7 @@ export default function Reservation({ username, isReservationActive}) {
                           handleSelectEvent(event);
                         }}
                       >
-                        <div className="day-event-title">{event.title}</div>
-                        <div>
+                        <div className="day-event-title">
                           {moment(event.start).format('HH:mm')} - {moment(event.end).format('HH:mm')}
                         </div>
                       </div>
