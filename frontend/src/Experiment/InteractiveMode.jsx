@@ -34,10 +34,17 @@ export default function InteractiveMode({
     const yamlUploadRef = useRef(null);
     const zipUploadRef = useRef(null);
 
-    // funzione condivisa per validare e processare il template YAML
+    // shared function to validate YAML template
     const processYamlTemplate = (yamlContent) => {
         try {
             const parsed = jsyaml.load(yamlContent);
+
+            if (parsed.iperf_flows) {
+                return {
+                    success: false,
+                    error: 'Invalid YAML format: experiments with iperf_flows are not supported in interactive mode'
+                };
+            }
 
             if (!parsed.experiment_id || !parsed.duration_s || !parsed.schedule) {
                 return {
@@ -210,18 +217,19 @@ export default function InteractiveMode({
 
             setPlaybookRows(newRows);
 
-            let message = 'Experiment template and playbooks loaded successfully';
+            let message = 'Experiment loaded successfully';
+            let messageType = 'success';
+
             if (missingFiles.length > 0 || extraFiles.length > 0) {
                 const warnings = [];
                 if (missingFiles.length > 0) warnings.push(`Missing: ${missingFiles.join(', ')}`);
                 if (extraFiles.length > 0) warnings.push(`Ignored: ${extraFiles.join(', ')}`);
-                message += '. Warning: ' + warnings.join('; ');
-                setZipUploadMessageType('warning');
-            } else {
-                setZipUploadMessageType('success');
+                message += ' - ' + warnings.join(' - ');
+                messageType = 'warning';
             }
 
             setZipUploadMessage(message);
+            setZipUploadMessageType(messageType);
 
         } catch (error) {
             setZipUploadMessage(`Error processing zip: ${error.message}`);
@@ -456,8 +464,7 @@ export default function InteractiveMode({
         <div className="experiment-section mode-content">
             <div className="section-content">
                 <div className="config-row">
-                    <label className="label-inline label-fixed-width label-output">Load experiment from YAML
-                        template:</label>
+                    <label className="label-inline label-fixed-width label-output">Load experiment YAML template file:</label>
                     <input
                         type="file"
                         ref={yamlUploadRef}
@@ -482,7 +489,7 @@ export default function InteractiveMode({
                     )}
                 </div>
                 <div className="config-row">
-                    <label className="label-inline label-fixed-width label-output">Load YAML templates zip folder:</label>
+                    <label className="label-inline label-fixed-width label-output">Load ZIP with experiment templates:</label>
                     <input
                         type="file"
                         ref={zipUploadRef}
@@ -497,11 +504,11 @@ export default function InteractiveMode({
                         disabled={runningExperiment}
                         title="Upload experiment definition zip"
                     >
-                        Upload template
+                        Upload zip folder
                     </button>
                     {zipUploadMessage && (
                         <span
-                            className={`message-inline ${zipUploadMessageType === 'error' ? 'error-validation' : 'success-validation'}`}>
+                            className={`message-inline ${zipUploadMessageType === 'error' ? 'error-validation' : zipUploadMessageType === 'warning' ? 'warning-validation' : 'success-validation'}`}>
                         {zipUploadMessage}
                       </span>
                     )}

@@ -883,6 +883,11 @@
   background-color: rgba(40, 167, 69, 0.1);
 }
 
+.message-inline.warning-validation {
+  border: 1px solid #d8ad30;
+  background-color: rgba(255, 193, 7, 0.1);
+  color: #eccb47;
+}
 
 .batch-section {
   margin-top: 15px;
