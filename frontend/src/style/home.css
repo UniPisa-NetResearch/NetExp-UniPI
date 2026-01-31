@@ -18,7 +18,7 @@
 }
 /* style for the key management card */
 .card.key-manager-card {
-    max-width: 900px;
+    max-width: 95%;
     padding: 30px;
     text-align: left;
 }
@@ -53,7 +53,7 @@
 
 /* Admin Panel Styles */
 .card.admin-manager-card {
-    max-width: 900px;
+    max-width: 95%;
     padding: 30px;
     margin-top: 30px;
 }
@@ -192,4 +192,124 @@
 .admin-table td {
     padding: 10px 8px;
     font-size: 0.9em;
+}
+
+.card.file-manager-card {
+    max-width: 95%;
+    padding: 30px;
+    margin-top: 30px;
+}
+
+.space-usage-bar{
+    margin-bottom: 20px;
+}
+
+.complete-bar{
+  width: 100%;
+  height: 20px;
+  background-color: #e0e0e0;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.percentage-usage-bar{
+    height: 100%;
+    transition: width 0.3s ease;
+}
+
+.percentage-usage-bar.full{
+    background-color: #f44336;
+}
+
+.percentage-usage-bar.almost-full{
+    background-color: #ff9800;
+}
+
+.percentage-usage-bar.free{
+    background-color: #4caf50;
+}
+
+.file-section-message{
+    margin-top: 15px;
+}
+
+.file-section-message.success{
+    color: #28a745;
+}
+
+.file-section-message.error{
+    color: #dc3545;
+}
+
+.file-section-message.wait{
+    color: #eccb47;
+}
+
+.file-section-message.no-file{
+    color: #777;
+}
+
+.file-table.container{
+    margin-top: 20px;
+    overflow-x: auto;
+}
+
+.download-zip-button, .multi-delete-button{
+    min-width: 135px;
+}
+
+.file-filters {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 30px;
+    margin-top: 30px;
+    flex-wrap: wrap;
+}
+
+.filter-label {
+    font-weight: 600;
+    font-size: 0.9em;
+    color: var(--text-dark);
+    white-space: nowrap;
+}
+
+.filter-select {
+    padding: 8px;
+    border-radius: 4px;
+    border: 1px solid #ddd;
+    background-color: white;
+}
+
+.truncate-text {
+    width: 700px;
+    min-width: 700px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: default;
+}
+
+.file-table{
+    width: 100%;
+}
+
+.download-file-button, .delete-file-button{
+    max-width: 80px;
+    height: 35px;
+    padding: 5px 15px;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.85em;
+}
+
+.file-actions-cell {
+    display: flex;
+    flex-direction: row;
+    gap: 10px;
+    justify-content: flex-start;
+    align-items: center;
+    white-space: nowrap;
 }

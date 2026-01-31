@@ -1,49 +1,294 @@
-- name: Revoke SSH access and remove user
+- name: Revoke SSH access and remove user - Setup and preparation
   hosts: all
   gather_facts: no
   become: yes
-  strategy: free               # parallel tasks
   tasks:
     - name: Ensure operate on correct username variable
       ansible.builtin.set_fact:
         target_user: "{{ username }}"
 
-    - name: Check if this device is the NAS itself (skip cleanup if true)
-      ansible.builtin.set_fact:
-        is_nas_device: "{{ ansible_host == nas_ip }}"
+    - name: Create device-specific archive directory on NAS
+      ansible.builtin.file:
+        path: "/reservation_user_data/{{ username }}/res_{{ reservation_id }}/devices/{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}"
+        state: directory
+        owner: "{{ nas_user | default('oem') }}"
+        group: "{{ nas_user | default('oem') }}"
+        mode: '0755'
+      delegate_to: "{{ nas_ip }}"
+      vars:
+        ansible_user: "{{ nas_user | default('oem') }}"
+        ansible_ssh_pass: "{{ nas_password }}"
+        ansible_become: yes
+        ansible_become_pass: "{{ nas_password }}"
+        ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
       when: nas_ip is defined
 
-    - name: NFS cleanup operations (skip if device is NAS)
+    - name: Install sshpass if not present
+      ansible.builtin.package:
+        name: sshpass
+        state: present
+      ignore_errors: yes
+      when: nas_ip is defined
+
+# play executed sequentially for each device for consistent check of space occupation in user folder
+- name: Revoke SSH access and remove user - Copy data with quota control
+  hosts: all
+  gather_facts: no
+  become: yes
+  serial: 1
+  tasks:
+    # verify NFS mount point exists before attempting data copy
+    - name: Copy mounted device data to NAS before cleanup
       block:
-        - name: Check if NFS mount point exists
+        - name: Check if NFS mount point exists for copy
           ansible.builtin.stat:
             path: "{{ nas_mount_base }}/{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}"
-          register: nfs_mount_check
+          register: nfs_mount_check_copy
+          ignore_errors: yes
+          become: yes
 
+        # enforce user quota by calculating total space usage before copy, prevents users from exceeding allocated storage on NAS
+        - name: Check quota before copy with debug output
+          # force NAS filesystem cache sync for accurate measurements
+          # calculate source size (device NFS mount content)
+          # calculate destination size (existing user data on NAS)
+          # calculate total size after copy
+          ansible.builtin.shell: |
+            echo "{{ nas_password }}" | sshpass -p "{{ nas_password }}" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            {{ nas_user | default('oem') }}@{{ nas_ip }} \
+            "sudo -S bash -c 'sync && echo 3 > /proc/sys/vm/drop_caches 2>/dev/null' || true; sleep 2"
+            
+            src=$(du -sb "{{ nas_mount_base }}/{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}" 2>/dev/null | awk '{print $1}' || echo "0")
+            dest=$(sshpass -p "{{ nas_password }}" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              {{ nas_user | default('oem') }}@{{ nas_ip }} \
+              "du -sb /reservation_user_data/{{ username }} 2>/dev/null | awk '{print \$1}' || echo '0'")
+            total=$((dest + src))
+            quota={{ user_quota_limit }}
+
+            echo "DEBUG [{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}]: src=$src bytes ($(($src/1048576))MB)" >&2
+            echo "DEBUG [{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}]: dest=$dest bytes ($(($dest/1048576))MB)" >&2
+            echo "DEBUG [{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}]: total=$total bytes ($(($total/1048576))MB)" >&2
+            echo "DEBUG [{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}]: quota=$quota bytes ($(($quota/1048576))MB)" >&2
+
+            if [ $total -lt $quota ]; then
+              echo "DEBUG [{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}]: Decision=OK" >&2
+              echo "OK"
+            else
+              echo "DEBUG [{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}]: Decision=SKIP" >&2
+              echo "SKIP"
+            fi
+          register: quota_ok
+          when:
+            - nfs_mount_check_copy.stat.exists|default(false)
+          ignore_errors: yes
+
+        - name: Show quota check details
+          ansible.builtin.debug:
+            msg: |
+              Device: {{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}
+              Result: {{ quota_ok.stdout | default('NOT_RUN') }}
+              {{ quota_ok.stderr | default('') }}
+          when: quota_ok is defined
+
+        # copy device data to NAS archive using rsync over SSH, only executes if quota check passed
+        - name: Sync device data to NAS
+          ansible.builtin.shell: |
+            sshpass -p "{{ nas_password }}" rsync -avz -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+              "{{ nas_mount_base }}/{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}/" \
+              "{{ nas_user | default('oem') }}@{{ nas_ip }}:/reservation_user_data/{{ username }}/res_{{ reservation_id }}/devices/{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}/"
+          register: copy_result
+          when:
+            - quota_ok.stdout|default('') == 'OK'
+          ignore_errors: yes
+
+        # rollback: remove device directory if quota exceeded after copy
+        - name: Rollback if quota exceeded
+          ansible.builtin.shell: |
+            sshpass -p "{{ nas_password }}" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              {{ nas_user | default('oem') }}@{{ nas_ip }} \
+              "rm -rf /reservation_user_data/{{ username }}/res_{{ reservation_id }}/devices/{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}"
+          when:
+            - total_after is defined
+            - total_after is not skipped
+            - total_after.stdout|int > user_quota_limit|int
+          register: rollback_result
+
+        - name: Log rollback
+          ansible.builtin.debug:
+            msg: "ROLLBACK: Device {{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }} removed - quota exceeded"
+          when:
+            - rollback_result is defined
+            - rollback_result is not skipped
+
+        - name: Log if skipped
+          ansible.builtin.debug:
+            msg: "Device {{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }} SKIPPED - quota exceeded"
+          when: quota_ok.stdout|default('') == 'SKIP'
+
+        # ensure NAS filesystem consistency before proceeding, forces cache flush and verifies total size
+        - name: Barrier - ensure NAS filesystem is consistent
+          ansible.builtin.shell: |
+            echo "{{ nas_password }}" | sshpass -p "{{ nas_password }}" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            {{ nas_user | default('oem') }}@{{ nas_ip }} \
+            "sudo -S bash -c 'sync && echo 3 > /proc/sys/vm/drop_caches 2>/dev/null' || true; sleep 5; \
+             du -sb /reservation_user_data/{{ username }} 2>/dev/null | awk '{print \$1}'"
+          register: barrier_size
+          when: nas_ip is defined
+
+        - name: Log barrier checkpoint
+          ansible.builtin.debug:
+            msg: "BARRIER [{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}]: Total size verified = {{ barrier_size.stdout | default('0') }} bytes"
+          when:
+            - barrier_size is defined
+
+      when: nas_ip is defined
+
+# play executed in parallel for each device, include also experimentResults copy run only one time
+# in a serial play was not possible to execute this task only one time
+- name: Revoke SSH access and remove user - Copy experimentResults with control, cleanup and user removal
+  hosts: all
+  gather_facts: no
+  become: yes
+  tasks:
+    # check if experimentResults directory exists on orchestrator/localhost
+    - name: Copy experimentResults to NAS
+      block:
+        - name: Check if experimentResults directory exists
+          ansible.builtin.stat:
+            path: "{{ experimenter_results_path }}"
+          register: exp_results_check
+          delegate_to: localhost
+          become: no
+          run_once: true            # run only for one device
+
+        # verify quota before copying experimentResults to NAS, force NAS filesystem cache sync, calculate experimentResults directory size, calculate existing user data size on NAS
+        - name: Check quota before copy experimentResults with debug output
+          ansible.builtin.shell: |
+            echo "{{ nas_password }}" | sshpass -p "{{ nas_password }}" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            {{ nas_user | default('oem') }}@{{ nas_ip }} \
+            "sudo -S bash -c 'sync && echo 3 > /proc/sys/vm/drop_caches 2>/dev/null' || true; sleep 2"
+            
+            src=$(du -sb "{{ experimenter_results_path }}" 2>/dev/null | awk '{print $1}' || echo "0")
+            dest=$(sshpass -p "{{ nas_password }}" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              {{ nas_user | default('oem') }}@{{ nas_ip }} \
+              "du -sb /reservation_user_data/{{ username }} 2>/dev/null | awk '{print \$1}' || echo '0'")
+            total=$((dest + src))
+            quota={{ user_quota_limit }}
+
+            echo "DEBUG [experimentResults]: src=$src bytes ($(($src/1048576))MB)" >&2
+            echo "DEBUG [experimentResults]: dest=$dest bytes ($(($dest/1048576))MB)" >&2
+            echo "DEBUG [experimentResults]: total=$total bytes ($(($total/1048576))MB)" >&2
+            echo "DEBUG [experimentResults]: quota=$quota bytes ($(($quota/1048576))MB)" >&2
+
+            if [ $total -lt $quota ]; then
+              echo "DEBUG [experimentResults]: Decision=OK" >&2
+              echo "OK"
+            else
+              echo "DEBUG [experimentResults]: Decision=SKIP" >&2
+              echo "SKIP"
+            fi
+          register: quota_ok_exp
+          delegate_to: localhost
+          become: no
+          when:
+            - exp_results_check.stat.exists|default(false)
+          run_once: true
+          ignore_errors: yes
+
+        - name: Show experimentResults quota check details
+          ansible.builtin.debug:
+            msg: |
+              ExperimentResults
+              Result: {{ quota_ok_exp.stdout | default('NOT_RUN') }}
+              {{ quota_ok_exp.stderr | default('') }}
+          when: quota_ok_exp is defined
+          run_once: true
+
+        # create experimentResults archive directory on NAS
+        - name: Ensure experimentResults archive directory exists on NAS
+          ansible.builtin.file:
+            path: "/reservation_user_data/{{ username }}/res_{{ reservation_id }}/experimentResults"
+            state: directory
+            owner: "{{ nas_user | default('oem') }}"
+            group: "{{ nas_user | default('oem') }}"
+            mode: '0755'
+          delegate_to: "{{ nas_ip }}"
+          vars:
+            ansible_user: "{{ nas_user | default('oem') }}"
+            ansible_ssh_pass: "{{ nas_password }}"
+            ansible_become: yes
+            ansible_become_pass: "{{ nas_password }}"
+            ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+          when:
+            - quota_ok_exp.stdout|default('') == 'OK'
+          run_once: true
+
+        # sync experimentResults from orchestrator to NAS
+        - name: Sync experimentResults to NAS
+          ansible.builtin.shell: |
+            sshpass -p "{{ nas_password }}" rsync -avz -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+              "{{ experimenter_results_path }}/" \
+              "{{ nas_user | default('oem') }}@{{ nas_ip }}:/reservation_user_data/{{ username }}/res_{{ reservation_id }}/experimentResults/"
+          delegate_to: localhost
+          become: no
+          when:
+            - quota_ok_exp.stdout|default('') == 'OK'
+          run_once: true
+          ignore_errors: yes
+
+        - name: Log if skipped
+          ansible.builtin.debug:
+            msg: "ExperimentResults SKIPPED - quota exceeded"
+          when: quota_ok_exp.stdout|default('') == 'SKIP'
+          run_once: true
+
+      when:
+        - nas_ip is defined
+        - experimenter_results_path is defined
+
+    - name: NFS cleanup operations
+      block:
+        - name: Check if NFS mount point exists for cleanup
+          ansible.builtin.stat:
+            path: "{{ nas_mount_base }}/{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}"
+          register: nfs_mount_check_cleanup
+          ignore_errors: yes
+
+         # kill processes with open files on NFS mount to allow clean unmount
         - name: Stop processes with open files on NFS mount
           ansible.builtin.shell: |
             lsof +D {{ nas_mount_base }}/{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }} 2>/dev/null | \
             awk 'NR>1 {print $2}' | sort -u | xargs -r kill -9 2>/dev/null || true
-          when: nfs_mount_check.stat.exists
+          when:
+            - nfs_mount_check_cleanup is succeeded
+            - nfs_mount_check_cleanup.stat is defined
+            - nfs_mount_check_cleanup.stat.exists
           ignore_errors: yes
 
+        # delete all files from NFS share while preserving mount point
+        # data already archived to /reservation_user_data on NAS
         - name: Clean all files from NFS share (preserve mount)
           ansible.builtin.shell: |
             find {{ nas_mount_base }}/{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }} -mindepth 1 -delete
-          when: nfs_mount_check.stat.exists
+          when:
+            - nfs_mount_check_cleanup is succeeded
+            - nfs_mount_check_cleanup.stat is defined
+            - nfs_mount_check_cleanup.stat.exists
           ignore_errors: yes
           register: nfs_cleanup_result
 
         - name: Log NFS cleanup status
           ansible.builtin.debug:
             msg: "NFS cleanup {{ 'completed' if nfs_cleanup_result is succeeded else 'failed' }} for {{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}"
-          when: nfs_mount_check.stat.exists
+          when:
+            - nfs_mount_check_cleanup is succeeded
+            - nfs_mount_check_cleanup.stat is defined
+            - nfs_mount_check_cleanup.stat.exists
+          ignore_errors: yes
 
       when:
         - nas_ip is defined
         - nas_mount_base is defined
-        - is_nas_device is defined
-        - not is_nas_device | bool
 
     - name: Attempt to kill all processes belonging to the user
       ansible.builtin.shell: |
@@ -95,6 +340,23 @@
           ansible.builtin.shell: |
              userdel -r -f {{ target_user }} || true
           ignore_errors: yes
+
+    # remove NFS-only user from NAS after all data operations complete
+    - name: Remove NFS-only user from NAS
+      ansible.builtin.user:
+        name: "{{ username }}"
+        state: absent
+        remove: yes
+        force: yes
+      delegate_to: "{{ nas_ip }}"
+      vars:
+        ansible_user: "{{ nas_user | default('oem') }}"
+        ansible_ssh_pass: "{{ nas_password }}"
+        ansible_become: yes
+        ansible_become_pass: "{{ nas_password }}"
+        ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+      run_once: true
+      ignore_errors: yes
 
   handlers:
     - name: restart sshd

@@ -104,6 +104,22 @@
         name: "{{ res_group }}"
         state: present
 
+    - name: Create reservation directory on NAS with restricted permissions
+      ansible.builtin.file:
+        path: "/reservation_user_data/{{ username }}/res_{{ reservation_id }}"
+        state: directory
+        owner: "{{ nas_user | default('oem') }}"
+        group: "{{ nas_user | default('oem') }}"
+        mode: '0755'
+      delegate_to: "{{ nas_ip }}"                        # execute this task on the NAS server, not on managed devices
+      vars:
+        ansible_user: "{{ nas_user | default('oem') }}"
+        ansible_ssh_pass: "{{ nas_password }}"
+        ansible_become: yes
+        ansible_become_pass: "{{ nas_password }}"
+        ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'      # disables SSH host key verification, automatically accepting unknown host keys, without this, execution would pause and prompt for confirmation on first connection
+      run_once: true                                      # create directory only once, not for each device in the inventory
+
     - name: Ensure clean state - remove existing user and sudoers if present
       block:
         - name: Remove existing user
@@ -139,11 +155,68 @@
         system: no
         groups: "{{ res_group }}"
         append: yes
+
+    - name: Get user UID from first device
+      ansible.builtin.shell: "id -u {{ username }}"
+      register: user_uid
+      run_once: true
+      changed_when: false
+
+    # ensure the reservation group exists on NAS for proper permissions
+    - name: Ensure res_group exists on NAS
+      ansible.builtin.group:
+        name: "{{ res_group }}"
+        state: present
+      delegate_to: "{{ nas_ip }}"
+      vars:
+        ansible_user: "{{ nas_user | default('oem') }}"
+        ansible_ssh_pass: "{{ nas_password }}"
+        ansible_become: yes
+        ansible_become_pass: "{{ nas_password }}"
+        ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+      run_once: true
+      ignore_errors: yes
+
+    # create user on NAS with matching UID for NFS permission consistency
+    # user has /usr/sbin/nologin shell to prevent SSH access to NAS
+    - name: Create NFS-only user on NAS (no SSH access)
+      ansible.builtin.user:
+        name: "{{ username }}"
+        uid: "{{ user_uid.stdout }}"        # match UID from managed devices for NFS compatibility
+        state: present
+        create_home: no                     # no home directory needed on NAS
+        shell: /usr/sbin/nologin            # prevent direct login to NAS
+        password_lock: yes                  # disable password authentication
+        groups: "{{ res_group }}"
+        append: yes
+      delegate_to: "{{ nas_ip }}"
+      vars:
+        ansible_user: "{{ nas_user | default('oem') }}"
+        ansible_ssh_pass: "{{ nas_password }}"
+        ansible_become: yes
+        ansible_become_pass: "{{ nas_password }}"
+        ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+      run_once: true
+      ignore_errors: yes
+
+    # prepare NAS export directories for each device, ensuring proper group ownership
+    # these directories are the source for NFS mounts on devices
+    - name: Ensure device export directories have correct group ownership
+      ansible.builtin.file:
+        path: "/export/{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}"
+        state: directory
+        owner: root
+        group: "{{ res_group }}"
+        mode: '2775'
+      delegate_to: "{{ nas_ip }}"
+      vars:
+        ansible_user: "{{ nas_user | default('oem') }}"
+        ansible_ssh_pass: "{{ nas_password }}"
+        ansible_become: yes
+        ansible_become_pass: "{{ nas_password }}"
+        ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+      ignore_errors: yes
     # ------------------------------------------------------------------
-    - name: Check if this device is the NAS itself (skip mount if true)
-      ansible.builtin.set_fact:
-        is_nas_device: "{{ ansible_host == nas_ip }}"
-      when: nas_ip is defined
 
     - name: NFS mount operations (skip if device is NAS)
       block:
@@ -160,6 +233,12 @@
             update_cache: no
           when: "'nfs-common' not in ansible_facts.packages"
 
+        - name: Check if mount point already exists
+          ansible.builtin.stat:
+            path: "{{ nas_mount_base }}/{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}"
+          register: mount_point_check
+
+         # create device-specific mount point directory using asset_tag for unique identification
         - name: Create device-specific mount point using asset_tag
           ansible.builtin.file:
             path: "{{ nas_mount_base }}/{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}"
@@ -167,7 +246,9 @@
             owner: root
             group: "{{ res_group }}"
             mode: '2775'
+          when: not mount_point_check.stat.exists
 
+        # check if NFS share is already mounted to ensure idempotency
         - name: Check if NFS share is already mounted
           ansible.builtin.shell: |
             mountpoint -q "{{ nas_mount_base }}/{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}"
@@ -175,20 +256,19 @@
           failed_when: false
           changed_when: false
 
+         # each device mounts its own dedicated export directory from NAS
         - name: Mount NFS share from NAS (skips if already mounted)
           ansible.posix.mount:
             path: "{{ nas_mount_base }}/{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}"
             src: "{{ nas_ip }}:/export/{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}"
             fstype: nfs
             opts: "{{ nfs_opts }}"
-            state: mounted
+            state: mounted          # mounts immediately and adds to /etc/fstab
             backup: no
           when: nfs_already_mounted.rc != 0
 
       when:
         - nas_ip is defined
-        - is_nas_device is defined
-        - not is_nas_device | bool
     # ------------------------------------------------------------------
     # detect real paths for candidate commands using `command -v`, create a script that perform the command for each value of the list with one ssh connection
     - name: Detect all candidate commands at once

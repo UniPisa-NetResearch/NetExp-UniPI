@@ -387,6 +387,10 @@ select {
   font-size: 0.85em;
   padding: 2px 5px;
 }
+.rbc-event-content {
+  text-align: center;
+}
+
 .rbc-event.rbc-selected {
   background-color: #265985;
 }

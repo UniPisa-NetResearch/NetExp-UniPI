@@ -28,7 +28,7 @@ const Pagination = ({ currentPage, totalPages, onPageChange }) => {
     );
 };
 
-const UserKeyManager = ({ initialUsername }) => {
+const UserKeyManager = ({ initialUsername, isProcessing, setIsProcessing }) => {
     const [currentKey, setCurrentKey] = useState('Loading...');
     const [newKey, setNewKey] = useState('');
     const [message, setMessage] = useState('');
@@ -69,6 +69,8 @@ const UserKeyManager = ({ initialUsername }) => {
         e.preventDefault();
         setMessage('');
 
+        setIsProcessing(true);
+
         if (newKey.length < 50 || newKey === currentKey) {
             setMessage('Error: Key is too short or unchanged.');
             return;
@@ -92,6 +94,8 @@ const UserKeyManager = ({ initialUsername }) => {
             }
         } catch (error) {
             setMessage('Connection error to Flask server.');
+        } finally{
+            setIsProcessing(false);
         }
     };
 
@@ -132,7 +136,7 @@ const UserKeyManager = ({ initialUsername }) => {
                     className="input-field textarea-field"
                     required
                 />
-                <button type="submit" className="submit-button update-button">Change Key</button>
+                <button type="submit" className="submit-button update-button" disabled={isProcessing || loading}>Change Key</button>
             </form>
 
             {message && (
@@ -142,6 +146,280 @@ const UserKeyManager = ({ initialUsername }) => {
             )}
         </div>
     );
+};
+
+const UserFilesManager = ({ username, isProcessing, setIsProcessing }) => {
+  const [files, setFiles] = useState([]);
+  const [stats, setStats] = useState({ total_bytes: 0, quota_bytes: 0, usage_percent: 0 });
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
+  const [selectedRes, setSelectedRes] = useState('all');
+  const [folderType, setFolderType] = useState('all');
+  // extract list of unique reservations from loaded files
+  const availableReservations = [...new Set(files.map(f => f.path.split('/')[0]))];
+  const [currentPage, setCurrentPage] = useState(0);
+  const filesPerPage = 10;
+
+  useEffect(() => {
+      setCurrentPage(0);
+  }, [selectedRes, folderType]);
+
+  const filteredFiles = files.filter(file => {
+      const parts = file.path.split('/');
+      const resMatch = selectedRes === 'all' || parts[0] === selectedRes;
+
+      // filter for folder type (experimentResults or devices)
+      const typeMatch = folderType === 'all' || file.path.includes(`/${folderType}/`);
+
+      return resMatch && typeMatch;
+  });
+
+  const totalPages = Math.ceil(filteredFiles.length / filesPerPage);
+  const startIndex = currentPage * filesPerPage;
+  const currentFiles = filteredFiles.slice(startIndex, startIndex + filesPerPage);
+
+  const getSelectedPaths = () => {
+      if (selectedRes !== 'all') {
+          return folderType === 'all' ? [selectedRes] : [`${selectedRes}/${folderType}`];
+      }
+      // 'all' reservations
+      return availableReservations.map(res =>
+          folderType === 'all' ? res : `${res}/${folderType}`
+      );
+  };
+
+  // format bytes in readable format
+  const formatBytes = (bytes) => {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
+  };
+
+  // load file list
+  const loadFiles = async () => {
+    setLoading(true);
+    setMessage("");
+    try {
+      const response = await fetch('/api/controller/user/listFiles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username })
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.ok) {
+        setFiles(data.files || []);
+        setStats({
+          total_bytes: data.total_bytes,
+          quota_bytes: data.quota_bytes,
+          usage_percent: data.usage_percent
+        });
+        if(data.message){
+            setMessage(data.message);
+        }
+      } else {
+        setMessage(`Error: ${data.message || 'Failed to load files'}`);
+      }
+    } catch (error) {
+      setMessage("Connection error to server.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // download file
+  const handleDownload = async (filePath) => {
+      // check if it is single file or multiple files
+      const isMultiple = Array.isArray(filePath);
+      const paths = isMultiple ? filePath : [filePath];
+      setIsProcessing(true);
+      setMessage("Preparing download, please wait...");
+      try {
+          const response = await fetch('/api/controller/user/downloadFile', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ username: username, file_paths: paths })
+          });
+
+          if (response.ok) {
+              const blob = await response.blob();
+              const url = window.URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              if (!isMultiple) {
+                  const fileName = filePath.split('/').pop();
+                  a.download = `${fileName}.zip`;
+              } else {
+                  a.download = `nas_storage_export.zip`;
+              }
+
+              document.body.appendChild(a);
+              a.click();
+              a.remove();
+              window.URL.revokeObjectURL(url);
+              setMessage(isMultiple ? "Success: Folder download started" : `Success: Downloaded ${filePath.split('/').pop()}`);
+          } else {
+              const data = await response.json();
+              setMessage(`Error: ${data.message || 'Download failed'}`);
+          }
+      } catch (error) {
+          setMessage("Connection error during download.");
+      } finally {
+          setIsProcessing(false);
+      }
+  };
+
+  // delete file
+  const handleDelete = async (filePath) => {
+      const paths = Array.isArray(filePath) ? filePath : [filePath];
+      if (paths.length === 0) return;
+      if (!window.confirm(`Are you sure you want to delete ${paths.length} item(s)?`)) {
+          return;
+      }
+
+      setIsProcessing(true);
+      setMessage("Deleting files, please wait...");
+
+      try {
+          const response = await fetch('/api/controller/user/deleteFile', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ username: username, file_paths: paths })
+          });
+
+          const data = await response.json();
+
+          if (response.ok && data.ok) {
+              setFiles(prevFiles => prevFiles.filter(file => {
+                  return !paths.some(p => file.path === p || file.path.startsWith(p + '/'));
+              }));
+              setMessage(`Success: ${data.message}`);
+
+              if (selectedRes === 'all' && folderType === 'all') {
+                  setFiles([]);
+              }
+
+              await loadFiles();
+          } else {
+              setMessage(`Error: ${data.message || 'Delete failed'}`);
+          }
+      } catch (error) {
+          setMessage("Connection error during delete.");
+      } finally {
+          setIsProcessing(false);
+      }
+  };
+
+  useEffect(() => {
+    if (username) {
+      loadFiles();
+    }
+  }, [username]);
+
+  return (
+      <div className="card file-manager-card">
+          <div className="profile-header">
+              <h2 className="title">📁 Storage Files Management</h2>
+          </div>
+          {loading ? (
+              <div className="loading-container">
+                  <p>Loading storage files...</p>
+              </div>
+          ) : (
+              <>
+                  {/* space usage bar */}
+                  <div className="space-usage-bar">
+                      <p><strong>Storage
+                          Usage:</strong> {formatBytes(stats.total_bytes)} / {formatBytes(stats.quota_bytes)} ({stats.usage_percent.toFixed(2)}%)
+                      </p>
+                      <div className="complete-bar">
+                          <div className={`percentage-usage-bar ${stats.usage_percent > 90 ? 'full' : stats.usage_percent > 70 ? 'almost-full' : 'free'}`} style={{width: `${Math.min(stats.usage_percent, 100)}%`,}}/>
+                      </div>
+                  </div>
+                  <div className="file-filters">
+                      <span className="filter-label">Select reservation:</span>
+                      <select className="filter-select" value={selectedRes} disabled={isProcessing}
+                              onChange={(e) => setSelectedRes(e.target.value)}>
+                          <option value="all">All Reservations</option>
+                          {availableReservations.map(res => (<option key={res} value={res}>{res}</option>))}
+                      </select>
+                      <span className="filter-label">Select folder:</span>
+                      <select className="filter-select" value={folderType} disabled={isProcessing}
+                              onChange={(e) => setFolderType(e.target.value)}>
+                          <option value="all">All Folders</option>
+                          <option value="experimentResults">Experiment Results</option>
+                          <option value="devices">Devices</option>
+                      </select>
+                      <span className="filter-label">Download selected files:</span>
+                      <button onClick={() => {
+                          const paths = getSelectedPaths();
+                          handleDownload(paths)
+                      }} className="submit-button download-file-button download-zip-button"
+                              disabled={isProcessing || files.length === 0}>Download Zip
+                      </button>
+                      <span className="filter-label">Delete selected files:</span>
+                      <button onClick={() => {
+                          const paths = getSelectedPaths();
+                          handleDelete(paths)
+                      }} className="delete-btn delete-file-button multi-delete-button"
+                              disabled={isProcessing || files.length === 0}>Delete Files
+                      </button>
+                  </div>
+
+                  {message && (<p className={`file-section-message ${message.startsWith('Error') ? 'error' : message.includes('wait') ? 'wait' : message.includes('No') ? 'no-file' : 'success'}`}>{message}</p>)}
+
+                  {files.length > 0 && (
+                      <>
+                          <div className="file-table-container">
+                              <table className="admin-table file-table">
+                                  <thead>
+                                  <tr>
+                                      <th>File Path</th>
+                                      <th>Size</th>
+                                      <th>Modified</th>
+                                      <th>Actions</th>
+                                  </tr>
+                                  </thead>
+
+                                  <tbody>
+                                  {currentFiles.map((file, index) => {
+                                      // create the name to visualize
+                                      let displayPath = file.path;
+                                      // if a reservation is selected, remove "res_X/"
+                                      if (selectedRes !== 'all') {
+                                          displayPath = displayPath.replace(`${selectedRes}/`, '');
+                                      }
+
+                                      // if a type of folder is selected, we remove it
+                                      if (folderType !== 'all') {
+                                          displayPath = displayPath.replace(`${folderType}/`, '');
+                                      }
+
+                                      return (
+                                          <tr key={index}>
+                                              <td className="truncate-text" title={file.path}>{displayPath}</td>
+                                              <td>{formatBytes(file.size_bytes)}</td>
+                                              <td>{file.modified}</td>
+                                              <td className="file-actions-cell">
+                                                  <button onClick={() => handleDownload(file.path)} className="submit-button download-file-button" disabled={isProcessing}>Download</button>
+                                                  <button onClick={() => handleDelete(file.path)} className="delete-btn delete-file-button" disabled={isProcessing}>Delete</button>
+                                              </td>
+                                          </tr>
+                                      );
+                                  })}
+                                  </tbody>
+                              </table>
+                          </div>
+                        <Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={setCurrentPage}/>
+                      </>
+                  )}
+              </>
+          )}
+    </div>
+  );
 };
 
 const AdminUserManager = ({ currentUserId, onUserDeleted }) => {
@@ -569,10 +847,12 @@ const AdminReservationManager = () => {
 
 const Home = ({username, isAdmin, userId}) => {
     const [refreshTrigger, setRefreshTrigger] = useState(0);
+    const [isProcessing, setIsProcessing] = useState(false);
 
     return (
         <div className="container home-content">
-            <UserKeyManager initialUsername={username} />
+            <UserKeyManager initialUsername={username} isProcessing={isProcessing} setIsProcessing={setIsProcessing}/>
+            <UserFilesManager username={username} isProcessing={isProcessing} setIsProcessing={setIsProcessing}/>
             {isAdmin && <AdminUserManager currentUserId={userId}  onUserDeleted={() => setRefreshTrigger(prev => prev + 1)}/>}
             {isAdmin && <AdminReservationManager key={refreshTrigger}/>}
         </div>

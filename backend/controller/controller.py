@@ -1,9 +1,14 @@
+import io
 import os
 import json
 import re
 import subprocess
 import time
-
+import zipfile
+import paramiko
+from flask import send_file
+import stat as stat_module
+import platform
 from flask import jsonify, request
 import shutil
 from ..app import app
@@ -52,11 +57,13 @@ SONIC_USER = "admin"
 SONIC_PASS = "YourPaSsWoRd"
 MINIPC_USER = "oem"
 MINIPC_PASS = "oem123"
-NAS_IP = "192.168.1.164"            # IP of the nfs server
+NAS_IP = "192.168.1.166"            # IP of the nfs server
 NAS_MOUNT_BASE = "/mnt/nas"         # local mount point on devices
 NFS_OPTS = "rw,sync,hard,intr,timeo=600,retrans=2"
 active_reservations = {}    # dictionary that contains active and usable (after key insertion) reservation
 TEST = True                 # if true uses wsl on windows (/mnt), otherwise normal paths
+IS_WINDOWS = platform.system() == 'Windows'
+USER_QUOTA_BYTES =536870912
 
 def safe_filename(name: str) -> str:
     # sanitize a string for use as filename
@@ -342,7 +349,7 @@ def grant_access():
     print("Using playbook:", pb_path)
 
     # run ansible-playbook
-    extra_vars = {"username": username, "ssh_key": ssh_key, "full_user": bool(full_user), "nas_ip": NAS_IP, "nas_mount_base": NAS_MOUNT_BASE, "nfs_opts": NFS_OPTS }
+    extra_vars = {"username": username, "ssh_key": ssh_key, "full_user": bool(full_user), "nas_ip": NAS_IP, "nas_mount_base": NAS_MOUNT_BASE, "nfs_opts": NFS_OPTS, 'reservation_id': reservation_id, 'nas_password': MINIPC_PASS, 'nas_user': MINIPC_USER }
     rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars)
 
     if rc == 0:
@@ -452,8 +459,6 @@ def revoke_access():
     exp_telemetry_path = os.path.join(EXPERIMENT_TELEMETRY_DIR, experimenter_res_prefix)
     exp_templates_path = os.path.join(EXPERIMENT_TEMPLATES_DIR, experimenter_res_prefix)
 
-    out, err = None, None
-
     # execute revoke playbook
     pb_path = get_playbook_template_path("revoke")
     if not pb_path:
@@ -461,7 +466,12 @@ def revoke_access():
         return jsonify({"ok": False, "message": "Revoke playbook template missing on controller"}), 500
     print("Using revoke playbook:", pb_path)
 
-    extra_vars = {"username": username, "ssh_key": ssh_key, "nas_ip": NAS_IP, "nas_mount_base": NAS_MOUNT_BASE}
+    if TEST:
+        experimenter_results_path = win_to_wsl_path(exp_results_path)
+    else:
+        experimenter_results_path = exp_results_path
+
+    extra_vars = {"username": username, "ssh_key": ssh_key, "nas_ip": NAS_IP, "nas_mount_base": NAS_MOUNT_BASE, 'reservation_id': reservation_id, 'experimenter_results_path': experimenter_results_path, 'nas_password': MINIPC_PASS, 'nas_user': MINIPC_USER, 'user_quota_limit': USER_QUOTA_BYTES}
     rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars)
 
     if rc != 0:
@@ -786,6 +796,243 @@ def rollback():
         return jsonify({"ok": True, "message": f"Rollback to '{name}' completed"}), 200
     else:
         return jsonify({"ok": False, "message": f"Rollback playbook failed (rc={rc})"}), 500
+
+def get_nas_sftp_client():
+    # create SFTP connection to the NAS using password
+    try:
+        transport = paramiko.Transport((NAS_IP, 22))
+        transport.connect(username=MINIPC_USER, password=MINIPC_PASS)
+        sftp = paramiko.SFTPClient.from_transport(transport)
+        return sftp, transport
+    except Exception as e:
+        print(f"SFTP connection to NAS failed: {e}")
+        return None, None
+
+def normalize_remote_path(*parts):
+    path = '/'.join(str(p).replace('\\', '/').strip('/') for p in parts if p)
+    return '/' + path
+
+def get_directory_size_sftp(sftp, remote_path):
+    # compute directory size via SFTP
+    total_size = 0
+    try:
+        for entry in sftp.listdir_attr(remote_path):
+            remote_file = f"{remote_path}/{entry.filename}"
+            try:
+                if stat_module.S_ISDIR(entry.st_mode):
+                    total_size += get_directory_size_sftp(sftp, remote_file)
+                else:
+                    total_size += entry.st_size
+            except Exception as e:
+                print(f"Skipping {remote_file}: {e}")
+                continue
+    except Exception as e:
+        print(f"Error calculating size for {remote_path}: {e}")
+    return total_size
+
+def list_files_recursive_sftp(sftp, remote_path, base_path):
+    # file list via SFTP
+    files = []
+    try:
+        for entry in sftp.listdir_attr(remote_path):
+            remote_file = f"{remote_path}/{entry.filename}"
+            try:
+                if stat_module.S_ISDIR(entry.st_mode):
+                    files.extend(list_files_recursive_sftp(sftp, remote_file, base_path))
+                else:
+                    rel_path = remote_file.replace(f"{base_path}/", "")
+                    files.append({
+                        'path': rel_path,
+                        'size_bytes': entry.st_size,
+                        'modified': time.strftime('%Y-%m-%d %H:%M', time.localtime(entry.st_mtime))
+                    })
+            except Exception as e:
+                print(f"Skipping {remote_file}: {e}")
+                continue
+    except Exception as e:
+        print(f"Error listing {remote_path}: {e}")
+    return files
+
+def remove_directory_recursive_sftp(sftp, remote_path):
+    # remove directory via SFTP
+    try:
+        for entry in sftp.listdir_attr(remote_path):
+            remote_file = f"{remote_path}/{entry.filename}"
+            try:
+                if stat_module.S_ISDIR(entry.st_mode):
+                    remove_directory_recursive_sftp(sftp, remote_file)
+                else:
+                    sftp.remove(remote_file)
+            except Exception as e:
+                print(f"Error removing {remote_file}: {e}")
+        sftp.rmdir(remote_path)
+    except Exception as e:
+        print(f"Error removing directory {remote_path}: {e}")
+        raise
+
+@app.route('/api/controller/user/listFiles', methods=['POST'])
+def list_user_files():
+    # content user folder NAS via SFTP
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify(ok=False, message="Missing JSON body"), 400
+
+    username = data.get('username')
+    if not username:
+        return jsonify(ok=False, message="Missing username"), 400
+
+    user_path = normalize_remote_path('/reservation_user_data', username)
+
+    sftp, transport = get_nas_sftp_client()
+    if not sftp:
+        return jsonify(ok=False, message="Failed to connect to NAS"), 500
+
+    try:
+        all_files = []
+        total_bytes = 0
+
+        try:
+            sftp.stat(user_path)
+        except FileNotFoundError:
+            return jsonify(ok=False, message="User directory not found"), 404
+
+        entries = sftp.listdir(user_path)
+        reservation_dirs = [e for e in entries if e.startswith('res_')]
+        if not reservation_dirs:
+            return jsonify(ok=True, message="No directories found", total_bytes=0, quota_bytes=USER_QUOTA_BYTES, usage_percent=0, files=[]), 200
+
+        for res_dir in reservation_dirs:
+            res_path = f"{user_path}/{res_dir}"
+            try:
+                total_bytes += get_directory_size_sftp(sftp, res_path)
+                # list files with relative path including res_dir
+                res_files = list_files_recursive_sftp(sftp, res_path, user_path)
+                all_files.extend(res_files)
+            except Exception as e:
+                print(f"Error scanning {res_path}: {e}")
+                continue
+
+        files = all_files
+
+        return jsonify(
+            ok=True,
+            username=username,
+            total_bytes=total_bytes,
+            quota_bytes=USER_QUOTA_BYTES,
+            usage_percent=round((total_bytes / USER_QUOTA_BYTES) * 100, 2) if total_bytes > 0 else 0,
+            files=files
+        )
+
+    except Exception as e:
+        print(f"Exception in list_user_files: {e}")
+        return jsonify(ok=False, message=f"Error: {str(e)}"), 500
+    finally:
+        if sftp:
+            sftp.close()
+        if transport:
+            transport.close()
+
+@app.route('/api/controller/user/downloadFile', methods=['POST'])
+def download_user_file():
+    # download file from NAS via SFTP
+    data = request.get_json(silent=True)
+    username = data.get('username')
+    file_paths = data.get('file_paths', [])
+    if isinstance(file_paths, str): file_paths = [file_paths]
+
+    if not username or not file_paths:
+        return jsonify(ok=False, message="Missing username or file_path"), 400
+
+    sftp, transport = get_nas_sftp_client()
+    if not sftp: return jsonify(ok=False, message="NAS Connection failed"), 500
+
+    local_base = None
+
+    try:
+        request_id = f"{username}_{int(time.time())}"
+        local_base = os.path.join(BASE_DIR, 'temp_downloads', request_id)
+        os.makedirs(local_base, exist_ok=True)
+
+        def sftp_get_recursive(remote, local):
+            for entry in sftp.listdir_attr(remote):
+                r_path = f"{remote}/{entry.filename}"
+                l_path = os.path.join(local, entry.filename)
+                if stat_module.S_ISDIR(entry.st_mode):
+                    os.makedirs(l_path, exist_ok=True)
+                    sftp_get_recursive(r_path, l_path)
+                else:
+                    sftp.get(r_path, l_path)
+
+        # download every requested path
+        for rel_path in file_paths:
+            remote_p = normalize_remote_path('/reservation_user_data', username, rel_path)
+            local_p = os.path.join(local_base, rel_path)
+            try:
+                f_stat = sftp.stat(remote_p)
+                os.makedirs(os.path.dirname(local_p), exist_ok=True)
+                if stat_module.S_ISDIR(f_stat.st_mode):
+                    os.makedirs(local_p, exist_ok=True)
+                    sftp_get_recursive(remote_p, local_p)
+                else:
+                    sftp.get(remote_p, local_p)
+            except FileNotFoundError:
+                continue
+
+        # create ZIP
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            for root, dirs, files in os.walk(local_base):
+                for file in files:
+                    full_path = os.path.join(root, file)
+                    # create relative path inside the zip
+                    arcname = os.path.relpath(full_path, local_base)
+                    zf.write(full_path, arcname)
+
+        # remove local dir
+        shutil.rmtree(local_base)
+
+        zip_buffer.seek(0)
+
+        return send_file(zip_buffer, mimetype='application/zip', as_attachment=True, download_name="storage_export.zip")
+
+    except Exception as e:
+        if 'local_base' in locals() and os.path.exists(local_base):
+            shutil.rmtree(local_base)
+        return jsonify(ok=False, message=f"Download failed: {str(e)}"), 500
+    finally:
+        if sftp:
+            sftp.close()
+
+@app.route('/api/controller/user/deleteFile', methods=['POST'])
+def delete_user_file():
+    # delete file or directory from NAS via SFTP
+    data = request.get_json(silent=True)
+    username = data.get('username')
+    file_paths = data.get('file_paths')
+
+    if not username or not file_paths:
+        return jsonify(ok=False, message="Missing username or file_paths"), 400
+
+    sftp, transport = get_nas_sftp_client()
+    try:
+        for rel_path in file_paths:
+            remote_path = normalize_remote_path('/reservation_user_data', username, rel_path)
+            try:
+                file_stat = sftp.stat(remote_path)
+                if stat_module.S_ISDIR(file_stat.st_mode):
+                    remove_directory_recursive_sftp(sftp, remote_path)
+                else:
+                    sftp.remove(remote_path)
+            except FileNotFoundError:
+                continue
+
+        return jsonify(ok=True, message=f"Deleted {len(file_paths)} items")
+
+    except Exception as e:
+        return jsonify(ok=False, message=str(e)), 500
+    finally:
+        if sftp:
+            sftp.close()
 
 if __name__ == '__main__':
 
