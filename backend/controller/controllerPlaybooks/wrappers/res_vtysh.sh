@@ -66,6 +66,12 @@ has_configure() {
   echo "$CMD_LOWER" | grep -Eiq '\bconfigure\b' && return 0 || return 1
 }
 
+# detect BGP/routing configuration commands (safe, don't modify interfaces directly)
+is_bgp_routing_config() {
+  # match BGP and routing protocol configuration keywords
+  echo "$CMD_LOWER" | grep -Eiq '\brouter bgp\b|\bno router bgp\b|\broute-map\b|\bneighbor\b|\baddress-family\b|\bbgp router-id\b|\bnetwork [0-9]' && return 0 || return 1
+}
+
 # extract first interface token after the word 'interface' in the joined commands
 # returns lowercase interface token or empty string
 extract_interface_from_joined() {
@@ -101,6 +107,15 @@ fi
 # if the sequence includes a configure request, require an explicit interface target
 # Example command: vtysh configure_terminal not allowed
 if has_configure; then
+  if is_bgp_routing_config; then
+    # still double-check that mgmt interface is not being targeted
+    if references_mgmt_iface; then
+      echo "Operation not permitted on management interface $MGMT_IFACE"
+      exit 1
+    fi
+    exec "$CONFIG_CMD" "${VTY_ARGS[@]}"
+  fi
+
   TARGET_IF="$(extract_interface_from_joined)"
   if [ -z "$TARGET_IF" ]; then
     # configure present but no explicit interface -> deny to avoid interactive config mode
