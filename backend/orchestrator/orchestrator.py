@@ -27,7 +27,7 @@ MAX_HOURS = 72
 TEST = True                    # test mode, each reservation starts at current date + 2 min
 TEST_DOUBLE_RES = False        # test two consecutive reservations mode
 CONTAINERLAB_TEST = False      # useful to test pingall
-EXPERIMENT_DURATION = 180      # expressed in minutes
+EXPERIMENT_DURATION = 300      # expressed in minutes
 NETBOX_SITE = "testbed"        # useful to change site of netbox
 #NETBOX_SITE = "containerlab"
 nb = pynetbox.api(NETBOX_URL, token=NETBOX_TOKEN)

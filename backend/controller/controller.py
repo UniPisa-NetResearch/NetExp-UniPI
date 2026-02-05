@@ -150,7 +150,7 @@ def write_inventory(reservation_id: int, devices: list):
 def win_to_wsl_path(path):
     return "/mnt/" + path.replace("\\", "/").replace(":", "").lower()
 
-def run_ansible_playbook(inventory_path: str, playbook_path: str, extra_vars: dict = None, timeout: int = 300, remote_user: str = None):
+def run_ansible_playbook(inventory_path: str, playbook_path: str, extra_vars: dict = None, timeout: int = 900, remote_user: str = None):
     # function to run ansible-playbook
     if TEST:
         inv_path_wsl = win_to_wsl_path(inventory_path)  #convert paths if test mode, otherwise use normal path

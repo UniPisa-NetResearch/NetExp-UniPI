@@ -8,7 +8,6 @@ const navItems = [
     { name: 'Reservation', path: '/reservation' },
     { name: 'Configuration', path: '/configuration' },
     { name: 'Experiment', path: '/experiment' },
-    { name: 'Telemetry', path: '/telemetry' },
     { name: 'Evaluation', path: '/evaluation' },
 ];
 

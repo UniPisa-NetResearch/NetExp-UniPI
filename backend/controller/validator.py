@@ -117,7 +117,7 @@ def download_template():
     print(f"Expected output dir (Windows) = {full_dest_dir}")
 
     try:
-        rc, out, err = run_ansible_playbook(inv_path, playbook_path, extra_vars=extra_vars, timeout=900)
+        rc, out, err = run_ansible_playbook(inv_path, playbook_path, extra_vars=extra_vars)
         #print(f"Ansible rc={rc}")
         #print(f"Ansible stdout:\n{out}")
         #print(f"Ansible stderr:\n{err}")
@@ -486,7 +486,7 @@ def run_playbook():
 
     # execute playbook
     try:
-        rc, out, err = run_ansible_playbook(inv_path, target_path, timeout=900)
+        rc, out, err = run_ansible_playbook(inv_path, target_path)
 
         #print("Playbook rc:", rc)
         #print("Playbook stdout:", out)
@@ -851,7 +851,7 @@ def pingall_test():
 
     # execute pingall playbook
     print(f"Running pingall_test_playbook with inventory {inv_path}")
-    rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars, timeout=300)
+    rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars)
 
     # error during playbook execution
     if rc != 0:
