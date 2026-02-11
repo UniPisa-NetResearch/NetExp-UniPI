@@ -825,9 +825,6 @@ export default function Evaluation({ username, reservation_id }) {
                             ) : (
                                 <div className="no-data-message">No devices available for this reservation</div>
                             )}
-                            <p className="download-note">
-                                <strong>Note:</strong> Archive includes data from all devices configured in the reservation inventory
-                            </p>
                         </div>
                     </>
                 )}
