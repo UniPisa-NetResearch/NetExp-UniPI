@@ -17,8 +17,6 @@ export default function TelemetrySection({
     globalDevices,
     setGlobalDevices,
     nonHostDevices,
-    telemetryType,
-    setTelemetryType,
     experimentDefinitions,
     selectedExperimentDefinitionTelemetry,
     setSelectedExperimentDefinitionTelemetry,
@@ -70,10 +68,6 @@ export default function TelemetrySection({
                     return;
                 }
             }
-
-            // set telemetry type to "After experiment" (telemetry_type: 1)
-            setTelemetryType('After experiment mode');
-
             // set sampling mode to per-metric
             setSamplingMode('per-metric');
 
@@ -362,12 +356,6 @@ export default function TelemetrySection({
             return;
         }
 
-        if (!telemetryType || !telemetryType.trim()) {
-            setTelemetryCreateMessage('Error: telemetry type is required');
-            setTelemetryCreateMessageType('error');
-            return;
-        }
-
         if (!experimentDefinitions || experimentDefinitions.length === 0) {
             setTelemetryCreateMessage('Error: no experiment definitions');
             setTelemetryCreateMessageType('error');
@@ -409,8 +397,6 @@ export default function TelemetrySection({
             console.error('Error checking file existence:', error);
         }
 
-        const telemetryTypeNum = telemetryType === 'Real time mode' ? 0 : 1;
-
         const metricsPayload = samplingMode === 'global'
             ? selectedMetrics.filter(metricPath =>
                 predefinedMetrics.some(m => m.path === metricPath) ||
@@ -440,7 +426,6 @@ export default function TelemetrySection({
                     reservation_id,
                     telemetry_filename_base: telemetryBaseName,
                     experiment_name: expName,
-                    telemetry_type: telemetryTypeNum,
                     metrics: metricsPayload
                 })
             });
@@ -738,32 +723,6 @@ export default function TelemetrySection({
                     </div>
                 )}
 
-                <div className="config-row">
-                    <label className="label-inline label-fixed-width">Telemetry type:</label>
-                    <div className="radio-group">
-                        <input
-                            type="radio"
-                            id="realTime"
-                            name="telemetry_type"
-                            value="Real time mode"
-                            checked={telemetryType === 'Real time mode'}
-                            onChange={(e) => setTelemetryType(e.target.value)}
-                            disabled={runningExperiment}
-                        />
-                        <label className="label-inline label-radio" htmlFor="realTime">Real time mode</label>
-                        <input
-                            type="radio"
-                            id="afterExperiment"
-                            name="telemetry_type"
-                            value="After experiment mode"
-                            checked={telemetryType === 'After experiment mode'}
-                            onChange={(e) => setTelemetryType(e.target.value)}
-                            disabled={runningExperiment}
-                        />
-                        <label className="label-inline label-radio" htmlFor="afterExperiment">After experiment
-                            mode</label>
-                    </div>
-                </div>
                 <div className="config-row">
                     <label className="label-inline label-fixed-width">Experiment definition:</label>
                     <select

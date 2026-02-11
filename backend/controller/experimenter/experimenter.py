@@ -770,7 +770,6 @@ def create_telemetry_file():
         reservation_id = data.get('reservation_id')
         file_base = data.get('telemetry_filename_base')   # es: "<exp>_telemetry"
         experiment_name = data.get('experiment_name')     # es: "<exp>"
-        telemetry_type = data.get('telemetry_type')       # 0 = real time, 1 = after experiment
         metrics = data.get('metrics', [])                 # lista di dict
 
         if not reservation_id:
@@ -779,8 +778,6 @@ def create_telemetry_file():
             return jsonify({'success': False, 'error': 'telemetry_filename_base is required'}), 400
         if not experiment_name or not str(experiment_name).strip():
             return jsonify({'success': False, 'error': 'experiment_name is required'}), 400
-        if telemetry_type not in (0, 1):
-            return jsonify({'success': False, 'error': 'telemetry_type must be 0 or 1'}), 400
         if not isinstance(metrics, list) or len(metrics) == 0:
             return jsonify({'success': False, 'error': 'metrics must be a non-empty list'}), 400
 
@@ -804,7 +801,6 @@ def create_telemetry_file():
         telemetry_doc = {
             'experiment_id': str(experiment_name).strip().upper(),
             'reservation_id': int(reservation_id),
-            'telemetry_type': int(telemetry_type),
             'metric': [
                 {
                     'name': str(m['name']).strip(),

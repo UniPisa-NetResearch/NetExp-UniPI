@@ -1,0 +1,85 @@
+- name: Configure BGP on devices (Production Ready)
+  hosts: all
+  gather_facts: no
+  vars:
+    commands_map:
+      sw1:
+        - sudo res_vtysh -c 'conf t' -c 'no router bgp 65100'
+        - sudo res_ip addr flush dev Loopback0
+        - sudo res_config interface ip add Loopback0 1.1.1.1/32
+        - sudo res_config interface startup Loopback0
+        - sudo res_vtysh -c 'conf t' -c 'bgp as-path access-list AS3_FILTER permit _65003_'
+        - sudo res_vtysh -c 'conf t' -c 'route-map FROM_AS2 deny 10' -c 'match as-path AS3_FILTER' -c 'route-map FROM_AS2 permit 20'
+        - sudo res_vtysh -c 'conf t' -c 'router bgp 65001' -c 'bgp router-id 1.1.1.1' -c 'no bgp ebgp-requires-policy' -c 'neighbor 10.10.1.2 remote-as 65001' -c 'neighbor 10.10.2.2 remote-as 65002'
+        - sudo res_vtysh -c 'conf t' -c 'router bgp 65001' -c 'address-family ipv4 unicast' -c 'network 10.1.1.0/24' -c 'network 1.1.1.1/32' -c 'neighbor 10.10.1.2 activate' -c 'neighbor 10.10.2.2 activate' -c 'neighbor 10.10.2.2 route-map FROM_AS2 in'
+        - sudo res_vtysh -c 'clear ip bgp 10.10.2.2 in'
+        - sudo res_config save -y
+
+      sw2:
+        - sudo res_vtysh -c 'conf t' -c 'no router bgp 65100'
+        - sudo res_ip addr flush dev Loopback0
+        - sudo res_config interface ip add Loopback0 1.1.1.2/32
+        - sudo res_config interface startup Loopback0
+        - sudo res_vtysh -c 'conf t' -c 'bgp as-path access-list AS3_FILTER permit _65003_'
+        - sudo res_vtysh -c 'conf t' -c 'route-map FROM_AS2 deny 10' -c 'match as-path AS3_FILTER' -c 'route-map FROM_AS2 permit 20'
+        - sudo res_vtysh -c 'conf t' -c 'router bgp 65001' -c 'bgp router-id 1.1.1.2' -c 'no bgp ebgp-requires-policy' -c 'neighbor 10.10.3.2 remote-as 65001' -c 'neighbor 10.10.4.2 remote-as 65002'
+        - sudo res_vtysh -c 'conf t' -c 'router bgp 65001' -c 'address-family ipv4 unicast' -c 'network 10.2.1.0/24' -c 'network 1.1.1.2/32' -c 'neighbor 10.10.3.2 activate' -c 'neighbor 10.10.4.2 activate' -c 'neighbor 10.10.4.2 route-map FROM_AS2 in'
+        - sudo res_vtysh -c 'clear ip bgp 10.10.4.2 in'
+        - sudo res_config save -y
+
+      sw5:
+        - sudo res_vtysh -c 'conf t' -c 'no router bgp 65100'
+        - sudo res_ip addr flush dev Loopback0
+        - sudo res_config interface ip add Loopback0 1.1.1.5/32
+        - sudo res_config interface startup Loopback0
+        - sudo res_vtysh -c 'conf t' -c 'bgp as-path access-list AS3_FILTER permit _65003_'
+        - sudo res_vtysh -c 'conf t' -c 'route-map RM_AS4_PRIMARY deny 10' -c 'match as-path AS3_FILTER' -c 'route-map RM_AS4_PRIMARY permit 20' -c 'set local-preference 200'
+        - sudo res_vtysh -c 'conf t' -c 'router bgp 65001' -c 'bgp router-id 1.1.1.5' -c 'no bgp ebgp-requires-policy' -c 'neighbor 10.10.1.1 remote-as 65001' -c 'neighbor 10.10.3.1 remote-as 65001' -c 'neighbor 10.10.5.2 remote-as 65004'
+        - sudo res_vtysh -c 'conf t' -c 'router bgp 65001' -c 'address-family ipv4 unicast' -c 'network 1.1.1.5/32' -c 'neighbor 10.10.1.1 activate' -c 'neighbor 10.10.1.1 route-reflector-client' -c 'neighbor 10.10.1.1 next-hop-self force' -c 'neighbor 10.10.3.1 activate' -c 'neighbor 10.10.3.1 route-reflector-client' -c 'neighbor 10.10.3.1 next-hop-self force' -c 'neighbor 10.10.5.2 activate' -c 'neighbor 10.10.5.2 route-map RM_AS4_PRIMARY in'
+        - sudo res_vtysh -c 'clear ip bgp 10.10.5.2 in'
+        - sudo res_config save -y
+
+      sw6:
+        - sudo res_vtysh -c 'conf t' -c 'no router bgp 65100'
+        - sudo res_ip addr flush dev Loopback0
+        - sudo res_config interface ip add Loopback0 1.1.1.6/32
+        - sudo res_config interface startup Loopback0
+        - sudo res_vtysh -c 'conf t' -c 'bgp as-path access-list AS3_FILTER permit _65003_'
+        - sudo res_vtysh -c 'conf t' -c 'bgp as-path access-list AS1_FILTER permit _65001_'
+        - sudo res_vtysh -c 'conf t' -c 'route-map TO_AS3 deny 10' -c 'match as-path AS1_FILTER' -c 'route-map TO_AS3 permit 20'
+        - sudo res_vtysh -c 'conf t' -c 'route-map TO_AS1 deny 10' -c 'match as-path AS3_FILTER' -c 'route-map TO_AS1 permit 20'
+        - sudo res_vtysh -c 'conf t' -c 'router bgp 65002' -c 'bgp router-id 1.1.1.6' -c 'no bgp ebgp-requires-policy' -c 'neighbor 10.10.2.1 remote-as 65001' -c 'neighbor 10.10.4.1 remote-as 65001' -c 'neighbor 10.10.7.1 remote-as 65003' -c 'neighbor 10.10.6.2 remote-as 65004'
+        - sudo res_vtysh -c 'conf t' -c 'router bgp 65002' -c 'address-family ipv4 unicast' -c 'network 1.1.1.6/32' -c 'neighbor 10.10.2.1 activate' -c 'neighbor 10.10.2.1 route-map TO_AS1 out' -c 'neighbor 10.10.4.1 activate' -c 'neighbor 10.10.4.1 route-map TO_AS1 out' -c 'neighbor 10.10.7.1 activate' -c 'neighbor 10.10.7.1 route-map TO_AS3 out' -c 'neighbor 10.10.6.2 activate'
+        - sudo res_vtysh -c 'clear ip bgp * out'
+        - sudo res_config save -y
+
+      sw3:
+        - sudo res_vtysh -c 'conf t' -c 'no router bgp 65100'
+        - sudo res_ip addr flush dev Loopback0
+        - sudo res_config interface ip add Loopback0 1.1.1.3/32
+        - sudo res_config interface startup Loopback0
+        - sudo res_vtysh -c 'conf t' -c 'router bgp 65003' -c 'bgp router-id 1.1.1.3' -c 'no bgp ebgp-requires-policy' -c 'neighbor 10.10.7.2 remote-as 65002'
+        - sudo res_vtysh -c 'conf t' -c 'router bgp 65003' -c 'address-family ipv4 unicast' -c 'network 10.3.1.0/24' -c 'network 1.1.1.3/32' -c 'neighbor 10.10.7.2 activate'
+        - sudo res_config save -y
+
+      sw4:
+        - sudo res_vtysh -c 'conf t' -c 'no router bgp 65100'
+        - sudo res_ip addr flush dev Loopback0
+        - sudo res_config interface ip add Loopback0 1.1.1.4/32
+        - sudo res_config interface startup Loopback0
+        - sudo res_vtysh -c 'conf t' -c 'router bgp 65004' -c 'bgp router-id 1.1.1.4' -c 'no bgp ebgp-requires-policy' -c 'neighbor 10.10.5.1 remote-as 65001' -c 'neighbor 10.10.6.1 remote-as 65002'
+        - sudo res_vtysh -c 'conf t' -c 'router bgp 65004' -c 'address-family ipv4 unicast' -c 'network 10.4.1.0/24' -c 'network 1.1.1.4/32' -c 'neighbor 10.10.5.1 activate' -c 'neighbor 10.10.6.1 activate'
+        - sudo res_config save -y
+
+  tasks:
+    - name: Run commands from commands_map
+      become: yes
+      become_user: gabripian
+      become_method: sudo
+      vars:
+        cmds: "{{ commands_map[inventory_hostname] | default([]) | map('regex_replace', '^\\s*sudo\\s+', 'sudo -n ') | list}}"
+      ansible.builtin.shell: |
+        {% for c in cmds %}
+        {{ c }}
+        {% endfor %}
+      when: commands_map[inventory_hostname] is defined and (commands_map[inventory_hostname] | length > 0)  

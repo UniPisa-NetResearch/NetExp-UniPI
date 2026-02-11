@@ -413,33 +413,52 @@ export default function GuidedMode({
                     <label className="label-inline label-fixed-width">Select iperf roles:</label>
 
                     <div className="guided-right">
-                        <div className="device-selection-table">
-                            <div className="device-table-header">
-                                <span className="device-col">Device</span>
-                                <span className="role-col">Client</span>
-                                <span className="role-col">Server</span>
-                            </div>
-                            {[...deviceList].sort((a, b) => a.name.localeCompare(b.name)).map(device => (
-                                <div key={device.name} className="device-table-row">
-                                    <span className="device-col">{device.name}</span>
-                                    <span className="role-col">
-                                        <input
-                                            type="checkbox"
-                                            checked={iperfClients.includes(device.name)}
-                                            onChange={() => handleDeviceSelect(device.name, 'client')}
-                                            disabled={runningExperiment}
-                                        />
-                                    </span>
-                                    <span className="role-col">
-                                        <input
-                                            type="checkbox"
-                                            checked={iperfServers.includes(device.name)}
-                                            onChange={() => handleDeviceSelect(device.name, 'server')}
-                                            disabled={runningExperiment}
-                                        />
-                                    </span>
-                                </div>
-                            ))}
+                        <div className="device-selection-table" style={{maxWidth: '100%', overflowX: 'auto'}}>
+                            {(() => {
+                                const sortedDevices = [...deviceList].sort((a, b) => a.name.localeCompare(b.name));
+                                const dynamicGridStyle = {
+                                    gridTemplateColumns: `100px repeat(${sortedDevices.length}, 1fr)`
+                                };
+
+                                return (
+                                    <>
+                                        <div className="device-table-header" style={dynamicGridStyle}>
+                                            <span className="device-col">Role</span>
+                                            {sortedDevices.map(d => (
+                                                <span key={d.name} className="role-col">{d.name}</span>
+                                            ))}
+                                        </div>
+
+                                        <div className="device-table-row" style={dynamicGridStyle}>
+                                            <span className="device-col">Client</span>
+                                            {sortedDevices.map(d => (
+                                                <span key={d.name} className="role-col">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={iperfClients.includes(d.name)}
+                                                        onChange={() => handleDeviceSelect(d.name, 'client')}
+                                                        disabled={runningExperiment}
+                                                    />
+                                                </span>
+                                            ))}
+                                        </div>
+
+                                        <div className="device-table-row" style={dynamicGridStyle}>
+                                            <span className="device-col">Server</span>
+                                            {sortedDevices.map(d => (
+                                                <span key={d.name} className="role-col">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={iperfServers.includes(d.name)}
+                                                        onChange={() => handleDeviceSelect(d.name, 'server')}
+                                                        disabled={runningExperiment}
+                                                    />
+                                                </span>
+                                            ))}
+                                        </div>
+                                    </>
+                                );
+                            })()}
                         </div>
                     </div>
                 </div>
@@ -481,7 +500,7 @@ export default function GuidedMode({
                             </select>
                         </div>
                         <div className="field-group">
-                            <label className="label-inline label-flow">Server IP:</label>
+                        <label className="label-inline label-flow">Server IP:</label>
                             <input
                                 type="text"
                                 className="flow-field flow-field-ip"

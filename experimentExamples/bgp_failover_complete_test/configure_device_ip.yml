@@ -1,0 +1,131 @@
+- name: Configure device IP addresses
+  hosts: all
+  gather_facts: no
+  vars:
+    commands_map:
+      h1:
+        - sudo res_ip addr flush dev enp4s0
+        - sudo res_ip addr add 10.1.1.2/24 dev enp4s0
+        - sudo res_ip link set enp4s0 up
+        - sudo res_ip route add 10.2.1.0/24 via 10.1.1.1 dev enp4s0
+        - sudo res_ip route add 10.4.1.0/24 via 10.1.1.1 dev enp4s0
+        - sudo res_ip route add 10.10.0.0/16 via 10.1.1.1 dev enp4s0
+
+      h2:
+        - sudo res_ip addr flush dev enp4s0
+        - sudo res_ip addr add 10.2.1.2/24 dev enp4s0
+        - sudo res_ip link set enp4s0 up
+        - sudo res_ip route add 10.1.1.0/24 via 10.2.1.1 dev enp4s0
+        - sudo res_ip route add 10.4.1.0/24 via 10.2.1.1 dev enp4s0
+        - sudo res_ip route add 10.10.0.0/16 via 10.2.1.1 dev enp4s0
+
+      h3:
+        - sudo res_ip addr flush dev enp4s0
+        - sudo res_ip addr add 10.3.1.2/24 dev enp4s0
+        - sudo res_ip link set enp4s0 up
+        - sudo res_ip route add 10.4.1.0/24 via 10.3.1.1 dev enp4s0
+        - sudo res_ip route add 10.10.0.0/16 via 10.3.1.1 dev enp4s0
+
+      h4:
+        - sudo res_ip addr flush dev enp4s0
+        - sudo res_ip addr add 10.4.1.2/24 dev enp4s0
+        - sudo res_ip link set enp4s0 up
+        - sudo res_ip route add 10.1.1.0/24 via 10.4.1.1 dev enp4s0
+        - sudo res_ip route add 10.2.1.0/24 via 10.4.1.1 dev enp4s0
+        - sudo res_ip route add 10.3.1.0/24 via 10.4.1.1 dev enp4s0
+        - sudo res_ip route add 10.10.0.0/16 via 10.4.1.1 dev enp4s0
+
+      sw1:
+        - sudo res_config interface ip remove Ethernet0 10.0.0.0/31
+        - sudo res_config interface ip remove Ethernet48 10.0.0.96/31
+        - sudo res_config interface ip remove Ethernet50 10.0.0.100/31
+        - sudo res_config interface ip add Ethernet0  10.1.1.1/24
+        - sudo res_config interface ip add Ethernet50 10.10.1.1/30   # sw1->sw5(Eth46)
+        - sudo res_config interface ip add Ethernet48 10.10.2.1/30   # sw1->sw6(Eth40)
+        - sudo res_config interface startup Ethernet0
+        - sudo res_config interface startup Ethernet50
+        - sudo res_config interface startup Ethernet48
+        - sudo res_config save -y
+        - sudo res_config load -y
+
+      sw2:
+        - sudo res_config interface ip remove Ethernet0 10.0.0.0/31
+        - sudo res_config interface ip remove Ethernet50 10.0.0.100/31
+        - sudo res_config interface ip remove Ethernet48 10.0.0.96/31
+        - sudo res_config interface ip add Ethernet0  10.2.1.1/24
+        - sudo res_config interface ip add Ethernet50 10.10.3.1/30   # sw2->sw5(Eth44)
+        - sudo res_config interface ip add Ethernet48 10.10.4.1/30   # sw2->sw6(Eth42)
+        - sudo res_config interface startup Ethernet0
+        - sudo res_config interface startup Ethernet50
+        - sudo res_config interface startup Ethernet48
+        - sudo res_config save -y
+        - sudo res_config load -y
+
+      sw3:
+        - sudo res_config interface ip remove Ethernet0 10.0.0.0/31
+        - sudo res_config interface ip remove Ethernet48 10.0.0.96/31
+        - sudo res_config interface ip remove Ethernet50 10.0.0.100/31
+        - sudo res_config interface ip add Ethernet0  10.3.1.1/24
+        - sudo res_config interface ip add Ethernet48 10.10.7.1/30   # sw3->sw6(Eth44)
+        - sudo res_config interface startup Ethernet0
+        - sudo res_config interface startup Ethernet48
+        - sudo res_config save -y
+        - sudo res_config load -y
+
+      sw4:
+        - sudo res_config interface ip remove Ethernet0 10.0.0.0/31
+        - sudo res_config interface ip remove Ethernet50 10.0.0.100/31
+        - sudo res_config interface ip remove Ethernet48 10.0.0.96/31
+        - sudo res_config interface ip remove Ethernet48  10.0.0.120/31
+        - sudo res_config interface ip add Ethernet0  10.4.1.1/24
+        - sudo res_config interface ip add Ethernet50 10.10.5.2/30   # sw4->sw5(Eth40)
+        - sudo res_config interface ip add Ethernet48 10.10.6.2/30   # sw4->sw6(Eth46)
+        - sudo res_config interface startup Ethernet0
+        - sudo res_config interface startup Ethernet50
+        - sudo res_config interface startup Ethernet48
+        - sudo res_config save -y
+        - sudo res_config load -y
+
+      sw5:
+        - sudo res_config interface ip remove Ethernet40 10.0.0.80/31
+        - sudo res_config interface ip remove Ethernet42 10.0.0.84/31
+        - sudo res_config interface ip remove Ethernet44 10.0.0.88/31
+        - sudo res_config interface ip remove Ethernet46 10.0.0.92/31
+        - sudo res_config interface ip add Ethernet46 10.10.1.2/30   # sw5->sw1
+        - sudo res_config interface ip add Ethernet44 10.10.3.2/30   # sw5->sw2
+        - sudo res_config interface ip add Ethernet40 10.10.5.1/30   # sw5->sw4 (PRIMARY)
+        - sudo res_config interface startup Ethernet46
+        - sudo res_config interface startup Ethernet44
+        - sudo res_config interface startup Ethernet40
+        - sudo res_config interface shutdown Ethernet42              # sw5<->sw3 down
+        - sudo res_config save -y
+        - sudo res_config load -y
+
+      sw6:
+        - sudo res_config interface ip remove Ethernet40 10.0.0.80/31
+        - sudo res_config interface ip remove Ethernet42 10.0.0.84/31
+        - sudo res_config interface ip remove Ethernet44 10.0.0.88/31
+        - sudo res_config interface ip remove Ethernet46 10.0.0.92/31
+        - sudo res_config interface ip add Ethernet40 10.10.2.2/30   # sw6->sw1
+        - sudo res_config interface ip add Ethernet42 10.10.4.2/30   # sw6->sw2
+        - sudo res_config interface ip add Ethernet44 10.10.7.2/30   # sw6->sw3
+        - sudo res_config interface ip add Ethernet46 10.10.6.1/30   # sw6->sw4 (BACKUP)
+        - sudo res_config interface startup Ethernet40
+        - sudo res_config interface startup Ethernet42
+        - sudo res_config interface startup Ethernet44
+        - sudo res_config interface startup Ethernet46
+        - sudo res_config save -y
+        - sudo res_config load -y
+
+  tasks:
+    - name: Run commands from commands_map
+      become: yes
+      become_user: gabripian
+      become_method: sudo
+      vars:
+        cmds: "{{ commands_map[inventory_hostname] | default([]) | map('regex_replace', '^\\s*sudo\\s+', 'sudo -n ') | list}}"
+      ansible.builtin.shell: |
+        {% for c in cmds %}
+        {{ c }}
+        {% endfor %}
+      when: commands_map[inventory_hostname] is defined and (commands_map[inventory_hostname] | length > 0)  

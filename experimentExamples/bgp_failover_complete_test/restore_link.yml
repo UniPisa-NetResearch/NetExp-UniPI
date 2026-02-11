@@ -1,0 +1,12 @@
+---
+- name: Restore network link between sw5 and sw4
+  hosts: sw5
+  gather_facts: no
+  become: yes
+  tasks:
+    - name: Display interface to restore
+      debug:
+        msg: "Cutting link on interface Ethernet0 (sw5 -> sw4)"
+
+    - name: Shutdown interface
+      shell: sudo res_config interface startup Ethernet40

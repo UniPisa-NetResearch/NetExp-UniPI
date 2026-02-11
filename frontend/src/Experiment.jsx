@@ -101,7 +101,7 @@ export default function Experiment({username, reservation_id}) {
     //const [metricIntervals, setMetricIntervals] = useState({});            // list of per-metric intervals
     const [globalDevices, setGlobalDevices] = useState([]);             // global devices list
     //const [metricDevices, setMetricDevices] = useState({});               // list of devices per each metric
-    const [telemetryType, setTelemetryType] = useState('');            // type of telemetry
+    //const [telemetryType, setTelemetryType] = useState('');            // type of telemetry
     const [metricConfigurations, setMetricConfigurations] = useState([]);
     const [selectedExperimentDefinitionTelemetry, setSelectedExperimentDefinitionTelemetry] = useState('');     // list of experiment names
     const [telemetryCreateMessage, setTelemetryCreateMessage] = useState('');               // message of the metrics button
@@ -346,8 +346,6 @@ export default function Experiment({username, reservation_id}) {
                     globalDevices={globalDevices}
                     setGlobalDevices={setGlobalDevices}
                     nonHostDevices={nonHostDevices}
-                    telemetryType={telemetryType}
-                    setTelemetryType={setTelemetryType}
                     experimentDefinitions={experimentDefinitions}
                     selectedExperimentDefinitionTelemetry={selectedExperimentDefinitionTelemetry}
                     setSelectedExperimentDefinitionTelemetry={setSelectedExperimentDefinitionTelemetry}

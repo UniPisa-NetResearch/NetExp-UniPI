@@ -69,25 +69,28 @@ const UserKeyManager = ({ initialUsername, isProcessing, setIsProcessing }) => {
         e.preventDefault();
         setMessage('');
 
-        setIsProcessing(true);
+        const trimmedNewKey = newKey.trim();
+        const trimmedCurrentKey = currentKey.trim();
 
-        if (newKey.length < 50 || newKey === currentKey) {
+        if (trimmedNewKey.length < 50 || trimmedNewKey === trimmedCurrentKey) {
             setMessage('Error: Key is too short or unchanged.');
-            return;
+            return; // Esce senza bloccare il pulsante
         }
+
+        setIsProcessing(true);
 
         try {
             const response = await fetch('/api/auth/user/change_key', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username: initialUsername, newSshKey: newKey }),
+                body: JSON.stringify({ username: initialUsername, newSshKey: trimmedNewKey }),
             });
 
             const data = await response.json();
 
             if (response.ok) {
                 setMessage(`Success: ${data.message}`);
-                setCurrentKey(newKey);
+                setCurrentKey(trimmedNewKey);
                 setNewKey('');
             } else {
                 setMessage(`Error: ${data.message || 'Failed to update key.'}`);
@@ -131,9 +134,10 @@ const UserKeyManager = ({ initialUsername, isProcessing, setIsProcessing }) => {
                 <textarea
                     placeholder="Paste new SSH Public Key here..."
                     value={newKey}
-                    onChange={(e) => setNewKey(e.target.value.trim())}    //remove spaces before and after
+                    onChange={(e) => {setNewKey(e.target.value.trim()); if (message) setMessage('');}}    //remove spaces before and after
                     rows="4"
                     className="input-field textarea-field"
+                    disabled={isProcessing}
                     required
                 />
                 <button type="submit" className="submit-button update-button" disabled={isProcessing || loading}>Change Key</button>

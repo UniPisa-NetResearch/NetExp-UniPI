@@ -1,0 +1,30 @@
+experiment_id: BGP_FAILOVER_TEST
+reservation_id: 28
+telemetry_type: 1
+metric:
+  # monitoring backup paths
+  - name: /openconfig-interfaces:interfaces/interface[name=Ethernet48]/state/counters
+    sampling_period: 5
+    targets:
+      - sw1
+      - sw2
+
+  # Monitor sw5 - sw4 (PRIMARY)
+  - name: /openconfig-interfaces:interfaces/interface[name=Ethernet40]/state/counters
+    sampling_period: 5
+    targets:
+      - sw5
+
+  # Monitor sw6 - sw4 (BACKUP)
+  - name: /openconfig-interfaces:interfaces/interface[name=Ethernet46]/state/counters
+    sampling_period: 5
+    targets:
+      - sw5
+      - sw6
+
+    
+  #Monitor sw2 - sw5
+  - name: /openconfig-interfaces:interfaces/interface[name=Ethernet44]/state/counters
+    sampling_period: 5
+    targets:
+      - sw5

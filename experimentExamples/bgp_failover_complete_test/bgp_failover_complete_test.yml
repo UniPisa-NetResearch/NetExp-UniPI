@@ -1,0 +1,48 @@
+experiment_id: BGP_FAILOVER_COMPLETE_TEST
+duration_s: 480
+reservation_id: 28
+schedule:
+  
+  - time_offset_s: 10
+    name: START_IPERF_TRAFFIC
+    playbook: start_iperf_traffic.yml
+    targets:
+      - h1
+      - h2
+      - h4
+
+  - time_offset_s: 30
+    name: COLLECT_BGP_RESULTS
+    playbook: collect_bgp_results.yml
+    targets:
+      - sw1
+      - sw2
+      - sw5
+
+  - time_offset_s: 180
+    name: CUT_PRIMARY_LINK
+    playbook: cut_link.yml
+    targets:
+      - sw5
+
+  - time_offset_s: 230
+    name: COLLECT_BGP_RESULTS
+    playbook: collect_bgp_results.yml
+    targets:
+      - sw1
+      - sw2
+      - sw5
+
+  - time_offset_s: 300
+    name: RESTORE_PRIMARY_LINK
+    playbook: restore_link.yml
+    targets:
+      - sw5
+
+  - time_offset_s: 350
+    name: COLLECT_BGP_RESULTS
+    playbook: collect_bgp_results.yml
+    targets:
+      - sw1
+      - sw2
+      - sw5

@@ -1,0 +1,29 @@
+- name: Collect final BGP and routing state
+  hosts: all
+  gather_facts: no
+  vars:
+    timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
+    nas_mount_base: "/mnt/nas"
+
+  tasks:
+    - name: Get asset tag for this device
+      set_fact:
+        device_tag: "{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}"
+        
+    - name: Collect BGP state on sw1
+      when: inventory_hostname == 'sw1'
+      shell: sudo res_vtysh -c "show ip bgp 10.4.1.0/24" > {{ nas_mount_base }}/sw1/bgp_table_entry_sw1_{{ timestamp }}.txt
+        
+    - name: Collect BGP state on sw2
+      when: inventory_hostname == 'sw2'
+      become: yes
+      shell: sudo res_vtysh -c "show ip bgp 10.4.1.0/24" > {{ nas_mount_base }}/sw2/bgp_table_entry_sw2_{{ timestamp }}.txt
+
+    - name: Collect BGP state on sw5
+      when: inventory_hostname == 'sw5'
+      become: yes
+      shell: sudo res_vtysh -c "show ip bgp 10.4.1.0/24" > {{ nas_mount_base }}/sw5/bgp_table_entry_sw5_{{ timestamp }}.txt
+
+
+
+

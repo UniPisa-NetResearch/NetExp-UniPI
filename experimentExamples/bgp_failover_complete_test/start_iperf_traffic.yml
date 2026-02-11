@@ -1,0 +1,98 @@
+---
+- name: Start iperf traffic flows
+  hosts: all
+  gather_facts: no
+  become: no
+  tasks:
+    - name: Kill existing iperf3
+      shell: pkill -9 iperf3
+      ignore_errors: yes
+
+    - name: Start iperf3 server on h4
+      when: inventory_hostname == 'h4'
+      shell: iperf3 -s -p 5201 -4 -D
+      register: h4_server
+
+    - name: Show h4 server status
+      when: inventory_hostname == 'h4'
+      debug:
+        msg: "{{ h4_server.stdout_lines }}"
+
+    - name: Start second iperf3 server on h4
+      when: inventory_hostname == 'h4'
+      shell: iperf3 -s -p 5202 -4 -D
+      register: h4_server2
+
+    - name: Show h4 server status
+      when: inventory_hostname == 'h4'
+      debug:
+        msg: "{{ h4_server2.stdout_lines }}"
+
+    - name: Create results directory
+      file:
+        path: /tmp/iperf3_results
+        state: directory
+        mode: '0777'
+
+    - name: Start iperf3 client on h1 to h4
+      when: inventory_hostname == 'h1'
+      shell: |
+        TARGET_IP="10.4.1.2"
+        TARGET_PORT="5201"
+        DURATION=420
+        
+        result_file="/tmp/iperf3_results/iperf_flow_1_{{ inventory_hostname }}.txt"
+
+        if [ ! -f "$result_file" ]; then
+          echo "=========================================================================" > "$result_file"
+          echo "Flow 1: {{ inventory_hostname }} -> ${TARGET_IP}:${TARGET_PORT}" >> "$result_file"
+          echo "=========================================================================" >> "$result_file"
+        fi
+
+        echo "" >> "$result_file"
+        echo "--- Execution at $(date '+%Y-%m-%d %H:%M:%S') ---" >> "$result_file"
+        
+        iperf3 -c $TARGET_IP -p $TARGET_PORT -t $DURATION -b 50M -i 1 >> "$result_file" 2>&1
+      async: 450
+      poll: 0
+      args:
+        executable: /bin/bash
+
+
+    - name: Start iperf3 client on h2 to h4
+      when: inventory_hostname == 'h2'
+      shell: |
+        TARGET_IP="10.4.1.2"
+        TARGET_PORT="5202"
+        DURATION=420
+        
+        result_file="/tmp/iperf3_results/iperf_flow_2_{{ inventory_hostname }}.txt"
+
+        if [ ! -f "$result_file" ]; then
+          echo "=========================================================================" > "$result_file"
+          echo "Flow 2: {{ inventory_hostname }} -> ${TARGET_IP}:${TARGET_PORT}" >> "$result_file"
+          echo "=========================================================================" >> "$result_file"
+        fi
+
+        echo "" >> "$result_file"
+        echo "--- Execution at $(date '+%Y-%m-%d %H:%M:%S') ---" >> "$result_file"
+        
+        iperf3 -c $TARGET_IP -p $TARGET_PORT -t $DURATION -b 50M -i 1 >> "$result_file" 2>&1
+      async: 450
+      poll: 0
+      args:
+        executable: /bin/bash
+
+
+    - name: Wait before final verification
+      pause:
+        seconds: 5
+
+    - name: Final process verification
+      shell: pgrep -f "^iperf3"
+      register: final_check
+      ignore_errors: yes
+
+    - name: Show all iperf3 processes
+      debug:
+        msg: "{{ final_check.stdout_lines }}"
