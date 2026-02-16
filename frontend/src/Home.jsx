@@ -38,7 +38,7 @@ const UserKeyManager = ({ initialUsername, isProcessing, setIsProcessing }) => {
     useEffect(() => {
         const fetchUserData = async () => {
             try {
-                const response = await fetch('/api/auth/user/show_user', {
+                const response = await fetch('/api/auth/user/showUser', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ username: initialUsername }),
@@ -80,7 +80,7 @@ const UserKeyManager = ({ initialUsername, isProcessing, setIsProcessing }) => {
         setIsProcessing(true);
 
         try {
-            const response = await fetch('/api/auth/user/change_key', {
+            const response = await fetch('/api/auth/user/changeKey', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ username: initialUsername, newSshKey: trimmedNewKey }),
@@ -436,7 +436,7 @@ const AdminUserManager = ({ currentUserId, onUserDeleted }) => {
     // Fetch all users
     const fetchUsers = async () => {
         try {
-            const response = await fetch('/api/auth/admin/get_all_users');
+            const response = await fetch('/api/auth/admin/getAllUsers');
             if (response.ok) {
                 const data = await response.json();
                 setUsers(data.users);
@@ -462,7 +462,7 @@ const AdminUserManager = ({ currentUserId, onUserDeleted }) => {
 
         try {
             // check if the user has an active reservation
-            const checkResponse = await fetch('/api/auth/admin/get_all_reservations');
+            const checkResponse = await fetch('/api/auth/admin/getAllReservations');
 
             if (checkResponse.ok) {
                 const reservationsData = await checkResponse.json();
@@ -476,7 +476,7 @@ const AdminUserManager = ({ currentUserId, onUserDeleted }) => {
                 }
             }
 
-            const response = await fetch('/api/auth/admin/delete_user', {
+            const response = await fetch('/api/auth/admin/deleteUser', {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ user_id: userId }),
@@ -513,7 +513,7 @@ const AdminUserManager = ({ currentUserId, onUserDeleted }) => {
                 [field]: !currentValue
             };
 
-            const response = await fetch('/api/auth/admin/update_user', {
+            const response = await fetch('/api/auth/admin/updateUser', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(updateData),
@@ -627,7 +627,7 @@ const AdminReservationManager = () => {
 
     const fetchReservations = async () => {
         try {
-            const response = await fetch('/api/auth/admin/get_all_reservations');
+            const response = await fetch('/api/auth/admin/getAllReservations');
             if (response.ok) {
                 const data = await response.json();
                 setReservations(data.reservations);
@@ -661,7 +661,7 @@ const AdminReservationManager = () => {
         try {
             // if the reservation does not have the token, remove and clean only reservation info in memory and file
             if (!hasToken) {
-                const response = await fetch('/api/auth/admin/delete_reservation', {
+                const response = await fetch('/api/auth/admin/deleteReservation', {
                     method: 'DELETE',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ reservation_id: reservationId }),
@@ -704,7 +704,7 @@ const AdminReservationManager = () => {
                     setMessage('Deleting reservation without rollback...');
                 }
                 // get ssh_key from the user
-                const userResponse = await fetch('/api/auth/user/show_user', {
+                const userResponse = await fetch('/api/auth/user/showUser', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ username: username }),
@@ -735,7 +735,7 @@ const AdminReservationManager = () => {
 
                 if (revokeResponse.ok) {
                     // Dopo revoke con successo, elimina dal database
-                    const deleteResponse = await fetch('/api/auth/admin/delete_reservation', {
+                    const deleteResponse = await fetch('/api/auth/admin/deleteReservation', {
                         method: 'DELETE',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ reservation_id: reservationId }),

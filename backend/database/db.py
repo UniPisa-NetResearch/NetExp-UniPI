@@ -24,7 +24,8 @@ class User(db.Model):
 # Reservation table
 class Reservation(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(80), nullable=False)
+    #username = db.Column(db.String(80), nullable=False)
+    username = db.Column(db.String(80), db.ForeignKey('user.username'), nullable=False)
     # startDate/endDate = "YYYY-MM-DD"  --> length 10
     # startTime/endTime = "HH:MM"       --> length 5 (08:00)
     startDate = db.Column(db.Date, nullable=False)

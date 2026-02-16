@@ -101,7 +101,7 @@ def signup():
         app.logger.error(f"DB Error during signup: {ex}")
         return jsonify({"message": "An internal error occurred during registration."}), 500
 
-@app.route('/api/auth/user/show_user', methods=['POST'])
+@app.route('/api/auth/user/showUser', methods=['POST'])
 def show_user():
     # shows username and the public key of the user
     data = request.get_json()
@@ -122,7 +122,7 @@ def show_user():
         return jsonify({"message": "User not found"}), 404
 
 
-@app.route('/api/auth/user/change_key', methods=['POST'])
+@app.route('/api/auth/user/changeKey', methods=['POST'])
 def change_key():
     # allows user to change the public key
     data = request.get_json()
@@ -154,7 +154,7 @@ def change_key():
 
 
 # Get all users (admin only)
-@app.route('/api/auth/admin/get_all_users', methods=['GET'])
+@app.route('/api/auth/admin/getAllUsers', methods=['GET'])
 def get_all_users():
     try:
         users = User.query.order_by(User.id).all()
@@ -184,7 +184,7 @@ def cancel_jobs(reservation_id):
             app.logger.warning(f"Could not cancel job {job_id}: {job_ex}")
 
 # Delete user and their reservations (admin only)
-@app.route('/api/auth/admin/delete_user', methods=['DELETE'])
+@app.route('/api/auth/admin/deleteUser', methods=['DELETE'])
 def delete_user():
     data = request.get_json()
     user_id = data.get('user_id')
@@ -217,7 +217,7 @@ def delete_user():
 
 
 # Update user permissions (admin only)
-@app.route('/api/auth/admin/update_user', methods=['PUT'])
+@app.route('/api/auth/admin/updateUser', methods=['PUT'])
 def update_user():
     data = request.get_json()
     user_id = data.get('user_id')
@@ -250,7 +250,7 @@ def update_user():
 
 
 # Get all reservations with devices (admin only)
-@app.route('/api/auth/admin/get_all_reservations', methods=['GET'])
+@app.route('/api/auth/admin/getAllReservations', methods=['GET'])
 def get_all_reservations():
     try:
         reservations = Reservation.query.order_by(Reservation.startDate.desc(), Reservation.startTime.desc()).all()
@@ -279,7 +279,7 @@ def get_all_reservations():
 
 
 # Delete reservation and cancel Redis jobs (admin only)
-@app.route('/api/auth/admin/delete_reservation', methods=['DELETE'])
+@app.route('/api/auth/admin/deleteReservation', methods=['DELETE'])
 def delete_reservation():
     data = request.get_json()
     reservation_id = data.get('reservation_id')
