@@ -65,7 +65,7 @@ def get_experiment_results():
 
         results_dir = os.path.join(EXPERIMENT_RESULTS_DIR, f"res_{reservation_id}", experiment_name)
 
-        # read telemetry files
+        # read telemetry and execution log files
         telemetry_file = os.path.join(str(results_dir), f"{experiment_name}_telemetry_results.json")
         execution_log_file = os.path.join(str(results_dir), f"{experiment_name}_execution_log.json")
 

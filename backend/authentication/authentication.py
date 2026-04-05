@@ -35,6 +35,7 @@ def check_ssh_key(ssh_key):
         return jsonify({"message": "SSH Key body is corrupted or not valid Base64."}), 400
 
     return None
+
 @app.route('/')
 def serve_frontend_proxy():
     # can be used for testing, it is not the route used by the browser to load React.
@@ -88,7 +89,7 @@ def signup():
     db.session.add(new_user)
     try:
         db.session.commit()
-        # Reset sequence to avoid conflicts
+        # Reset id sequence to avoid conflicts, next inserted id will be max_id + 1 if no gaps in ids
         db.session.execute(db.text("""
                     SELECT setval(pg_get_serial_sequence('"user"', 'id'), 
                                  (SELECT MAX(id) FROM "user"), true);
@@ -203,9 +204,7 @@ def delete_user():
         for reservation in reservations:
             cancel_jobs(reservation.id)
 
-            db.session.delete(reservation)
-
-        # Delete the user
+        # Delete the user, all reservation of the user are cancelled too (on cascade constraint)
         db.session.delete(user)
         db.session.commit()
 

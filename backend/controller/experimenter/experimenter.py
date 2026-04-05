@@ -744,7 +744,7 @@ def show_experiments():
             if not os.path.isfile(full_path):
                 continue
 
-            base, ext = os.path.splitext(fn)
+            base, ext = os.path.splitext(fn)            # base name and extension of the experiment template
             if ext.lower() not in allowed_ext:
                 continue
 
@@ -770,7 +770,7 @@ def create_telemetry_file():
         reservation_id = data.get('reservation_id')
         file_base = data.get('telemetry_filename_base')   # es: "<exp>_telemetry"
         experiment_name = data.get('experiment_name')     # es: "<exp>"
-        metrics = data.get('metrics', [])                 # lista di dict
+        metrics = data.get('metrics', [])                 # list of dict
 
         if not reservation_id:
             return jsonify({'success': False, 'error': 'reservation_id is required'}), 400
@@ -859,7 +859,7 @@ def run_experiment():
 
         if not reservation_id:
             return jsonify({'success': False, 'error': 'Missing reservation_id'}), 400
-
+        # check if the experiment is batch or single mode
         if experiment_names:
             experiments_list = experiment_names
             is_batch = True
@@ -900,7 +900,7 @@ def run_experiment():
                 if 'iperf_flows' in experiment_data and 'playbooks_base_path' in experiment_data:
                     print(f"[RUN] Detected guided mode (iperf) experiment", flush=True)
 
-                    # convert in standard format
+                    # convert in standard format if the experiment is in guided mode
                     converted_schedule, playbooks_path = convert_iperf_experiment_to_schedule(experiment_data)
 
                     # change schedule with the converted one
@@ -928,7 +928,7 @@ def run_experiment():
         batch_id = None
         # add 1 minute after each experiment except the last one
         if is_batch:
-            # unique batch id
+            # assign unique batch id to the current batch
             batch_id = f"batch_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             if len(experiments_list) > 1:
                 duration_s += (len(experiments_list) - 1) * 60
@@ -1020,8 +1020,8 @@ def run_experiment():
                 with experiments_lock:
                     running_experiments[reservation_id] = {
                         'futures': [],
-                        'playbook_running': False,
-                        'current_playbook': None
+                        'playbook_running': False,          #check if a playbook is running
+                        'current_playbook': None            # running playbook name
                     }
 
                 for id_x, experiment_info in enumerate(experiments_data):
@@ -1040,6 +1040,7 @@ def run_experiment():
 
                     with ThreadPoolExecutor(max_workers=2) as executor:
                         # start experiment and telemetry execution
+                        # experiment worker
                         experiment_future = executor.submit(
                             execute_experiment_schedule,
                       reservation_id, username,
@@ -1047,7 +1048,7 @@ def run_experiment():
                             EXPERIMENT_RESULTS_DIR, EXPERIMENT_PLAYBOOKS_DIR,
                             running_experiments, experiments_lock, TEST,is_batch
                         )
-
+                        # telemetry worker
                         telemetry_future = executor.submit(
                             collect_telemetry_data,
                       reservation_id,
@@ -1069,21 +1070,23 @@ def run_experiment():
                     with app.app_context():
                         exp = Experiment.query.filter_by(id=id_exp).first()
                         if exp:
+                            # assign real start timestamp in the database record
                             if actual_start_timestamp:
                                 actual_start_dt = datetime.fromtimestamp(actual_start_timestamp)
                                 exp.start_time = actual_start_dt
                                 print(f"[EXPERIMENT] {name_exp} - Updated with actual start time: {actual_start_dt.strftime('%H:%M:%S')}", flush=True)
-
+                            # assign real end timestamp in the database record
                             if actual_end_timestamp:
                                 actual_end_dt = datetime.fromtimestamp(actual_end_timestamp)
                                 exp.end_time = actual_end_dt
                                 print(f"[EXPERIMENT] {name_exp} - Updated with actual end time: {actual_end_dt.strftime('%H:%M:%S')}", flush=True)
-
+                            # assign real duration timestamp in the database record
                             if actual_start_timestamp and actual_end_timestamp:
                                 actual_duration = int((actual_end_dt - actual_start_dt).total_seconds())
                                 exp.duration_s = actual_duration
                                 print(f"[EXPERIMENT] {name_exp} - Actual duration: {actual_duration}s", flush=True)
 
+                            # check if the user stopped experiment
                             is_user_stop = ((not experiment_success and experiment_error and "stopped by user" in experiment_error.lower()) or
                                             (not telemetry_success and telemetry_error and "stopped by user" in telemetry_error.lower()))
 

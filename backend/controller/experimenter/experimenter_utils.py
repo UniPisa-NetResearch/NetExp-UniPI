@@ -32,12 +32,13 @@ def ensure_experiment_dirs(templates_dir, playbooks_dir, telemetry_dir, results_
 def get_next_available_id():
     # find first available ID in experiment table
     try:
+        # get every experiment id in the database
         existing_ids = db.session.query(Experiment.id).order_by(Experiment.id).all()
         existing_ids = [row[0] for row in existing_ids]
 
         if not existing_ids:
             return 1
-
+        # if there are missing assigned id between 1 and max id in the database, retun first available
         for i in range(1, existing_ids[-1] + 1):
             if i not in existing_ids:
                 return i
@@ -53,6 +54,7 @@ def finalize_batch_results(reservation_id, experiment_names, results_base_dir):
 
     try:
         for exp_name in experiment_names:
+            # for each experiment create a temporary dir and the final dir to collect results, if they do not exist
             temp_dir = os.path.join(results_base_dir, f"res_{reservation_id}", f"temp_{exp_name}")
             final_dir = os.path.join(results_base_dir, f"res_{reservation_id}", exp_name)
 
@@ -102,6 +104,7 @@ def cleanup_batch_temp_results(reservation_id, experiment_names, results_base_di
 def collect_telemetry_data(reservation_id, experiment_name, telemetry_config, inventory_path, duration_s, results_base_dir, running_experiments, experiments_lock, is_batch=False):
     # collect telemetry data during experiment
     try:
+        # use temporary dir for batch experiments
         exp_dir_name = f"temp_{experiment_name}" if is_batch else experiment_name
         results_dir = os.path.join(results_base_dir, f"res_{reservation_id}", exp_dir_name)
         os.makedirs(results_dir, exist_ok=True)
@@ -126,10 +129,10 @@ def collect_telemetry_data(reservation_id, experiment_name, telemetry_config, in
         # results structure: {metric_name: {target: [data_points]}}
         telemetry_results = {}
         results_lock = threading.Lock()
-
+        # assign current time to start_time and add duration to compute end_time
         start_time = time.time()
         end_time = start_time + duration_s
-
+        # flag to indicate the stop requested by user
         stop_requested = threading.Event()
 
         def collect_metric_from_target(metric_name, metric_path, target, target_ip, sampling_period):
@@ -223,8 +226,7 @@ def collect_telemetry_data(reservation_id, experiment_name, telemetry_config, in
 
                 with experiments_lock:
                     if reservation_id not in running_experiments:
-                        print(f"[TELEMETRY] Reservation removed before sleep - stopping {metric_name} from {target}",
-                              flush=True)
+                        print(f"[TELEMETRY] Reservation removed before sleep - stopping {metric_name} from {target}", flush=True)
                         return
 
                 sleep_time = 0.5
@@ -239,9 +241,7 @@ def collect_telemetry_data(reservation_id, experiment_name, telemetry_config, in
 
                     with experiments_lock:
                         if reservation_id not in running_experiments:
-                            print(
-                                f"[TELEMETRY] Reservation removed during sleep - stopping {metric_name} from {target}",
-                                flush=True)
+                            print(f"[TELEMETRY] Reservation removed during sleep - stopping {metric_name} from {target}", flush=True)
                             return
 
                 if stop_requested.is_set():
@@ -250,8 +250,7 @@ def collect_telemetry_data(reservation_id, experiment_name, telemetry_config, in
 
                 with experiments_lock:
                     if reservation_id not in running_experiments:
-                        print(f"[TELEMETRY] Reservation removed after sleep - stopping {metric_name} from {target}",
-                              flush=True)
+                        print(f"[TELEMETRY] Reservation removed after sleep - stopping {metric_name} from {target}", flush=True)
                         return
 
             if stop_requested.is_set():
@@ -542,8 +541,8 @@ def execute_experiment_schedule(reservation_id, username, experiment_name, exper
             absolute_time = start_time + time_offset
 
             current_time = time.time()
-            wait_time = absolute_time - current_time
-            elapsed = current_time - start_time
+            wait_time = absolute_time - current_time            # time remaining to execute the step
+            elapsed = current_time - start_time                 # time elapsed from experiment beginning
 
             # set time of netx step
             with experiments_lock:
@@ -556,6 +555,7 @@ def execute_experiment_schedule(reservation_id, username, experiment_name, exper
 
             if wait_time > 0:
                     print(f"[EXPERIMENT] Waiting {wait_time:.1f}s until step '{step_name}'", flush=True)
+                    # compute time in which execute the step
                     end_wait_time = time.time() + wait_time
                     while time.time() < end_wait_time:
                         # check if the stop has been requested during wait
@@ -932,7 +932,6 @@ def modify_playbook_with_user(playbook_path):
         print(f"[ERROR] Failed to modify playbook {playbook_path}: {str(e)}", flush=True)
         traceback.print_exc()
         return False
-
 
 def validate_and_modify_user_playbooks(playbooks_dir):
     # validate and modify every playbook inside the directory

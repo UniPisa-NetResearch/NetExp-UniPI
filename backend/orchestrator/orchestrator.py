@@ -30,6 +30,7 @@ CONTAINERLAB_TEST = False      # useful to test pingall
 EXPERIMENT_DURATION = 300      # expressed in minutes
 NETBOX_SITE = "testbed"        # useful to change site of netbox
 #NETBOX_SITE = "containerlab"
+TEST_WSL = True                    # test ping using wsl in windows if true
 nb = pynetbox.api(NETBOX_URL, token=NETBOX_TOKEN)
 
 REDIS_URL = "redis://localhost:6379"
@@ -277,11 +278,10 @@ def ping_host(ip, count=2, per_ping_timeout=2, overall_timeout=5):
         ipaddress.ip_address(ip)
     except ValueError:
         return False
-    if TEST:
+    if TEST_WSL:
         cmd = ["wsl", "ping", "-c", str(count), "-W", str(per_ping_timeout), str(ip)]
     else:
-        #cmd = ["ping", "-c", str(count), "-W", str(per_ping_timeout), str(ip)]
-        cmd = ["wsl", "ping", "-c", str(count), "-W", str(per_ping_timeout), str(ip)]
+        cmd = ["ping", "-c", str(count), "-W", str(per_ping_timeout), str(ip)]
 
     try:
         proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=overall_timeout, check=False,)
