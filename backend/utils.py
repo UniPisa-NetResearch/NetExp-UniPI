@@ -1,4 +1,5 @@
 from .database.db import db
+import pynetbox
 
 def get_next_available_id(model_class):
     # Find the first available ID (fills gaps)
@@ -24,3 +25,92 @@ def get_next_available_id(model_class):
         # Fallback: use max + 1
         max_id = db.session.query(db.func.max(model_class.id)).scalar()
         return (max_id or 0) + 1
+
+def parse_inventory(inventory_path: str, return_hosts_only: bool = False, return_full_info: bool = False):
+    """
+    read the inventory Ansible.
+    - return_hosts_only=False → dict {device_name: ansible_host_ip}
+    - return_hosts_only=True  → set {device_name, ...}
+    """
+    result = set() if return_hosts_only else {}
+    with open(inventory_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith('[') and not line.startswith('#'):
+                parts = line.split()
+                if len(parts) >= 2:
+                    device_name = parts[0]
+                    if return_hosts_only:
+                        result.add(device_name)
+                    elif return_full_info:
+                        ip_address = None
+                        role = None
+                        for part in parts[1:]:
+                            if part.startswith('ansible_host='):
+                                ip_address = part.split('=', 1)[1]
+                            elif part.startswith('role='):
+                                role = part.split('=', 1)[1]
+                        result[device_name] = {"ip": ip_address, "role": role}
+                    else:
+                        for part in parts[1:]:
+                            if part.startswith('ansible_host='):
+                                result[device_name] = part.split('=')[1]
+
+    return result
+
+def resolve_netbox_device(dev, nb=None, fetch_interface: bool = False) -> dict:
+    #extract common fields from a pynetbox device object
+
+    name = getattr(dev, "name", None)
+    asset_tag = getattr(dev, "asset_tag", None) or name
+
+    # primary IP
+    primary_ip_obj = getattr(dev, "primary_ip", None)
+    raw_ip = None
+    ip_addr = None
+    if primary_ip_obj:
+        raw_ip = getattr(primary_ip_obj, "address", None) or (
+            primary_ip_obj.get("address") if isinstance(primary_ip_obj, dict) else None
+        )
+        if raw_ip:
+            ip_addr = str(raw_ip).split("/")[0]
+
+    # role
+    role_obj = getattr(dev, "role", None)
+    role = getattr(role_obj, "slug", None) or getattr(role_obj, "name", None)
+    role = role.lower() if role else None
+
+    result = {
+        "name":      name,
+        "asset_tag": asset_tag,
+        "ip":        ip_addr,
+        "role":      role,
+    }
+
+    # interface
+    if fetch_interface and nb and raw_ip:
+        interface = None
+        try:
+            ip_objs = nb.ipam.ip_addresses.filter(address=raw_ip)
+            ip_obj = None
+            if ip_objs:
+                if hasattr(ip_objs, "first"):
+                    ip_obj = ip_objs.first()
+                else:
+                    ip_list = list(ip_objs)
+                    ip_obj = ip_list[0] if ip_list else None
+
+            if ip_obj:
+                assigned = getattr(ip_obj, "assigned_object", None) or (
+                    ip_obj.get("assigned_object") if isinstance(ip_obj, dict) else None
+                )
+                if assigned:
+                    if isinstance(assigned, dict):
+                        interface = assigned.get("name") or assigned.get("display")
+                    else:
+                        interface = getattr(assigned, "name", None) or getattr(assigned, "display", None)
+        except Exception as e:
+            print(f"NetBox ip lookup error for ip {ip_addr}: {e}")
+        result["interface"] = interface
+
+    return result

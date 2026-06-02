@@ -12,6 +12,7 @@ import zipfile
 import jsonschema
 from jsonschema import ValidationError
 from ..app import app
+from ..utils import parse_inventory
 from .controller import (
     ensure_inventory_dir, safe_filename, run_ansible_playbook, win_to_wsl_path,
     CONTROLLER_PLAYBOOKS_DIR,
@@ -26,19 +27,12 @@ REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.environ.get("REDIS_PORT", 6379))
 redis_conn = Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
 
-def extract_hosts_from_inventory(inv_path):
-    # function to extract hostnames from inventory
-    inventory_hosts = set()
-    with open(inv_path, "r", encoding="utf-8") as inv_fh:
-        for raw_line in inv_fh:
-            line = raw_line.strip()
-            if not line or line.startswith("#") or line.startswith("["):
-                continue
-            parts = line.split()
-            if parts:
-                inventory_hosts.add(parts[0])
+def get_inventory_path(reservation_id):
+    inv_dir = ensure_inventory_dir()
+    safe_inv = safe_filename(f"res-{reservation_id}-inventory")
+    inv_path = os.path.join(inv_dir, f"{safe_inv}.ini")
 
-    return inventory_hosts
+    return inv_path
 
 @app.route('/api/validator/downloadPlaybook', methods=['POST'])
 def download_playbook():
@@ -85,17 +79,11 @@ def download_template():
         return jsonify({"ok": False, "message": "Missing reservation_id filed"}), 400
 
     # inventory path
-    inv_dir = ensure_inventory_dir()
-    safe_res = safe_filename(f"res-{reservation_id}-inventory")
-    inv_path = os.path.join(inv_dir, f"{safe_res}.ini")
+    inv_path = get_inventory_path(reservation_id)
 
     if not os.path.exists(inv_path):
         return jsonify({"ok": False, "message": f"Inventory not found: {inv_path}"}), 404
 
-    #target_hosts = extract_hosts_from_inventory(inv_path)
-
-    #if not target_hosts:
-        #return jsonify({"ok": False, "message": "No devices found in inventory to fetch configs from."}), 404
     # if test mode, convert path to wsl
     full_dest_dir = os.path.join(CONTROLLER_CONFIGS_DIR, f"res_{reservation_id}_running_configs")
     if TEST:
@@ -118,9 +106,7 @@ def download_template():
 
     try:
         rc, out, err = run_ansible_playbook(inv_path, playbook_path, extra_vars=extra_vars)
-        #print(f"Ansible rc={rc}")
-        #print(f"Ansible stdout:\n{out}")
-        #print(f"Ansible stderr:\n{err}")
+
     except Exception as e:
         return jsonify({"ok": False, "message": f"Failed to execute ansible playbook: {e}"}), 500
 
@@ -315,15 +301,13 @@ def run_playbook():
         return jsonify({"ok": False, "message": f"Playbook structure mismatch for {f.filename}: {ve.message}"}), 400
 
     # host check: read hosts from inventory and ensure uploaded hosts are subset
-    inv_dir = ensure_inventory_dir()
-    safe_inv = safe_filename(f"res-{reservation_id}-inventory")
-    inv_path = os.path.join(inv_dir, f"{safe_inv}.ini")
+    inv_path = get_inventory_path(reservation_id)
 
     if not os.path.exists(inv_path):
         return jsonify({"ok": False, "message": f"Reservation inventory not found: {inv_path}"}), 404
 
     # parse hosts from inventory file: take first token of non-empty/non-comment/non-group lines
-    inventory_hosts = extract_hosts_from_inventory(inv_path)
+    inventory_hosts = parse_inventory(inv_path, return_hosts_only=True)
 
     # find commands_map hosts declared under commands_map in the uploaded playbook
     uploaded_hosts = get_commands_map_keys_from_playbook(playbook_obj)
@@ -488,10 +472,6 @@ def run_playbook():
     try:
         rc, out, err = run_ansible_playbook(inv_path, target_path)
 
-        #print("Playbook rc:", rc)
-        #print("Playbook stdout:", out)
-        #print("Playbook stderr:", err)
-
         if rc == 0:
             return jsonify({
                 "ok": True,
@@ -593,15 +573,13 @@ def run_template():
         return jsonify({"ok": False, "message": "Missing 'reservation_id' field"}), 400
 
     # inventory path
-    inv_dir = ensure_inventory_dir()
-    safe_inv = safe_filename(f"res-{reservation_id}-inventory")
-    inv_path = os.path.join(inv_dir, f"{safe_inv}.ini")
+    inv_path = get_inventory_path(reservation_id)
 
     if not os.path.exists(inv_path):
         return jsonify({"ok": False, "message": f"Inventory not found: {inv_path}"}), 404
 
     # load inventory hosts
-    inventory_hosts = extract_hosts_from_inventory(inv_path)
+    inventory_hosts = parse_inventory(inv_path, return_hosts_only=True)
     if not inventory_hosts:
         return jsonify({"ok": False, "message": "No devices found in inventory"}), 404
 
@@ -800,10 +778,6 @@ def run_template():
     extra_vars = {"type": "configs", "reservation_id": reservation_id, "user_configs_folder": user_configs_folder}
     rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars)
 
-    #print("Apply configs playbook rc:", rc)
-    #print("Apply configs  playbook stdout:", out)
-    #print("Apply configs  playbook stderr:", err)
-
     # remove temporary folder after execution
     try:
         if os.path.exists(tmp_folder_path):
@@ -829,9 +803,7 @@ def pingall_test():
         return jsonify({"error": "reservation_id is required"}), 400
 
     # find inventory
-    inv_dir = ensure_inventory_dir()
-    safe_res = safe_filename(f"res-{reservation_id}-inventory")
-    inv_path = os.path.join(inv_dir, f"{safe_res}.ini")
+    inv_path = get_inventory_path(reservation_id)
 
     if not os.path.exists(inv_path):
         return jsonify({"error": f"Inventory file not found for reservation {reservation_id}"}), 404

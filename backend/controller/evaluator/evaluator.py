@@ -8,7 +8,7 @@ from stat import S_ISDIR, S_ISREG
 from flask import request, send_file, jsonify
 from ...database.db import Experiment
 from ..experimenter.experimenter import EXPERIMENT_RESULTS_DIR
-from ...controller.controller import NAS_IP, MINIPC_USER, MINIPC_PASS, INVENTORY_DIR, safe_filename
+from ...controller.controller import NAS_IP, MINIPC_USER, MINIPC_PASS
 from ...app import app
 
 NAS_EXPORT_BASE = "/export"
@@ -126,9 +126,6 @@ def get_experiment_results():
 def download_results():
     # download result files as ZIP
     try:
-        import zipfile
-        from io import BytesIO
-
         data = request.json
         reservation_id = data.get('reservation_id')
         experiment_name = data.get('experiment_name')
@@ -163,7 +160,6 @@ def download_results():
         print(f"Error in downloadResults: {str(e)}")
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
-
 
 @app.route('/api/evaluator/downloadNFSData', methods=['POST'])
 def download_nfs_data():
@@ -253,8 +249,8 @@ def download_nfs_data():
 
                                         print(f"[NFS DOWNLOAD]   Added: {zip_item_path}", flush=True)
 
-                            except Exception as e:
-                                print(f"[NFS DOWNLOAD ERROR] Failed to process {remote_path}: {str(e)}", flush=True)
+                            except Exception as exc:
+                                print(f"[NFS DOWNLOAD ERROR] Failed to process {remote_path}: {str(exc)}", flush=True)
 
                         # start recursive download from device root
                         download_recursive(nfs_device_path, device_tag)

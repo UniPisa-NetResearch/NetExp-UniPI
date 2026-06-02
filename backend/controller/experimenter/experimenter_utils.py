@@ -13,6 +13,7 @@ from pygnmi.client import gNMIclient
 from ...database.db import db, Experiment
 from ..controller import run_ansible_playbook, win_to_wsl_path, safe_filename, INVENTORY_DIR
 from ...app import app
+from ...utils import parse_inventory
 
 # function to indent yaml file
 class IndentedDumper(yaml.Dumper):
@@ -29,25 +30,36 @@ def ensure_experiment_dirs(templates_dir, playbooks_dir, telemetry_dir, results_
     os.makedirs(telemetry_dir, exist_ok=True)
     os.makedirs(results_dir, exist_ok=True)
 
-def get_next_available_id():
-    # find first available ID in experiment table
-    try:
-        # get every experiment id in the database
-        existing_ids = db.session.query(Experiment.id).order_by(Experiment.id).all()
-        existing_ids = [row[0] for row in existing_ids]
+def save_experiment_template(experiment_doc: dict, reservation_id, safe_exp_name: str, templates_base_dir: str) -> tuple[str, str]:
 
-        if not existing_ids:
-            return 1
-        # if there are missing assigned id between 1 and max id in the database, retun first available
-        for i in range(1, existing_ids[-1] + 1):
-            if i not in existing_ids:
-                return i
+    yaml_content = yaml.dump(
+        experiment_doc,
+        Dumper=IndentedDumper,
+        default_flow_style=False,
+        sort_keys=False,
+        indent=2,
+        width=1000
+    )
 
-        return existing_ids[-1] + 1
+    templates_dir = os.path.join(templates_base_dir, f'res_{reservation_id}')
+    os.makedirs(templates_dir, exist_ok=True)
 
-    except Exception as e:
-        print(f"Error finding next available ID: {str(e)}")
-        return None
+    exp_path = os.path.join(templates_dir, f'{safe_exp_name}.yml')
+    with open(exp_path, 'w', encoding='utf-8') as f:
+        f.write(yaml_content)
+
+    return exp_path, yaml_content
+
+def build_gnmi_path(match, original_path: str) -> str:
+
+    prefix = match.group(1)            # es. /openconfig-interfaces
+    path_after_colon = match.group(2)  # es. openconfig-interfaces:interfaces/interface[name=Ethernet1]
+    prefix_without_slash = prefix[1:]  # es. openconfig-interfaces
+
+    if not path_after_colon.startswith(prefix_without_slash + ':'):
+        return prefix + ':' + prefix_without_slash + ':' + path_after_colon
+    else:
+        return original_path
 
 def finalize_batch_results(reservation_id, experiment_names, results_base_dir):
     # copy temporary results to final location and remove temp directories
@@ -113,17 +125,7 @@ def collect_telemetry_data(reservation_id, experiment_name, telemetry_config, in
         print(f"[TELEMETRY] Duration: {duration_s}s", flush=True)
 
         # read device ips from inventory
-        device_ips = {}
-        with open(inventory_path, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('[') and not line.startswith('#'):
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        device_name = parts[0]
-                        for part in parts[1:]:
-                            if part.startswith('ansible_host='):
-                                device_ips[device_name] = part.split('=')[1]
+        device_ips = parse_inventory(inventory_path)
 
         print(f"[TELEMETRY] Found devices: {list(device_ips.keys())}", flush=True)
         # results structure: {metric_name: {target: [data_points]}}
@@ -162,8 +164,7 @@ def collect_telemetry_data(reservation_id, experiment_name, telemetry_config, in
                 if current_time - last_collection >= sampling_period:
                     sample_count += 1
                     elapsed = current_time - start_time
-                    print(f"[TELEMETRY] Sample {sample_count} at T+{elapsed:.1f}s: {metric_name} from {target}",
-                          flush=True)
+                    print(f"[TELEMETRY] Sample {sample_count} at T+{elapsed:.1f}s: {metric_name} from {target}", flush=True)
 
                     try:
                         # use gNMI to collect metric
@@ -185,17 +186,7 @@ def collect_telemetry_data(reservation_id, experiment_name, telemetry_config, in
                                 # create path for the test
                                 match = re.match(r'^(/openconfig-[^:]+):(.+)$', metric_path)
                                 if match:
-                                    prefix = match.group(1)
-                                    path_after_colon = match.group(2)
-                                    # add, if there is not the double prefix
-                                    prefix_without_slash = prefix[1:]
-
-                                    if not path_after_colon.startswith(prefix_without_slash + ':'):
-                                        # Add the same prefix
-                                        path_for_execution = prefix + ':' + prefix_without_slash + ':' + path_after_colon
-                                    else:
-                                        # double prefix present, use the original one
-                                        path_for_execution = metric_path
+                                    path_for_execution = build_gnmi_path(match, metric_path)
                                 else:
                                     # double prefix present, use the original one
                                     path_for_execution = metric_path
@@ -214,8 +205,8 @@ def collect_telemetry_data(reservation_id, experiment_name, telemetry_config, in
 
                             print(f"[TELEMETRY] {metric_name} from {target} at {timestamp}", flush=True)
 
-                    except Exception as e:
-                        print(f"[TELEMETRY ERROR] {metric_name} from {target}: {str(e)}", flush=True)
+                    except Exception as exc:
+                        print(f"[TELEMETRY ERROR] {metric_name} from {target}: {str(exc)}", flush=True)
                         traceback.print_exc()
 
                     last_collection = current_time
@@ -278,9 +269,7 @@ def collect_telemetry_data(reservation_id, experiment_name, telemetry_config, in
                 target_ip = device_ips[target]
 
                 # start thread for the current combination
-                thread = threading.Thread(target=collect_metric_from_target,
-                                          args=(metric_name, metric_path, target, target_ip, sampling_period),
-                                          daemon=False)
+                thread = threading.Thread(target=collect_metric_from_target, args=(metric_name, metric_path, target, target_ip, sampling_period), daemon=False)
                 thread.start()
                 threads.append(thread)
 
@@ -864,109 +853,3 @@ def finish_cleanup_and_remove(reservation_id, running_experiment, playbooks_base
             "cleanup_success": cleanup_success,
             "is_batch": False
         }), 200
-
-def modify_playbook_with_user(playbook_path):
-
-    # modify playbooks added by user adding remote_user
-    try:
-        print(f"[PLAYBOOK] Processing: {os.path.basename(playbook_path)}", flush=True)
-        with open(playbook_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-
-        lines = content.split('\n')
-        modified = False
-        new_lines = []
-
-        i = 0
-        while i < len(lines):
-            line = lines[i]
-            stripped = line.strip()
-
-            if stripped.startswith('- name:'):
-                # find start play
-                new_lines.append(line)
-                i += 1
-
-                while i < len(lines):
-                    current_line = lines[i]
-                    current_stripped = current_line.strip()
-
-                    # check 'tasks:' (end of play)
-                    if current_stripped.startswith('tasks:'):
-                        new_lines.append(current_line)
-                        i += 1
-                        break
-
-                    if current_stripped.startswith('become:'):
-                        # change become: yes -> become: no
-                        if 'yes' in current_stripped.lower() or 'true' in current_stripped.lower():
-                            current_indent = len(current_line) - len(current_line.lstrip())
-                            new_lines.append(f"{' ' * current_indent}become: no")
-                            modified = True
-                            print(f"[PLAYBOOK] Changed become: yes -> become: no", flush=True)
-                        else:
-                            new_lines.append(current_line)
-                    else:
-                        new_lines.append(current_line)
-
-                    i += 1
-
-                continue
-
-            new_lines.append(line)
-            i += 1
-
-        # rewrite the playbook only if modified
-        if modified:
-            print(f"[PLAYBOOK] Writing modified playbook to disk...", flush=True)
-
-            with open(playbook_path, 'w', encoding='utf-8') as f:
-                f.write('\n'.join(new_lines))
-            print(f"[PLAYBOOK] Successfully modified", flush=True)
-        else:
-            print(f"[PLAYBOOK] No modifications needed for {playbook_path}", flush=True)
-
-        return True
-
-    except Exception as e:
-        print(f"[ERROR] Failed to modify playbook {playbook_path}: {str(e)}", flush=True)
-        traceback.print_exc()
-        return False
-
-def validate_and_modify_user_playbooks(playbooks_dir):
-    # validate and modify every playbook inside the directory
-    try:
-        if not os.path.isdir(playbooks_dir):
-            return False, f"Directory not found: {playbooks_dir}"
-
-        # find every YAML
-        playbook_files = []
-        for filename in os.listdir(playbooks_dir):
-            if filename.endswith('.yml') or filename.endswith('.yaml'):
-                playbook_files.append(os.path.join(playbooks_dir, filename))
-
-        if not playbook_files:
-            print(f"[PLAYBOOK] No YAML files found in {playbooks_dir}", flush=True)
-            return True, None
-
-        print(f"[PLAYBOOK] Found {len(playbook_files)} playbook(s) to modify", flush=True)
-
-        # modify every playbook
-        failed_playbooks = []
-        for playbook_path in playbook_files:
-            if not modify_playbook_with_user(playbook_path):
-                failed_playbooks.append(os.path.basename(playbook_path))
-
-        if failed_playbooks:
-            error_msg = f"Failed to modify playbooks: {', '.join(failed_playbooks)}"
-            print(f"[ERROR] {error_msg}", flush=True)
-            return False, error_msg
-
-        print(f"[PLAYBOOK] Successfully modified all playbooks", flush=True)
-        return True, None
-
-    except Exception as e:
-        error_msg = f"Error validating/modifying playbooks: {str(e)}"
-        print(f"[ERROR] {error_msg}", flush=True)
-        traceback.print_exc()
-        return False, error_msg

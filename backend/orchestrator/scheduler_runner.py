@@ -63,8 +63,8 @@ def move_scheduled_jobs_to_queue():
             queue.enqueue_job(job)
             moved_count += 1
 
-        except Exception as e:
-            logging.error(f"Error processing job {job_id}: {e}")
+        except Exception as ex:
+            logging.error(f"Error processing job {job_id}: {ex}")
             # remove from schedule to avoid infinite loop
             redis_connection.zrem(key_scheduled, job_id)
 

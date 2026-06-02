@@ -4,7 +4,7 @@ from flask import jsonify, request
 from backend.orchestrator.socketio_instance import socketio
 from backend.orchestrator.orchestrator_jobs import reservation_start_job, reservation_end_job
 from ..database.db import db, User, Reservation, ReservationDevice
-from ..utils import get_next_available_id
+from ..utils import get_next_available_id, resolve_netbox_device
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from sqlalchemy import tuple_, and_
@@ -87,9 +87,7 @@ def send_to_controller(msg_type, user_id, reservation_id, job_data):
                     # build list of { "id_device": <asset_tag>, "ip_device": <ip>, "role": <role> }
                     devices_list = []
                     for at in asset_tags:
-                        ip_addr = None
-                        role = None
-                        interface = None
+                        info = {"ip": None, "role": None, "interface": None}
                         try:
                             # try to fetch device by asset_tag first
                             dev = nb.dcim.devices.get(site=NETBOX_SITE, asset_tag=at)
@@ -99,54 +97,15 @@ def send_to_controller(msg_type, user_id, reservation_id, job_data):
                                 dev = devs[0] if devs else None
 
                             if dev:
-                                # primary_ip can be object-like or dict depending on pynetbox version
-                                primary_ip = getattr(dev, "primary_ip", None)
-                                if primary_ip:
-                                    ip = getattr(primary_ip, "address", None) or (
-                                        primary_ip.get("address") if isinstance(primary_ip, dict) else None)
-                                    if ip:
-                                        ip_addr = str(ip).split("/")[0]
-
-                                role_obj = getattr(dev, "role", None)
-                                # when it is an object with attributes
-                                role = getattr(role_obj, "slug", None) or getattr(role_obj, "name", None)
-
-                                role = role.lower() if role else None
-
-                            if ip_addr:
-                                try:
-                                    ip_objs = None
-
-                                    if ip:
-                                        ip_objs = nb.ipam.ip_addresses.filter(address=ip)
-                                    # normalize ip_obj extraction
-                                    ip_obj = None
-                                    if ip_objs:
-                                        if hasattr(ip_objs, "first"):
-                                            ip_obj = ip_objs.first()
-                                        else:
-                                            ip_list = list(ip_objs)
-                                            ip_obj = ip_list[0] if ip_list else None
-
-                                    if ip_obj:
-                                        assigned = getattr(ip_obj, "assigned_object", None) or (
-                                            ip_obj.get("assigned_object") if isinstance(ip_obj, dict) else None)
-                                        if assigned:
-                                            if isinstance(assigned, dict):
-                                                interface = assigned.get("name") or assigned.get("display")
-                                            else:
-                                                interface = getattr(assigned, "name", None) or getattr(assigned, "display",
-                                                                                                       None)
-                                except Exception as e:
-                                    print(f"NetBox ip lookup error for ip {ip_addr}: {e}")
+                                info = resolve_netbox_device(dev, nb=nb, fetch_interface=True)
                         except Exception as e:
                             print(f"NetBox lookup error for asset_tag {at}: {e}")
 
                         devices_list.append({
                             "id_device": at,
-                            "ip_device": ip_addr,
-                            "role": role,
-                            "interface": interface
+                            "ip_device": info["ip"],
+                            "role": info["role"],
+                            "interface": info.get("interface")
                         })
 
                     # prepare payload for controller
@@ -310,30 +269,18 @@ def show_devices():
 
         out = []
         for d in devices:
-            asset_tag = getattr(d, "asset_tag", None) or getattr(d, "name", None)
+            info = resolve_netbox_device(d)
 
-            primary_ip = getattr(d.primary_ip, "address", None) or (
-                d.primary_ip.get("address") if isinstance(d.primary_ip, dict) else None
-            )
+            # check if the host is reachable
+            reachable = ping_host(info["ip"]) if info["ip"] else False
 
-            primary_ip = str(primary_ip).split("/")[0] if primary_ip else None
+            print(f"ip address: {info['ip']} - reachable: {reachable}")
 
-            role_obj = getattr(d, "role", None)
-            # when it is an object with attributes
-            role = getattr(role_obj, "slug", None) or getattr(role_obj, "name", None)
-
-            role = role.lower() if role else None
-            if primary_ip:
-                # check if the host is reachable
-                reachable = ping_host(primary_ip)
-            else:
-                reachable = False
-            print(f"ip address: {primary_ip} - reachable: {reachable}")
             out.append({
-                "name": getattr(d, "name", None),
-                "asset_tag": asset_tag,
-                "primary_ip": primary_ip,
-                "role": role,
+                "name": info["name"],
+                "asset_tag": info["asset_tag"],
+                "primary_ip": info["ip"],
+                "role": info["role"],
                 "reachable": reachable
             })
 
@@ -342,7 +289,6 @@ def show_devices():
     except Exception as exc:
         app.logger.exception("Error in show devices: %s", exc)
         return jsonify({"ok": False, "message": "Unable to fetch devices from NetBox"}), 500
-
 
 @app.route('/api/orchestrator/allReservations', methods=['GET'])
 def all_reservations():
@@ -357,6 +303,18 @@ def all_reservations():
         app.logger.error(f"Error fetching all reservations: {e}")
         return jsonify({"message": "Error fetching reservations"}), 500
 
+def create_reservation(reservation, next_id, username, start_dt, end_dt):
+
+    res = reservation(
+        id=next_id,
+        username=username,
+        startDate=start_dt.date(),
+        endDate=end_dt.date(),
+        startTime=start_dt.time().replace(second=0, microsecond=0),
+        endTime=end_dt.time().replace(second=0, microsecond=0),
+        token=None
+    )
+    return res
 
 @app.route('/api/orchestrator/checkReservation', methods=['POST'])
 def check_reservation():
@@ -403,15 +361,7 @@ def check_reservation():
 
         # create first reservation
         next_id_1 = get_next_available_id(Reservation)
-        res1 = Reservation(
-            id=next_id_1,
-            username=username,
-            startDate=first_start_dt.date(),
-            endDate=first_end_dt.date(),
-            startTime=first_start_dt.time().replace(second=0, microsecond=0),
-            endTime=first_end_dt.time().replace(second=0, microsecond=0),
-            token=None
-        )
+        res1 = create_reservation(Reservation, next_id_1, username, first_start_dt, first_end_dt)
 
         db.session.add(res1)
         reservation_id = res1.id
@@ -423,15 +373,8 @@ def check_reservation():
 
         # create second reservation for verstappen
         next_id_2 = get_next_available_id(Reservation)
-        res2 = Reservation(
-            id=next_id_2,
-            username="verstappen",
-            startDate=second_start_dt.date(),
-            endDate=second_end_dt.date(),
-            startTime=second_start_dt.time().replace(second=0, microsecond=0),
-            endTime=second_end_dt.time().replace(second=0, microsecond=0),
-            token=None
-        )
+        res2 = create_reservation(Reservation, next_id_2, "verstappen", second_start_dt, second_end_dt)
+
         db.session.add(res2)
         db.session.flush()
 
@@ -550,17 +493,8 @@ def check_reservation():
 
     # Get next available ID (fills gaps)
     next_id = get_next_available_id(Reservation)
-
     # no conflict found, reservation creation
-    new_res = Reservation(
-        id=next_id,
-        username=username,
-        startDate=start_dt.date(),
-        endDate=end_dt.date(),
-        startTime=start_dt.time().replace(second=0, microsecond=0),
-        endTime=end_dt.time().replace(second=0, microsecond=0),
-        token=None
-    )
+    new_res = create_reservation(Reservation, next_id, username, start_dt, end_dt)
 
     db.session.add(new_res)
     try:

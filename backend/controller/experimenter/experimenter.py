@@ -14,8 +14,9 @@ from werkzeug.utils import secure_filename
 from ...database.db import db, UserMetrics, Reservation, Experiment
 from pygnmi.client import gNMIclient
 from ...app import app
+from ...utils import get_next_available_id, parse_inventory
 from ..controller import (safe_filename, INVENTORY_DIR, TEST)
-from .experimenter_utils import (ensure_experiment_dirs, get_next_available_id, collect_telemetry_data, convert_iperf_experiment_to_schedule, execute_experiment_schedule, validate_experiment_template_schema, IndentedDumper, finish_cleanup_and_remove, finalize_batch_results)
+from .experimenter_utils import (ensure_experiment_dirs, save_experiment_template, build_gnmi_path, collect_telemetry_data, convert_iperf_experiment_to_schedule, execute_experiment_schedule, validate_experiment_template_schema, finish_cleanup_and_remove, finalize_batch_results)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 EXPERIMENT_TEMPLATES_DIR = os.path.join(BASE_DIR, "experimentTemplates")
@@ -44,51 +45,17 @@ def get_devices():
         if not os.path.exists(inv_path):
             return jsonify({'error': f'Inventory file not found for reservation {reservation_id}'}), 404
 
+        full_info = parse_inventory(inv_path, return_full_info=True)
+
         # read inventory file
-        devices = []
-        with open(inv_path, 'r', encoding='utf-8') as f:
-            in_all_section = False
-            for line in f:
-                line = line.strip()
+        if only_device_name:
+            devices = list(full_info.keys())
 
-                # skip comments and empty rows
-                if not line or line.startswith('#'):
-                    continue
-
-                # verify if we are in the section [all]
-                if line == '[all]':
-                    in_all_section = True
-                    continue
-                elif line.startswith('['):
-                    in_all_section = False
-                    continue
-
-                # if we are in the section [all], extract device name
-                if in_all_section:
-                    # parse the line to extract device_name, ip, and role
-                    parts = line.split()
-                    if not parts:
-                        continue
-
-                    device_name = parts[0]
-                    ip_address = None
-                    role = None
-
-                    if only_device_name:
-                        devices.append(device_name)
-                    else:
-                        # extract ansible_host and role from the line
-                        for part in parts[1:]:
-                            if part.startswith('ansible_host='):
-                                ip_address = part.split('=', 1)[1]
-                            elif part.startswith('role='):
-                                role = part.split('=', 1)[1]
-
-                        devices.append({
-                            'name': device_name,
-                            'ip': ip_address,
-                            'role': role
-                        })
+        else:
+            devices = [
+                {'name': name, 'ip': info['ip'], 'role': info['role']}
+                for name, info in full_info.items()
+            ]
 
         return jsonify({'devices': devices}), 200
 
@@ -177,7 +144,7 @@ def download_experiment_template():
 
 @app.route('/api/experimenter/validateTemplate', methods=['POST'])
 def validate_experiment_template():
-    # validate experiment template, load playbooks nd check their presence
+    # validate experiment template, load playbooks and check their presence
     try:
         ensure_experiment_dirs(EXPERIMENT_TEMPLATES_DIR, EXPERIMENT_PLAYBOOKS_DIR, EXPERIMENT_TELEMETRY_DIR, EXPERIMENT_RESULTS_DIR)
 
@@ -252,17 +219,16 @@ def validate_experiment_template():
         # update reservation_id in template with actual value
         yaml_content['reservation_id'] = int(reservation_id)
 
-        # save validated template
-        templates_dir = os.path.join(EXPERIMENT_TEMPLATES_DIR, f'res_{reservation_id}')
-        os.makedirs(templates_dir, exist_ok=True)
+        experiment_name_raw = secure_filename(experiment_file.filename)
+        safe_exp_name = os.path.splitext(experiment_name_raw)[0]
 
-        experiment_name = secure_filename(experiment_file.filename)
-        template_path = os.path.join(templates_dir, experiment_name)
-
-        # Write modified YAML content
-        with open(template_path, 'w', encoding='utf-8') as f:
-            yaml.dump(yaml_content, f, Dumper=IndentedDumper, default_flow_style=False, sort_keys=False, indent=2, width=1000)
-
+        template_path, _ = save_experiment_template(
+            yaml_content,
+            reservation_id,
+            safe_exp_name,
+            EXPERIMENT_TEMPLATES_DIR
+        )
+        experiment_name = os.path.basename(template_path)
         print(f"[VALIDATE TEMPLATE] Success for reservation {reservation_id}", flush=True)
         print(f"  - Template: {experiment_name}", flush=True)
         print(f"  - Uploaded playbooks: {len(uploaded_playbooks)}", flush=True)
@@ -348,27 +314,9 @@ def create_experiment():
         }
 
         # convert to YAML with custom dumper for proper indentation
-        yaml_content = yaml.dump(
-            experiment_doc,
-            Dumper=IndentedDumper,
-            default_flow_style=False,
-            sort_keys=False,
-            indent=2,
-            width=1000
-        )
+        exp_path, yaml_content = save_experiment_template(experiment_doc, reservation_id, safe_exp_name, EXPERIMENT_TEMPLATES_DIR)
 
-        # save template file
-        templates_dir = os.path.join(EXPERIMENT_TEMPLATES_DIR, f'res_{reservation_id}')
-        os.makedirs(templates_dir, exist_ok=True)
-
-        exp_filename = f'{safe_exp_name}.yml'
-        exp_path = os.path.join(templates_dir, exp_filename)
-
-        with open(exp_path, 'w', encoding='utf-8') as f:
-            f.write(yaml_content)
-
-        print(f"[CREATE EXPERIMENT] Created experiment '{experiment_name}' for reservation {reservation_id}",
-              flush=True)
+        print(f"[CREATE EXPERIMENT] Created experiment '{experiment_name}' for reservation {reservation_id}", flush=True)
         print(f"  - Template saved: {exp_path}", flush=True)
         print(f"  - Playbooks dir: {playbooks_dir}", flush=True)
 
@@ -381,7 +329,7 @@ def create_experiment():
             buffer,
             mimetype='application/x-yaml',
             as_attachment=True,
-            download_name=exp_filename
+            download_name=f'{safe_exp_name}.yml'
         )
         # expose headers to let client read file name
         response.headers['Access-Control-Expose-Headers'] = 'Content-Disposition'
@@ -486,16 +434,9 @@ def create_iperf_experiment():
             'schedule': schedule
         }
 
-        yaml_content = yaml.dump(experiment_doc, Dumper=IndentedDumper, default_flow_style=False, sort_keys=False, indent=2, width=1000)
-
-        templates_dir = os.path.join(EXPERIMENT_TEMPLATES_DIR, f'res_{reservation_id}')
-        os.makedirs(templates_dir, exist_ok=True)
-
-        exp_filename = f'{safe_exp_name}.yml'
-        exp_path = os.path.join(templates_dir, exp_filename)
-
-        with open(exp_path, 'w', encoding='utf-8') as f:
-            f.write(yaml_content)
+        exp_path, yaml_content = save_experiment_template(
+            experiment_doc, reservation_id, safe_exp_name, EXPERIMENT_TEMPLATES_DIR
+        )
 
         print(f"[CREATE IPERF EXPERIMENT] Created experiment '{experiment_name}' for reservation {reservation_id}", flush=True)
         print(f"  - Template saved: {exp_path}", flush=True)
@@ -510,7 +451,7 @@ def create_iperf_experiment():
             buffer,
             mimetype='application/x-yaml',
             as_attachment=True,
-            download_name=exp_filename
+            download_name=f'{safe_exp_name}.yml'
         )
         response.headers['Access-Control-Expose-Headers'] = 'Content-Disposition'
 
@@ -602,18 +543,7 @@ def add_metrics():
                 original_path = metric_path
 
                 # create path for the test
-                prefix = match.group(1)  # es. /openconfig-interfaces
-                path_after_colon = match.group(2)  # es. openconfig-interfaces:interfaces/interface[name=Ethernet1]
-
-                # add, if there is not the double prefix
-                prefix_without_slash = prefix[1:]  # es. openconfig-interfaces
-
-                if not path_after_colon.startswith(prefix_without_slash + ':'):
-                    # Add the same prefix
-                    path_for_validation = prefix + ':' + prefix_without_slash + ':' + path_after_colon
-                else:
-                    # double prefix present, use the original one
-                    path_for_validation = original_path
+                path_for_validation = build_gnmi_path(match, original_path)
 
                 try:
                     with gNMIclient(
@@ -810,26 +740,16 @@ def create_telemetry_file():
             ]
         }
 
-        yaml_content = yaml.dump(
-            telemetry_doc,
-            Dumper=IndentedDumper,
-            default_flow_style=False,
-            sort_keys=False,
-            indent=2,
-            width=1000
-        )
-
-        # save file in experimentTelemetry/res_<reservation_id>/
-        telemetry_dir = os.path.join(EXPERIMENT_TELEMETRY_DIR, f"res_{reservation_id}")
-        os.makedirs(telemetry_dir, exist_ok=True)
-
         safe_base = secure_filename(str(file_base).strip())
-        filename = f"{safe_base}.yml"
-        out_path = os.path.join(telemetry_dir, filename)
 
-        with open(out_path, 'w', encoding='utf-8') as f:
-            f.write(yaml_content)
-
+        # telemetry function usage
+        out_path, yaml_content = save_experiment_template(
+            telemetry_doc,
+            reservation_id,
+            safe_base,
+            EXPERIMENT_TELEMETRY_DIR
+        )
+        filename = os.path.basename(out_path)
         # return file for download
         buffer = BytesIO()
         buffer.write(yaml_content.encode('utf-8'))
@@ -974,7 +894,7 @@ def run_experiment():
                 cumulative_time += 60
 
             # find next available id
-            next_id = get_next_available_id()
+            next_id = get_next_available_id(Experiment)
 
             # find record inside the database
             if next_id is not None:
@@ -1135,8 +1055,8 @@ def run_experiment():
                     if reservation_id in running_experiments:
                         del running_experiments[reservation_id]
 
-            except Exception as e:
-                print(f"[EXPERIMENT THREAD ERROR] {str(e)}", flush=True)
+            except Exception as exc:
+                print(f"[EXPERIMENT THREAD ERROR] {str(exc)}", flush=True)
                 traceback.print_exc()
                 with app.app_context():
                     for exp_id in created_experiment_ids:
@@ -1491,7 +1411,6 @@ def check_file_exists():
     except Exception as e:
         print(f"CHECK FILE EXISTS ERROR: {str(e)}", flush=True)
         return jsonify({'success': False, 'error': str(e)}), 500
-
 
 if __name__ == '__main__':
     app.run(debug=False, host='0.0.0.0', port=5004, use_reloader=False)
