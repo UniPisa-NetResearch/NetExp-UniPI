@@ -8,6 +8,11 @@
     # max number of try to check system status (es. 12 * 5s = 60s)
     max_retries: 12
     delay_seconds: 5
+    containerlab_test: false
+    ansible_ssh_common_args: >-
+      {{ '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' if containerlab_test else omit }}
+    frr_conf_path: >-
+      {{ '/etc/frr/frr.conf' if containerlab_test else '/etc/sonic/frr/frr.conf' }}
 
   pre_tasks:
     - name: Ensure this playbook is invoked for rollback
@@ -96,6 +101,7 @@
         group: root
         mode: '0644'
       when:
+        - not containerlab_test
         - hostvars[inventory_hostname].get('role', '') != 'host'
         - must_configure
         - (type == 'rollback' or cfgdb_stat.stat.exists | default(false))
@@ -121,7 +127,7 @@
           moved=1
         fi
         if [ -f /tmp/new_frr.conf ]; then
-          cp /tmp/new_frr.conf /etc/sonic/frr/frr.conf
+          cp /tmp/new_frr.conf {{ frr_conf_path }}
           moved=1
         fi
         sync
@@ -129,6 +135,24 @@
       register: cp_result
       failed_when: cp_result.rc != 0
       when:
+        - not containerlab_test
+        - hostvars[inventory_hostname].get('role', '') != 'host'
+        - must_configure
+
+    - name: Move only frr.conf into place (containerlab)
+      shell: |
+        set -e
+        moved=0
+        if [ -f /tmp/new_frr.conf ]; then
+          cp /tmp/new_frr.conf {{ frr_conf_path }}
+          sync
+          moved=1
+        fi
+        echo "moved=${moved}"
+      register: cp_result
+      failed_when: cp_result.rc != 0
+      when:
+        - containerlab_test
         - hostvars[inventory_hostname].get('role', '') != 'host'
         - must_configure
 
@@ -137,6 +161,7 @@
       register: reload_result
       failed_when: reload_result.rc != 0
       when:
+        - not containerlab_test
         - hostvars[inventory_hostname].get('role', '') != 'host'
         - must_configure
         - cp_result.stdout is defined and 'moved=1' in cp_result.stdout
@@ -162,6 +187,7 @@
       delay: "{{ delay_seconds }}"
       until: (non_ok_count.stdout | default('0') | int) == 0
       when:
+        - not containerlab_test
         - hostvars[inventory_hostname].get('role', '') != 'host'
         - must_configure
         - cp_result.stdout is defined and 'moved=1' in cp_result.stdout
@@ -171,6 +197,7 @@
       register: sysready_full
       changed_when: false
       when:
+        - not containerlab_test
         - hostvars[inventory_hostname].get('role', '') != 'host'
         - must_configure
         - cp_result.stdout is defined and 'moved=1' in cp_result.stdout
@@ -183,7 +210,56 @@
           Full sysready output:
           {{ sysready_full.stdout }}
       when:
+        - not containerlab_test
         - hostvars[inventory_hostname].get('role', '') != 'host'
         - must_configure
         - cp_result.stdout is defined and 'moved=1' in cp_result.stdout
         - (non_ok_count.stdout | default('0') | int) > 0
+
+    - name: Move only frr.conf into place (containerlab)
+      shell: |
+        set -e
+        moved=0
+        if [ -f /tmp/new_frr.conf ]; then
+          cp /tmp/new_frr.conf {{ frr_conf_path }}
+          sync
+          moved=1
+        fi
+        echo "moved=${moved}"
+      register: cp_result
+      failed_when: cp_result.rc != 0
+      when:
+        - containerlab_test
+        - hostvars[inventory_hostname].get('role', '') != 'host'
+        - must_configure
+
+    - name: Restart FRR on containerlab nodes after restoring frr.conf
+      shell: |
+        set -e
+        service frr restart
+        sleep 5
+      register: reload_result
+      failed_when: reload_result.rc != 0
+      when:
+        - containerlab_test
+        - hostvars[inventory_hostname].get('role', '') != 'host'
+        - must_configure
+        - cp_result.stdout is defined and 'moved=1' in cp_result.stdout
+
+    - name: Verify FRR is running after restart
+      shell: service frr status
+      register: frr_status
+      retries: 5
+      delay: 2
+      until: >
+        ('Status of watchfrr: running.' in frr_status.stdout) and
+        ('Status of zebra: running.' in frr_status.stdout) and
+        ('Status of mgmtd: running.' in frr_status.stdout) and
+        ('Status of bgpd: running.' in frr_status.stdout) and
+        ('Status of staticd: running.' in frr_status.stdout)
+      changed_when: false
+      when:
+        - containerlab_test
+        - hostvars[inventory_hostname].get('role', '') != 'host'
+        - must_configure
+        - cp_result.stdout is defined and 'moved=1' in cp_result.stdout

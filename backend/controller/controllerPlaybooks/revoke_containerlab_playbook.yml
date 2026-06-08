@@ -1,0 +1,81 @@
+# revoke_playbook_containerlab.yml
+
+- name: Revoke SSH access - containerlab virtual devices
+  hosts: all
+  gather_facts: no
+  become: no
+  vars:
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+
+  tasks:
+    - name: Set target user fact
+      ansible.builtin.set_fact:
+        target_user: "{{ username }}"
+
+    # end user processes
+    - name: Kill all processes belonging to the user
+      ansible.builtin.shell: |
+        pkill -TERM -u {{ target_user }} || true
+      ignore_errors: yes
+
+    - name: Force kill remaining user processes
+      ansible.builtin.shell: |
+        pkill -9 -u {{ target_user }} || true
+      ignore_errors: yes
+
+    # Remove SSH public key from authorized_keys
+    - name: Remove public key from authorized_keys
+      ansible.builtin.authorized_key:
+        user: "{{ username }}"
+        key: "{{ ssh_key }}"
+        state: absent
+        path: "/home/{{ username }}/.ssh/authorized_keys"
+      ignore_errors: yes
+
+    # Remove user sudoers file
+    - name: Remove sudoers file for reservation user
+      ansible.builtin.file:
+        path: "/etc/sudoers.d/{{ item }}"
+        state: absent
+      loop:
+        - "{{ username }}"
+      ignore_errors: yes
+
+    # Remove Match block from sshd_config and restart SSH
+    - name: Remove per-user SSHd Match block
+      ansible.builtin.blockinfile:
+        path: /etc/ssh/sshd_config
+        marker: "# {mark} ANSIBLE-RES-{{ username }}"
+        block: ""
+        state: absent
+      notify: restart sshd
+
+    # Remove user account with fallback to manual userdel
+    - name: Remove user account and home directory
+      block:
+        - name: Remove user via ansible user module
+          ansible.builtin.user:
+            name: "{{ username }}"
+            state: absent
+            remove: yes
+
+      rescue:
+        # Fallback if user module fails
+        - name: Fallback - force remove user with userdel
+          ansible.builtin.shell: |
+            userdel -r -f {{ target_user }} || true
+          ignore_errors: yes
+
+    - name: Remove leftover home directory if still present
+      ansible.builtin.file:
+        path: "/home/{{ username }}"
+        state: absent
+      ignore_errors: yes
+
+  handlers:
+    # Use 'service' instead of systemctl (not available on container sonic-vs)
+    - name: restart sshd
+      ansible.builtin.shell: |
+        service ssh restart || service sshd restart || true
+      become: yes
+      changed_when: false

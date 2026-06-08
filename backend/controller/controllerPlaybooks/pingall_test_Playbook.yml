@@ -2,6 +2,11 @@
 - name: Collect data plane IPs
   hosts: all
   gather_facts: no
+  vars:
+    containerlab_test: false
+    ansible_ssh_common_args: >-
+      {{ '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' if containerlab_test else omit }}
+
   tasks:
     - name: Get non-management IPs
       ansible.builtin.shell: |
@@ -26,6 +31,10 @@
   vars:
     ping_count: 1
     ping_timeout: 1
+    containerlab_test: false
+    ansible_ssh_common_args: >-
+      {{ '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' if containerlab_test else omit }}
+
   tasks:
     - name: Ping destination IPs until first success
       ansible.builtin.shell: |

@@ -1,0 +1,1 @@
+CONTAINERLAB_TEST = True       # if true the topology is created on containerlab

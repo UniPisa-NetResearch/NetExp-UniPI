@@ -11,6 +11,7 @@ import stat as stat_module
 import platform
 from flask import jsonify, request
 import shutil
+from ..runtime_flags import CONTAINERLAB_TEST
 from ..app import app
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))                      # base project directory
@@ -49,6 +50,26 @@ INPUT_TEMPLATE_CONTENT = r"""- name: Apply per-host commands
         {% endfor %}
       when: commands_map[inventory_hostname] is defined and (commands_map[inventory_hostname] | length > 0)  
 """
+INPUT_TEMPLATE_CONTENT_CONTAINERLAB = r"""- name: Apply per-host commands
+  hosts: all
+  gather_facts: no
+  vars:
+    ansible_ssh_pipelining: true
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+    commands_map:
+      # insert a list of commands after each device
+
+  tasks:
+    - name: Run commands from commands_map
+      vars:
+        cmds: "{{ commands_map[inventory_hostname] | default([]) | map('regex_replace', '^\\s*sudo\\s+', 'sudo -n ') | list}}"
+      ansible.builtin.shell: |
+        {% for c in cmds %}
+        {{ c }}
+        {% endfor %}
+      when: commands_map[inventory_hostname] is defined and (commands_map[inventory_hostname] | length > 0)  
+"""
+
 
 ANSIBLE_EXTRA_ARGS = ""            #  extra args (ex. -c paramiko)
 
@@ -85,9 +106,9 @@ def get_playbook_template_path(kind: str):
     kind = (kind or "").lower()
     # check playbook type
     if kind == "grant":
-        filename = "grant_playbook.yml"
+        filename = "grant_containerlab_playbook.yml" if CONTAINERLAB_TEST else "grant_playbook.yml"
     elif kind == "revoke":
-        filename = "revoke_playbook.yml"
+        filename = "revoke_containerlab_playbook.yml" if CONTAINERLAB_TEST else"revoke_playbook.yml"
     else:
         return None
 
@@ -237,6 +258,25 @@ def run_ansible_playbook(inventory_path: str, playbook_path: str, extra_vars: di
 def create_res_playbook_template(username, reservation_id, devices):
     # function to create template of playbooks that
     # add become properties to playbook
+
+    #template_source = INPUT_TEMPLATE_CONTENT_CONTAINERLAB if CONTAINERLAB_TEST else INPUT_TEMPLATE_CONTENT
+    template_source = INPUT_TEMPLATE_CONTENT
+
+
+    if CONTAINERLAB_TEST:
+        template_source = re.sub(
+            r'(^(\s*)vars:\s*\n)(\s*commands_map:)',
+            lambda m: (
+                m.group(1)
+                + m.group(2) + "  ansible_ssh_pipelining: true\n"
+                + m.group(2) + "  ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'\n"
+                + m.group(3)
+            ),
+            template_source,
+            count=1,
+            flags=re.MULTILINE
+        )
+
     template_with_become = re.sub(
         r'(^\s*- name:\s*Run commands from commands_map\s*\n)(\s*)(vars:)',
         lambda val: (
@@ -250,7 +290,7 @@ def create_res_playbook_template(username, reservation_id, devices):
                 + val.group(2)
                 + "vars:"
         ),
-        INPUT_TEMPLATE_CONTENT,
+        template_source,
         flags=re.MULTILINE
     )
     # ensure controllerPlaybooks dir exists (folder next to BASE_DIR)
@@ -267,7 +307,7 @@ def create_res_playbook_template(username, reservation_id, devices):
     for d in devices:
         host  = d.get("id_device")
         ip = "192.168.15.10"
-        if d.get("role") != "host":
+        if d.get("role") != "host" or CONTAINERLAB_TEST:
             iface = "eth1"
         else:
             iface = "enp1s0"
@@ -319,7 +359,6 @@ def grant_access():
     full_user =data.get("full_user")
     reservation_id = data.get("reservation_id")
     devices = data.get("devices")
-    containerlab_test = data.get("containerlab_test")
 
     if ssh_key is None or user_id is None or username is None or reservation_id is None or devices is None or full_user is None:
         print("grantAccess: missing required fields")
@@ -336,11 +375,11 @@ def grant_access():
     # create inventory file (only devices with ip)
     inv_path, hosts = write_inventory(reservation_id, devices)
     print("Inventory written:", inv_path, "hosts:", hosts)
-
+    """
     if containerlab_test:
         active_reservations[username] = reservation_id
         return jsonify({"ok": True, "message": "Containerlab inventory created"}), 200
-
+    """
     # check grant playbook file
     pb_path = get_playbook_template_path("grant")
     if not pb_path:
@@ -374,7 +413,7 @@ def grant_access():
                 fh.write(str("Original network state, no configurations applied"))
             # run playbook to create snapshots
             playbook_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, "get_snapshot_playbook.yml")
-            extra_vars = {"name": name, "type": "snapshot", "reservation_id": reservation_id}
+            extra_vars = {"name": name, "type": "snapshot", "reservation_id": reservation_id, "containerlab_test": CONTAINERLAB_TEST}
 
             print(f"Running playbook {playbook_path} for snapshot0 (reservation {reservation_id})")
 
@@ -484,7 +523,7 @@ def revoke_access():
         pb_filename = "rollback_playbook.yml"
         pb_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, pb_filename)
         # run rollback playbook with extra_vars required by client
-        extra_vars = {"type": "rollback", "reservation_id": reservation_id, "name": "snapshot0"}
+        extra_vars = {"type": "rollback", "reservation_id": reservation_id, "name": "snapshot0", "containerlab_test": CONTAINERLAB_TEST}
         print(f"Running rollback playbook {pb_path} for snapshot0 (reservation {reservation_id})")
         rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars)
 
@@ -719,7 +758,7 @@ def create_snapshot():
             print("Inventory for reservation not found (will still attempt playbook):", inv_path)
         # run playbook for snapshot creation
         playbook_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, "get_snapshot_playbook.yml")
-        extra_vars = {"name": name, "type": "snapshot", "reservation_id": reservation_id}
+        extra_vars = {"name": name, "type": "snapshot", "reservation_id": reservation_id, "containerlab_test": CONTAINERLAB_TEST}
 
         print(f"Running playbook {playbook_path} for snapshot {name} (reservation {reservation_id})")
 
@@ -784,7 +823,7 @@ def rollback():
     inv_path = os.path.join(INVENTORY_DIR, f"{safe_res_inv}.ini")
 
     # run rollback playbook with extra_vars required by client
-    extra_vars = {"type": "rollback", "reservation_id": reservation_id, "name": name}
+    extra_vars = {"type": "rollback", "reservation_id": reservation_id, "name": name, "containerlab_test": CONTAINERLAB_TEST}
     print(f"Running rollback playbook {pb_path} for snapshot {name} (reservation {reservation_id})")
     rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars)
 

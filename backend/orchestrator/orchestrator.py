@@ -5,6 +5,7 @@ from backend.orchestrator.socketio_instance import socketio
 from backend.orchestrator.orchestrator_jobs import reservation_start_job, reservation_end_job
 from ..database.db import db, User, Reservation, ReservationDevice
 from ..utils import get_next_available_id, resolve_netbox_device
+from ..runtime_flags import CONTAINERLAB_TEST
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from sqlalchemy import tuple_, and_
@@ -26,10 +27,9 @@ NETBOX_TOKEN = os.getenv("NETBOX_TOKEN", "6152fbb91529522c72307b194a690c4ca5253e
 MAX_HOURS = 72
 TEST = True                    # test mode, each reservation starts at current date + 2 min
 TEST_DOUBLE_RES = False        # test two consecutive reservations mode
-CONTAINERLAB_TEST = False      # useful to test pingall
 EXPERIMENT_DURATION = 300      # expressed in minutes
-NETBOX_SITE = "testbed"        # useful to change site of netbox
-#NETBOX_SITE = "containerlab"
+#NETBOX_SITE = "testbed"        # useful to change site of netbox
+NETBOX_SITE = "containerlab"
 TEST_WSL = True                    # test ping using wsl in windows if true
 nb = pynetbox.api(NETBOX_URL, token=NETBOX_TOKEN)
 
@@ -115,8 +115,7 @@ def send_to_controller(msg_type, user_id, reservation_id, job_data):
                         "username": username,
                         "full_user": full_user,
                         "reservation_id": reservation_id,
-                        "devices": devices_list,
-                        "containerlab_test": CONTAINERLAB_TEST
+                        "devices": devices_list
                     }
 
                     # send to controller

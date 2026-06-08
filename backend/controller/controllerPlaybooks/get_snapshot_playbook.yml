@@ -7,6 +7,11 @@
     reservation_id: ""
     type: "configs"        # possibili valori: "configs" o "snapshot"
     name: ""               # usato solo se type == "snapshot"
+    containerlab_test: false
+    ansible_ssh_common_args: >-
+      {{ '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' if containerlab_test else omit }}
+    frr_conf_path: >-
+      {{ '/etc/frr/frr.conf' if containerlab_test else '/etc/sonic/frr/frr.conf' }}
 
   pre_tasks:
     - name: Compute destination base directory according to type
@@ -24,7 +29,7 @@
 
     - name: Fetch frr.conf from devices that are not role 'host'
       ansible.builtin.fetch:
-        src: /etc/sonic/frr/frr.conf
+        src: "{{ frr_conf_path }}"
         dest: "{{ base_dest_dir }}/{{ inventory_hostname }}_frr.conf"
         flat: yes
       when: hostvars[inventory_hostname].get('role', '') != 'host'

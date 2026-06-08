@@ -1,0 +1,312 @@
+# grant_playbook_containerlab.yml
+
+- name: Grant SSH access - containerlab virtual devices
+  hosts: all
+  gather_facts: no
+  become: no
+  strategy: free
+  vars:
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+    # on containerlab mgmt interface of sonic-vs is eth0
+    test: false
+    res_group: resusers
+    full_user: false
+    candidate_cmds:
+      - ip
+      - ping
+      - traceroute
+      - tc
+      - config
+      - vtysh
+      - iperf3
+      - netperf
+      - nping
+      - scapy
+      - tcpreplay
+      - tcpdump
+      - tshark
+
+  tasks:
+    # determine device type (sonic vs host linux)
+    - name: Set device type facts
+      ansible.builtin.set_fact:
+        is_sonic: "{{ hostvars[inventory_hostname].get('role', '') != 'host' }}"
+        # on sonic-vs container and linux host the mgmt is eth0
+        mgmt_iface: "eth0"
+
+    # write mgmt interface on a file for wrapper scripts
+    - name: Write management interface to /etc/res_mgmt_iface
+      ansible.builtin.copy:
+        dest: /etc/res_mgmt_iface
+        content: "{{ mgmt_iface }}\n"
+        owner: root
+        group: root
+        mode: '0644'
+
+    # Deploy of wrapper scripts
+    - block:
+        - name: Deploy res_ip wrapper
+          ansible.builtin.copy:
+            src: "wrappers/res_ip.sh"
+            dest: /usr/local/sbin/res_ip
+            owner: root
+            group: root
+            mode: '0755'
+
+        - name: Deploy res_tc wrapper
+          ansible.builtin.copy:
+            src: "wrappers/res_tc.sh"
+            dest: /usr/local/sbin/res_tc
+            owner: root
+            group: root
+            mode: '0755'
+
+        # vtysh available only on sonic-vs
+        - name: Deploy res_vtysh wrapper (only on SONiC)
+          ansible.builtin.copy:
+            src: "wrappers/res_vtysh.sh"
+            dest: /usr/local/sbin/res_vtysh
+            owner: root
+            group: root
+            mode: '0755'
+          when: is_sonic
+
+        # config available only on sonic-vs
+        - name: Deploy res_config wrapper (only on SONiC)
+          ansible.builtin.copy:
+            src: "wrappers/res_config.sh"
+            dest: /usr/local/sbin/res_config
+            owner: root
+            group: root
+            mode: '0755'
+          when: is_sonic
+
+      when: not full_user | bool
+
+    - name: Set wrapper existence facts
+      ansible.builtin.set_fact:
+        wrapper_exists:
+          res_ip: true
+          res_tc: true
+          res_vtysh: "{{ is_sonic }}"
+          res_config: "{{ is_sonic }}"
+      when: not full_user | bool
+
+    # Create group for reservation users
+    - name: Create reservation users group
+      ansible.builtin.group:
+        name: "{{ res_group }}"
+        state: present
+
+    # Clean previous state (idempotence)
+    - name: Ensure clean state - remove existing user if present
+      block:
+        - name: Remove existing user
+          ansible.builtin.user:
+            name: "{{ username }}"
+            state: absent
+            remove: yes
+            force: yes
+          ignore_errors: yes
+
+        - name: Remove existing sudoers file
+          ansible.builtin.file:
+            path: "/etc/sudoers.d/{{ username }}"
+            state: absent
+          ignore_errors: yes
+
+        - name: Remove existing SSH Match block
+          ansible.builtin.lineinfile:
+            path: /etc/ssh/sshd_config
+            regexp: "^Match User {{ username }}$"
+            state: absent
+          ignore_errors: yes
+
+    # Create reservation user (only SSH key, no password)
+    - name: Create reservation user account
+      ansible.builtin.user:
+        name: "{{ username }}"
+        state: present
+        create_home: yes
+        home: "/home/{{ username }}"
+        shell: /bin/bash
+        password_lock: yes
+        system: no
+        groups: "{{ res_group }}"
+        append: yes
+
+    # retrieve available commands on virtual device
+    - name: Detect available candidate commands
+      ansible.builtin.shell: |
+        for cmd in {{ candidate_cmds | join(' ') }}; do
+          path=$(command -v $cmd 2>/dev/null || true)
+          if [ -n "$path" ]; then
+            echo "${cmd} ${path}"
+          fi
+        done
+      register: which_all
+      changed_when: false
+
+    - name: Build command -> path mapping
+      ansible.builtin.set_fact:
+        found_cmd_paths: "{{ found_cmd_paths | default({}) | combine({item.split()[0]: item.split()[1]}) }}"
+      loop: "{{ which_all.stdout_lines }}"
+      when: item | trim != ''
+
+    # Create missing command list ( vtysh e config already on SONiC)
+    - name: Build list of missing candidate commands (exclude vtysh and config)
+      ansible.builtin.set_fact:
+        missing_cmds: >-
+          {{
+            (candidate_cmds | difference( (found_cmd_paths | default({})).keys() | list ))
+            | difference(['vtysh','config'])
+          }}
+
+    # apt update ignoring errors
+    - name: Run apt update only if cache is old (ignore failure of update_cache)
+      ansible.builtin.apt:
+        update_cache: yes
+        cache_valid_time: 86400
+      ignore_errors: yes
+
+    # Map command -> apt packet
+    - name: Define mapping command -> apt package name
+      ansible.builtin.set_fact:
+        pkg_map:
+          ip: iproute2
+          ping: iputils-ping
+          traceroute: traceroute
+          tc: iproute2
+          iperf3: iperf3
+          netperf: netperf
+          nping: nmap
+          scapy: python3-scapy
+          tcpreplay: tcpreplay
+          tcpdump: tcpdump
+          tshark: tshark
+
+    - name: Create list of packages to install
+      ansible.builtin.set_fact:
+        pkgs_to_install: "{{ missing_cmds | intersect(pkg_map.keys() | list) | map('extract', pkg_map) | list }}"
+
+    # Install asynchronously missing packets
+    - name: Install packages for missing commands (batch)
+      ansible.builtin.apt:
+        name: "{{ pkgs_to_install }}"
+        state: present
+      when: pkgs_to_install | length > 0
+      ignore_errors: yes
+      async: 300
+      poll: 0
+      register: apt_install_async
+
+    # wait for asynchronous completion
+    - name: Wait for package installation to complete
+      async_status:
+        jid: "{{ item.ansible_job_id }}"
+      loop: "{{ apt_install_async.results | default([]) }}"
+      when: apt_install_async is defined and item.ansible_job_id is defined
+      register: apt_install_result
+      until: apt_install_result.finished
+      retries: 60
+      delay: 5
+      ignore_errors: yes
+
+    # Override path with wrapper
+    - name: Override found_cmd_paths to use wrappers
+      ansible.builtin.set_fact:
+        found_cmd_paths_overridden: >-
+          {{
+            found_cmd_paths
+            | combine(
+                ( {'ip': '/usr/local/sbin/res_ip'} if (wrapper_exists.res_ip and (found_cmd_paths.get('ip','') != '')) else {} )
+              )
+            | combine(
+                ( {'tc': '/usr/local/sbin/res_tc'} if (wrapper_exists.res_tc and (found_cmd_paths.get('tc','') != '')) else {} )
+              )
+            | combine(
+                ( {'vtysh': '/usr/local/sbin/res_vtysh'} if (is_sonic and wrapper_exists.res_vtysh and (found_cmd_paths.get('vtysh','') != '')) else {} )
+              )
+            | combine(
+                ( {'config': '/usr/local/sbin/res_config'} if (is_sonic and wrapper_exists.res_config and (found_cmd_paths.get('config','') != '')) else {} )
+              )
+          }}
+      when: not full_user | bool
+
+    - name: Keep original paths for full_user
+      ansible.builtin.set_fact:
+        found_cmd_paths_overridden: "{{ found_cmd_paths | default({}) }}"
+      when: full_user | bool
+
+    - name: Build allowed_bins list
+      ansible.builtin.set_fact:
+        allowed_bins: >-
+          {{
+            (found_cmd_paths_overridden | default(found_cmd_paths)).values()
+            | select('!=', '') | list
+          }}
+
+    # Compose command lists for sudoers
+    - name: Compose sudo alias lists
+      ansible.builtin.set_fact:
+        res_net_cmds: "{{ allowed_bins | select('search','/usr/local/sbin/res_ip$|/bin/ip$|/sbin/ip$|/usr/bin/ip$|/usr/sbin/ip$|/bin/ping$|/usr/bin/ping$|/usr/bin/traceroute$|/sbin/traceroute$|/usr/sbin/tc$|/sbin/tc$|/usr/local/sbin/res_tc$') | list }}"
+        res_config_cmds: "{{ allowed_bins | select('search','/usr/local/sbin/res_config$|/usr/bin/config$|config$|/usr/local/sbin/res_vtysh$|vtysh$') | list }}"
+        res_test_cmds: "{{ allowed_bins | select('search','iperf3$|netperf$|nping$|scapy$|tcpreplay$|tcpdump$|tshark$') | list }}"
+
+    # Install sudoers files for the user
+    - name: Install sudoers file for reservation user
+      ansible.builtin.template:
+        src: sudoers_res.j2
+        dest: "/etc/sudoers.d/{{ username }}"
+        owner: root
+        group: root
+        mode: '0440'
+      notify: validate sudoers
+
+    # Create .ssh directory
+    - name: Ensure .ssh directory exists
+      ansible.builtin.file:
+        path: "/home/{{ username }}/.ssh"
+        state: directory
+        owner: "{{ username }}"
+        group: "{{ username }}"
+        mode: '0700'
+
+    # Add the user SSH public key
+    - name: Add public SSH key to authorized_keys
+      ansible.builtin.authorized_key:
+        user: "{{ username }}"
+        key: "{{ ssh_key }}"
+        state: present
+        path: "/home/{{ username }}/.ssh/authorized_keys"
+
+    - name: Set correct permissions on authorized_keys
+      ansible.builtin.file:
+        path: "/home/{{ username }}/.ssh/authorized_keys"
+        owner: "{{ username }}"
+        group: "{{ username }}"
+        mode: '0600'
+
+    # Disable password authentication for the user in sshd_config
+    - name: Add SSHd Match block to disable password auth for user
+      ansible.builtin.blockinfile:
+        path: /etc/ssh/sshd_config
+        marker: "# {mark} ANSIBLE-RES-{{ username }}"
+        block: |
+          Match User {{ username }}
+            PasswordAuthentication no
+      notify: restart sshd
+
+  handlers:
+    - name: validate sudoers
+      ansible.builtin.command:
+        cmd: visudo -cf /etc/sudoers.d/{{ username }}
+      register: visudo_check
+      failed_when: visudo_check.rc != 0
+
+    # Use 'service' instead of systemctl
+    - name: restart sshd
+      ansible.builtin.shell: |
+        service ssh restart || service sshd restart || true
+      become: yes
+      changed_when: false

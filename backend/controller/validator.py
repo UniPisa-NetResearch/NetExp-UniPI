@@ -5,6 +5,7 @@ import time
 from redis import Redis
 from flask import jsonify, request, send_file, make_response
 from ..database.db import db, User
+from ..runtime_flags import CONTAINERLAB_TEST
 import yaml
 import io
 import re
@@ -99,7 +100,7 @@ def download_template():
         return jsonify({"ok": False, "message": f"Playbook not found: {playbook_path}"}), 500
 
     # run the playbook using the existing inventory
-    extra_vars = {"controller_dest_dir": controller_configs_dir, "type": "configs", "reservation_id": reservation_id}
+    extra_vars = {"controller_dest_dir": controller_configs_dir, "type": "configs", "reservation_id": reservation_id, "containerlab_test": CONTAINERLAB_TEST}
 
     print(f"controller_configs_dir_wsl = {controller_configs_dir}")
     print(f"Expected output dir (Windows) = {full_dest_dir}")
@@ -685,11 +686,12 @@ def run_template():
                 bad_json_files.append({"host": host, "file": file_name, "error": "Top-level JSON is not an object/dict"})
                 continue
 
-            # validate minimal SONiC config structure
-            valid, errors = validate_config_db_minimal(obj)
-            if not valid:
-                bad_json_files.append({"host": host, "file": file_name, "error": "Config_db minimal validation failed", "details": errors})
-                continue
+            if not CONTAINERLAB_TEST:
+                # validate minimal SONiC config structure
+                valid, errors = validate_config_db_minimal(obj)
+                if not valid:
+                    bad_json_files.append({"host": host, "file": file_name, "error": "Config_db minimal validation failed", "details": errors})
+                    continue
 
             parsed_files[host] = (file_name, obj)
 
@@ -775,7 +777,7 @@ def run_template():
     pb_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, pb_filename)
 
     # run rollback playbook with extra_vars required by client
-    extra_vars = {"type": "configs", "reservation_id": reservation_id, "user_configs_folder": user_configs_folder}
+    extra_vars = {"type": "configs", "reservation_id": reservation_id, "user_configs_folder": user_configs_folder, "containerlab_test": CONTAINERLAB_TEST}
     rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars)
 
     # remove temporary folder after execution
@@ -819,7 +821,7 @@ def pingall_test():
     pb_filename = "pingall_test_playbook.yml"
     pb_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, pb_filename)
 
-    extra_vars = {"results_file": folder_path_wsl}
+    extra_vars = {"results_file": folder_path_wsl, "containerlab_test": CONTAINERLAB_TEST}
 
     # execute pingall playbook
     print(f"Running pingall_test_playbook with inventory {inv_path}")
