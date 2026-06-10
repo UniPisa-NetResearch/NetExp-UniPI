@@ -119,6 +119,8 @@
         ansible_become_pass: "{{ nas_password }}"
         ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'      # disables SSH host key verification, automatically accepting unknown host keys, without this, execution would pause and prompt for confirmation on first connection
       run_once: true                                      # create directory only once, not for each device in the inventory
+      ignore_errors: yes
+      ignore_unreachable: yes
 
     - name: Ensure clean state - remove existing user and sudoers if present
       block:
@@ -176,6 +178,7 @@
         ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
       run_once: true
       ignore_errors: yes
+      ignore_unreachable: yes
 
     # create user on NAS with matching UID for NFS permission consistency
     # user has /usr/sbin/nologin shell to prevent SSH access to NAS
@@ -198,6 +201,7 @@
         ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
       run_once: true
       ignore_errors: yes
+      ignore_unreachable: yes
 
     # prepare NAS export directories for each device, ensuring proper group ownership
     # these directories are the source for NFS mounts on devices
@@ -216,6 +220,7 @@
         ansible_become_pass: "{{ nas_password }}"
         ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
       ignore_errors: yes
+      ignore_unreachable: yes
     # ------------------------------------------------------------------
 
     - name: NFS mount operations (skip if device is NAS)
@@ -266,9 +271,12 @@
             state: mounted          # mounts immediately and adds to /etc/fstab
             backup: no
           when: nfs_already_mounted.rc != 0
+          ignore_errors: yes
+          ignore_unreachable: yes
 
       when:
         - nas_ip is defined
+      ignore_errors: yes
     # ------------------------------------------------------------------
     # detect real paths for candidate commands using `command -v`, create a script that perform the command for each value of the list with one ssh connection
     - name: Detect all candidate commands at once

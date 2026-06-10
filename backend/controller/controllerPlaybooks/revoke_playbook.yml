@@ -22,6 +22,8 @@
         ansible_become_pass: "{{ nas_password }}"
         ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
       when: nas_ip is defined
+      ignore_errors: yes
+      ignore_unreachable: yes
 
     - name: Install sshpass if not present
       ansible.builtin.package:
@@ -45,6 +47,7 @@
             path: "{{ nas_mount_base }}/{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}"
           register: nfs_mount_check_copy
           ignore_errors: yes
+          ignore_unreachable: yes
           become: yes
 
         # enforce user quota by calculating total space usage before copy, prevents users from exceeding allocated storage on NAS
@@ -81,6 +84,7 @@
           when:
             - nfs_mount_check_copy.stat.exists|default(false)
           ignore_errors: yes
+          ignore_unreachable: yes
 
         - name: Show quota check details
           ansible.builtin.debug:
@@ -100,6 +104,7 @@
           when:
             - quota_ok.stdout|default('') == 'OK'
           ignore_errors: yes
+          ignore_unreachable: yes
 
         # rollback: remove device directory if quota exceeded after copy
         - name: Rollback if quota exceeded
@@ -134,6 +139,8 @@
              du -sb /reservation_user_data/{{ username }} 2>/dev/null | awk '{print \$1}'"
           register: barrier_size
           when: nas_ip is defined
+          ignore_errors: yes
+          ignore_unreachable: yes
 
         - name: Log barrier checkpoint
           ansible.builtin.debug:
@@ -194,6 +201,7 @@
             - exp_results_check.stat.exists|default(false)
           run_once: true
           ignore_errors: yes
+          ignore_unreachable: yes
 
         - name: Show experimentResults quota check details
           ansible.builtin.debug:
@@ -222,6 +230,8 @@
           when:
             - quota_ok_exp.stdout|default('') == 'OK'
           run_once: true
+          ignore_errors: yes
+          ignore_unreachable: yes
 
         # sync experimentResults from orchestrator to NAS
         - name: Sync experimentResults to NAS
@@ -235,6 +245,7 @@
             - quota_ok_exp.stdout|default('') == 'OK'
           run_once: true
           ignore_errors: yes
+          ignore_unreachable: yes
 
         - name: Log if skipped
           ansible.builtin.debug:
@@ -245,6 +256,8 @@
       when:
         - nas_ip is defined
         - experimenter_results_path is defined
+      ignore_errors: yes
+      ignore_unreachable: yes
 
     - name: NFS cleanup operations
       block:
@@ -253,6 +266,7 @@
             path: "{{ nas_mount_base }}/{{ hostvars[inventory_hostname].get('asset_tag', inventory_hostname) }}"
           register: nfs_mount_check_cleanup
           ignore_errors: yes
+          ignore_unreachable: yes
 
          # kill processes with open files on NFS mount to allow clean unmount
         - name: Stop processes with open files on NFS mount
@@ -264,6 +278,7 @@
             - nfs_mount_check_cleanup.stat is defined
             - nfs_mount_check_cleanup.stat.exists
           ignore_errors: yes
+          ignore_unreachable: yes
 
         # delete all files from NFS share while preserving mount point
         # data already archived to /reservation_user_data on NAS
@@ -275,6 +290,7 @@
             - nfs_mount_check_cleanup.stat is defined
             - nfs_mount_check_cleanup.stat.exists
           ignore_errors: yes
+          ignore_unreachable: yes
           register: nfs_cleanup_result
 
         - name: Log NFS cleanup status
@@ -285,10 +301,13 @@
             - nfs_mount_check_cleanup.stat is defined
             - nfs_mount_check_cleanup.stat.exists
           ignore_errors: yes
+          ignore_unreachable: yes
 
       when:
         - nas_ip is defined
         - nas_mount_base is defined
+      ignore_errors: yes
+      ignore_unreachable: yes
 
     - name: Attempt to kill all processes belonging to the user
       ansible.builtin.shell: |
@@ -357,6 +376,7 @@
         ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
       run_once: true
       ignore_errors: yes
+      ignore_unreachable: yes
 
   handlers:
     - name: restart sshd

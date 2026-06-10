@@ -33,7 +33,7 @@ class Reservation(db.Model):
     startTime = db.Column(db.Time, nullable=False)
     endTime = db.Column(db.Time, nullable=False)
     token = db.Column(db.String(255), nullable=True, default=None)
-
+    is_virtual = db.Column(db.Boolean, nullable=False, default=False)
 
     def __repr__(self):
         return f'<Reservation id={self.id} user={self.username} start={self.start_date} {self.start_time} end={self.end_date} {self.end_time}>'

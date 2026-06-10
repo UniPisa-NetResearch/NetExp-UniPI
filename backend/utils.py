@@ -1,5 +1,5 @@
-from .database.db import db
-import pynetbox
+from .database.db import db, Reservation
+
 
 def get_next_available_id(model_class):
     # Find the first available ID (fills gaps)
@@ -114,3 +114,11 @@ def resolve_netbox_device(dev, nb=None, fetch_interface: bool = False) -> dict:
         result["interface"] = interface
 
     return result
+
+def get_is_virtual_from_db(reservation_id) -> bool:
+    try:
+        res = db.session.get(Reservation, int(reservation_id))
+        return bool(getattr(res, 'is_virtual', False)) if res else False
+    except Exception as e:
+        print(f"Error reading Reservation for reservation {reservation_id}: {e}")
+        return False

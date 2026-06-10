@@ -1,4 +1,4 @@
-import React, {useState, useEffect, useMemo} from 'react';
+import React, {useState, useEffect, useMemo, useRef} from 'react';
 import './style/style.css';
 import './style/reservation.css';
 import { Calendar, momentLocalizer } from 'react-big-calendar';
@@ -103,6 +103,11 @@ export default function Reservation({ username, isReservationActive}) {
   const [devices, setDevices] = useState([]);                   // devices list received from orchestrator
   const [selectedDevices, setSelectedDevices] = useState([]);   // array of asset_tag selected
   const [loadingDevices, setLoadingDevices] = useState(true); // loading state of the device area
+  // virtual or physical topology
+  const [isVirtual, setIsVirtual] = useState(false);
+  const fetchDevicesRequestIdRef = useRef(0);
+  const latestAppliedModeRef = useRef(false);
+
   // minimum allowed date (today)
   const minDate = useMemo(() => formatLocalDate(new Date()), []);
 
@@ -213,6 +218,7 @@ export default function Reservation({ username, isReservationActive}) {
 
   // call endpoint to check device reachability
   const handleDeviceClick = async (deviceKey, primaryIp) => {
+    if (isVirtual) return;
     // if device is unreachable, do nothing
     const device = devices.find(d => (d.asset_tag || d.name) === deviceKey);
     if (!device) return;
@@ -268,6 +274,10 @@ export default function Reservation({ username, isReservationActive}) {
     });
   };
   const handleSelectAll = () => {
+     if (isVirtual) {
+      setSelectedDevices(devices.map((d) => d.asset_tag || d.name));
+      return;
+    }
     const reachableDevices = devices.filter(d => d.reachable !== false);
     const allSelected = reachableDevices.every(d =>
       selectedDevices.includes(d.asset_tag || d.name || '')
@@ -281,28 +291,55 @@ export default function Reservation({ username, isReservationActive}) {
     }
   };
 
+  useEffect(() => {
+    if (isVirtual) {
+      setSelectedDevices(devices.map((d) => d.asset_tag || d.name));
+    }
+  }, [isVirtual, devices]);
+
   // show available devices
-  const fetchDevices = async () => {
-      try {
-        const resp = await fetch('/api/orchestrator/showDevices', { method: 'GET' });
+  const fetchDevices = async (virtualMode = isVirtual) => {
+    const requestId = ++fetchDevicesRequestIdRef.current;
+
+    try {
+        setLoadingDevices(true);
+        setSelectedDevices([]);
+
+        const resp = await fetch(`/api/orchestrator/showDevices?virtual=${virtualMode}`, { method: 'GET' });
         const data = await resp.json().catch(() => ({}));
+        if (requestId !== fetchDevicesRequestIdRef.current) {
+          return;
+        }
+
         if (resp.ok && Array.isArray(data)) {
           setDevices(data);
+
+          if (virtualMode) {
+            setSelectedDevices(data.map((d) => d.asset_tag || d.name));
+          }
+          latestAppliedModeRef.current = virtualMode;
+
         }  else {
           setDevices([]);
+          setSelectedDevices([]);
           console.error('Unexpected devices payload', data);
         }
       } catch (err) {
+         if (requestId !== fetchDevicesRequestIdRef.current) {
+          return;
+        }
         console.error('Error fetching devices', err);
         setDevices([]);
       } finally {
-        setLoadingDevices(false);
+        if (requestId === fetchDevicesRequestIdRef.current) {
+          setLoadingDevices(false);
+        }
       }
     };
   // when the page is loaded, call the function
   useEffect(() => {
-    fetchDevices();
-  }, []);
+    fetchDevices(isVirtual);
+  }, [isVirtual]);
   // delete reservation from GUI and from database
   const deleteReservation = async (reservationId) => {
     try {
@@ -340,8 +377,8 @@ export default function Reservation({ username, isReservationActive}) {
     setSelectedDevices([]);
 
     const devices = selectedDevices.slice();        //array of device selected by user
-    const payload = { username, startDate, startTime, endDate, endTime, devices };
-
+    const payload = { username, startDate, startTime, endDate, endTime, devices, isVirtual };
+    console.log("is_virtual quanto vale? ", isVirtual);
     try {
       const resp = await fetch('/api/orchestrator/checkReservation', {
         method: 'POST',
@@ -786,57 +823,81 @@ export default function Reservation({ username, isReservationActive}) {
                   {/* Device Selection Section */}
                   <div className="form-section device-selection-section">
                     <div className="section-header">
-                      <h3 className="section-title">
-                       Select Devices
-                      </h3>
-                      {!loadingDevices && (
-                        <div className="select-all-container">
-                          <label className="select-all-label">
+                      <h3 className="section-title">Select Devices</h3>
+                      <div className="section-header-actions">
+                        {!loadingDevices && (
+                            <div className="select-all-container">
+                              <label className="select-all-label">
+                                <input
+                                    type="checkbox"
+                                    checked={isVirtual ? devices.length > 0 &&
+                                            devices.every(d => selectedDevices.includes(d.asset_tag || d.name))
+                                            : devices.filter((d) => d.reachable !== false).length > 0 &&
+                                            devices.filter((d) => d.reachable !== false)
+                                            .every(d => selectedDevices.includes(d.asset_tag || d.name))
+                                    }
+                                    onChange={handleSelectAll}
+                                    disabled={isVirtual}
+                                    className="select-all-checkbox"
+                                />
+                                <span>Select All</span>
+                              </label>
+                              <span className="selected-count">({selectedDevices.length} selected)</span>
+                            </div>
+                        )}
+                        <div className="reservation-mode-toggle">
+                          <span className={!isVirtual ? "mode-label active" : "mode-label"}>Physical</span>
+
+                          <label className={loadingDevices ? 'switch disabled' : 'switch'}>
                             <input
-                              type="checkbox"
-                              checked={devices.filter(d => d.reachable !== false).length > 0 &&
-                                       devices.filter(d => d.reachable !== false)
-                                         .every(d => selectedDevices.includes(d.asset_tag || d.name || ''))}
-                              onChange={handleSelectAll}
-                              className="select-all-checkbox"
-                            />
-                            <span>Select All</span>
-                          </label>
-                          <span className="selected-count">({selectedDevices.length} selected)</span>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="device-selection-grid">
-                      {loadingDevices ? (
-                        <div className="loading-message">Loading devices...</div>
-                      ) : (
-                        devices.map((d) => {
-                          const key = `${d.asset_tag || d.name || ''}`;
-                          const selected = selectedDevices.includes(key);
-                          const isReachable = d.reachable !== false;
-
-                          return (
-                            <label key={key} className={`device-select-item ${!isReachable ? 'unavailable' : ''} ${selected ? 'selected' : ''}`}>
-                              <input
                                 type="checkbox"
-                                checked={selected}
-                                onChange={() => isReachable && handleDeviceClick(key, d.primary_ip)}
-                                disabled={!isReachable || !!loadingReachability[key]}
-                                className="device-select-checkbox"
-                              />
-                              {/* device icon e info */}
-                              <span className={`availability-indicator ${isReachable ? 'available' : 'unavailable'}`}>
+                                checked={isVirtual}
+                                disabled={loadingDevices}
+                                onChange={(e) => { if (loadingDevices) return; setIsVirtual(e.target.checked)}}
+                            />
+                            <span className="slider round"></span>
+                          </label>
+
+                          <span className={isVirtual ? "mode-label active" : "mode-label"}>Virtual</span>
+                        </div>
+                      </div>
+                    </div>
+                      <div className="device-selection-grid">
+                        {loadingDevices ? (
+                            <div className="loading-message">Loading devices...</div>
+                        ) : (
+                            devices.map((d) => {
+                              const key = `${d.asset_tag || d.name || ''}`;
+                              const selected = selectedDevices.includes(key);
+                              const isReachable = d.reachable !== false;
+
+                              return (
+                                  <label key={key}
+                                         className={`device-select-item ${!isVirtual && !isReachable ? 'unavailable' : ''} ${selected ? 'selected' : ''} ${isVirtual ? 'locked' : ''}`}>
+                                    <input
+                                        type="checkbox"
+                                        checked={selected}
+                                        onChange={() => {
+                                          if (!isVirtual && isReachable) {
+                                            handleDeviceClick(key, d.primary_ip);
+                                          }
+                                        }}
+                                        disabled={isVirtual || !isReachable || !!loadingReachability[key]}
+                                        className="device-select-checkbox"
+                                    />
+                                    {/* device icon e info */}
+                                    <span
+                                        className={`availability-indicator ${isReachable ? 'available' : 'unavailable'}`}>
                                 {loadingReachability[key] ? '⏳' : (d.asset_tag || d.name)}
                               </span>
-                            </label>
-                          );
-                        })
-                      )}
+                                  </label>
+                              );
+                            })
+                        )}
+                      </div>
                     </div>
-                  </div>
 
-                  <button className="submit-button reservation-button" onClick={handleCheckReservation}
+                    <button className="submit-button reservation-button" onClick={handleCheckReservation}
                           disabled={!isButtonEnabled}>
                     Check Availability & Reserve
                   </button>

@@ -132,27 +132,10 @@
         fi
         sync
         echo "moved=${moved}"
-      register: cp_result
-      failed_when: cp_result.rc != 0
+      register: cp_result_physical
+      failed_when: cp_result_physical.rc != 0
       when:
         - not containerlab_test
-        - hostvars[inventory_hostname].get('role', '') != 'host'
-        - must_configure
-
-    - name: Move only frr.conf into place (containerlab)
-      shell: |
-        set -e
-        moved=0
-        if [ -f /tmp/new_frr.conf ]; then
-          cp /tmp/new_frr.conf {{ frr_conf_path }}
-          sync
-          moved=1
-        fi
-        echo "moved=${moved}"
-      register: cp_result
-      failed_when: cp_result.rc != 0
-      when:
-        - containerlab_test
         - hostvars[inventory_hostname].get('role', '') != 'host'
         - must_configure
 
@@ -164,7 +147,7 @@
         - not containerlab_test
         - hostvars[inventory_hostname].get('role', '') != 'host'
         - must_configure
-        - cp_result.stdout is defined and 'moved=1' in cp_result.stdout
+        - cp_result_physical.stdout is defined and 'moved=1' in cp_result_physical.stdout
 
     - name: Check system health with retries until all services OK (excluding rsync)
       shell: |
@@ -190,7 +173,7 @@
         - not containerlab_test
         - hostvars[inventory_hostname].get('role', '') != 'host'
         - must_configure
-        - cp_result.stdout is defined and 'moved=1' in cp_result.stdout
+        - cp_result_physical.stdout is defined and 'moved=1' in cp_result_physical.stdout
 
     - name: Capture full system-health output for diagnostics
       shell: show system-health sysready-status
@@ -200,7 +183,7 @@
         - not containerlab_test
         - hostvars[inventory_hostname].get('role', '') != 'host'
         - must_configure
-        - cp_result.stdout is defined and 'moved=1' in cp_result.stdout
+        - cp_result_physical.stdout is defined and 'moved=1' in cp_result_physical.stdout
 
     - name: Fail if after retries there are still non-OK services (excluding rsync)
       fail:
@@ -213,7 +196,7 @@
         - not containerlab_test
         - hostvars[inventory_hostname].get('role', '') != 'host'
         - must_configure
-        - cp_result.stdout is defined and 'moved=1' in cp_result.stdout
+        - cp_result_physical.stdout is defined and 'moved=1' in cp_result_physical.stdout
         - (non_ok_count.stdout | default('0') | int) > 0
 
     - name: Move only frr.conf into place (containerlab)
@@ -226,8 +209,8 @@
           moved=1
         fi
         echo "moved=${moved}"
-      register: cp_result
-      failed_when: cp_result.rc != 0
+      register: cp_result_containerlab
+      failed_when: cp_result_containerlab.rc != 0
       when:
         - containerlab_test
         - hostvars[inventory_hostname].get('role', '') != 'host'
@@ -244,7 +227,7 @@
         - containerlab_test
         - hostvars[inventory_hostname].get('role', '') != 'host'
         - must_configure
-        - cp_result.stdout is defined and 'moved=1' in cp_result.stdout
+        - cp_result_containerlab.stdout is defined and 'moved=1' in cp_result_containerlab.stdout
 
     - name: Verify FRR is running after restart
       shell: service frr status
@@ -262,4 +245,4 @@
         - containerlab_test
         - hostvars[inventory_hostname].get('role', '') != 'host'
         - must_configure
-        - cp_result.stdout is defined and 'moved=1' in cp_result.stdout
+        - cp_result_containerlab.stdout is defined and 'moved=1' in cp_result_containerlab.stdout

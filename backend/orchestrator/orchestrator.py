@@ -5,7 +5,6 @@ from backend.orchestrator.socketio_instance import socketio
 from backend.orchestrator.orchestrator_jobs import reservation_start_job, reservation_end_job
 from ..database.db import db, User, Reservation, ReservationDevice
 from ..utils import get_next_available_id, resolve_netbox_device
-from ..runtime_flags import CONTAINERLAB_TEST
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from sqlalchemy import tuple_, and_
@@ -25,16 +24,20 @@ NETBOX_URL = os.getenv("NETBOX_URL", "http://localhost:8080")
 NETBOX_TOKEN = os.getenv("NETBOX_TOKEN", "6152fbb91529522c72307b194a690c4ca5253e93")
 
 MAX_HOURS = 72
-TEST = True                    # test mode, each reservation starts at current date + 2 min
-TEST_DOUBLE_RES = False        # test two consecutive reservations mode
-EXPERIMENT_DURATION = 300      # expressed in minutes
-#NETBOX_SITE = "testbed"        # useful to change site of netbox
-NETBOX_SITE = "containerlab"
-TEST_WSL = True                    # test ping using wsl in windows if true
+TEST = True                             # test mode, each reservation starts at current date + 2 min
+TEST_DOUBLE_RES = False                 # test two consecutive reservations mode
+EXPERIMENT_DURATION = 300               # expressed in minutes
+NETBOX_SITE_PHYSICAL = "testbed"        # netbox site for physical testbed
+NETBOX_SITE_VIRTUAL = "containerlab"    # netbox site for virtual testbed
+TEST_WSL = True                         # test ping using wsl in windows if true
 nb = pynetbox.api(NETBOX_URL, token=NETBOX_TOKEN)
 
 REDIS_URL = "redis://localhost:6379"
 redis = Redis.from_url(REDIS_URL)
+
+# return the correct netbox site
+def get_netbox_site(is_virtual: bool) -> str:
+    return NETBOX_SITE_VIRTUAL if is_virtual else NETBOX_SITE_PHYSICAL
 
 #function to send reservation data to the controller
 def send_to_controller(msg_type, user_id, reservation_id, job_data):
@@ -69,13 +72,21 @@ def send_to_controller(msg_type, user_id, reservation_id, job_data):
                 ssh_key = getattr(user, "ssh_key", None)
                 full_user = getattr(user, "full_user", None)
 
+                res = db.session.get(Reservation, reservation_id)
+                if not res:
+                    print(f"Reservation {reservation_id} not found in DB.")
+                    return
+
+                # retrieve netbox site
+                is_virtual = getattr(res, 'is_virtual', False)
+                netbox_site = get_netbox_site(is_virtual)
+
                 if msg_type == "granted":
                     # assign token to the reservation
-                    res = db.session.get(Reservation, reservation_id)
-                    if res:
-                        res.token = job_data.get("token")
-                        db.session.commit()
-                        print(f"Token saved to DB for reservation {reservation_id}")
+                    res.token = job_data.get("token")
+                    db.session.commit()
+                    print(f"Token saved to DB for reservation {reservation_id}")
+
                     # read reservation devices
                     try:
                         res_devs = ReservationDevice.query.filter_by(reservation_id=reservation_id).all()
@@ -90,10 +101,10 @@ def send_to_controller(msg_type, user_id, reservation_id, job_data):
                         info = {"ip": None, "role": None, "interface": None}
                         try:
                             # try to fetch device by asset_tag first
-                            dev = nb.dcim.devices.get(site=NETBOX_SITE, asset_tag=at)
+                            dev = nb.dcim.devices.get(site=netbox_site, asset_tag=at)
                             if not dev:
                                 # fallback: try by name
-                                devs = nb.dcim.devices.filter(site=NETBOX_SITE, name=at)
+                                devs = nb.dcim.devices.filter(site=netbox_site, name=at)
                                 dev = devs[0] if devs else None
 
                             if dev:
@@ -115,7 +126,8 @@ def send_to_controller(msg_type, user_id, reservation_id, job_data):
                         "username": username,
                         "full_user": full_user,
                         "reservation_id": reservation_id,
-                        "devices": devices_list
+                        "devices": devices_list,
+                        "is_virtual": is_virtual
                     }
 
                     # send to controller
@@ -130,16 +142,13 @@ def send_to_controller(msg_type, user_id, reservation_id, job_data):
 
                 elif msg_type == "revoked":
                     # run rollback if we do not use containerlab
-                    if CONTAINERLAB_TEST:
-                        rollback = False
-                    else:
-                        rollback = True
+                    rollback = not is_virtual
 
                     revoke_payload = {
                         "ssh_key": ssh_key,
                         "username": username,
                         "reservation_id": reservation_id,
-                        "rollback": rollback                       # always run rollback when reservation expires (if the admin revoke the reservation, can choose to run rollback or not)
+                        "rollback": rollback                      # always run rollback when reservation expires (if the admin revoke the reservation, can choose to run rollback or not)
                     }
 
                     try:
@@ -262,9 +271,11 @@ def show_devices():
 
     #Return JSON array of devices for testbed site
     try:
-
+        virtual_param = request.args.get("virtual", "false").strip().lower()
+        is_virtual = virtual_param == "true"
+        netbox_site = get_netbox_site(is_virtual)
         # retrieve devices from testbed site
-        devices = nb.dcim.devices.filter(site=NETBOX_SITE)
+        devices = nb.dcim.devices.filter(site=netbox_site)
 
         out = []
         for d in devices:
@@ -302,7 +313,7 @@ def all_reservations():
         app.logger.error(f"Error fetching all reservations: {e}")
         return jsonify({"message": "Error fetching reservations"}), 500
 
-def create_reservation(reservation, next_id, username, start_dt, end_dt):
+def create_reservation(reservation, next_id, username, start_dt, end_dt, is_virtual=False):
 
     res = reservation(
         id=next_id,
@@ -311,7 +322,8 @@ def create_reservation(reservation, next_id, username, start_dt, end_dt):
         endDate=end_dt.date(),
         startTime=start_dt.time().replace(second=0, microsecond=0),
         endTime=end_dt.time().replace(second=0, microsecond=0),
-        token=None
+        token=None,
+        is_virtual=is_virtual
     )
     return res
 
@@ -335,7 +347,8 @@ def check_reservation():
     end_date = data.get('endDate')
     end_time = data.get('endTime')
     devices = data.get('devices', [])
-
+    is_virtual = bool(data.get("isVirtual", False))
+    print("is_virtual= ", is_virtual)
     # basic validations
     if not all([username, start_date, start_time, end_date, end_time]):
         return jsonify({"ok": False, "message": "Missing fields"}), 400
@@ -360,7 +373,7 @@ def check_reservation():
 
         # create first reservation
         next_id_1 = get_next_available_id(Reservation)
-        res1 = create_reservation(Reservation, next_id_1, username, first_start_dt, first_end_dt)
+        res1 = create_reservation(Reservation, next_id_1, username, first_start_dt, first_end_dt, is_virtual)
 
         db.session.add(res1)
         reservation_id = res1.id
@@ -372,7 +385,7 @@ def check_reservation():
 
         # create second reservation for verstappen
         next_id_2 = get_next_available_id(Reservation)
-        res2 = create_reservation(Reservation, next_id_2, "verstappen", second_start_dt, second_end_dt)
+        res2 = create_reservation(Reservation, next_id_2, "verstappen", second_start_dt, second_end_dt, is_virtual)
 
         db.session.add(res2)
         db.session.flush()
@@ -493,7 +506,7 @@ def check_reservation():
     # Get next available ID (fills gaps)
     next_id = get_next_available_id(Reservation)
     # no conflict found, reservation creation
-    new_res = create_reservation(Reservation, next_id, username, start_dt, end_dt)
+    new_res = create_reservation(Reservation, next_id, username, start_dt, end_dt, is_virtual)
 
     db.session.add(new_res)
     try:
@@ -644,6 +657,7 @@ def get_active_reservation_status():
             "isActive": True,
             "token": active_reservation.token,
             "reservation_id": active_reservation.id,
+            #"is_virtual": active_reservation.is_virtual,
             # SO string: YYYY-MM-DDTHH:MM:SS
             "expires_at": f"{active_reservation.endDate.isoformat()}T{active_reservation.endTime.strftime('%H:%M:%S')}"
         }), 200
