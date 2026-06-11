@@ -357,25 +357,6 @@ def grant_access():
     inv_path, hosts = write_inventory(reservation_id, devices)
     print("Inventory written:", inv_path, "hosts:", hosts)
 
-    if is_virtual:
-        clab_pb_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, "manage_clab_topology_playbook.yml")
-        if not os.path.exists(clab_pb_path):
-            return jsonify({"ok": False, "message": "manage_clab_topology_playbook.yml missing on controller"}), 500
-
-        topo_src = os.path.join(CONTAINERLAB_TOPO_DIR, "topology.clab.yaml")
-
-        sonic_vs_containers = [
-            f"clab-virtualTopology-{d.get('id_device')[1:] if d.get('id_device', '').startswith('c') else d.get('id_device')}"
-            for d in devices
-            if d.get("role", "").lower() != "host"
-        ]
-        clab_extra_vars = {"reservation_id": reservation_id, "action": "deploy", "topology_src": topo_src if not TEST else win_to_wsl_path(topo_src), "sonic_vs_containers": sonic_vs_containers}
-
-        rc, out, err = run_ansible_playbook(inv_path, clab_pb_path, extra_vars=clab_extra_vars)
-
-        if rc != 0:
-            return jsonify({"ok": False, "message": "Containerlab topology deploy failed", "rc": rc, "stdout": out, "stderr": err}), 500
-
     # check grant playbook file
     pb_path = get_playbook_template_path("grant", is_virtual=is_virtual)
     if not pb_path:
@@ -529,19 +510,6 @@ def revoke_access():
             return jsonify({"ok": False, "message": f"Rollback playbook failed (rc={rc}, stdout={out}, stderr={err})"}), 500
 
         print("Successful rollback playbook")
-
-    # destroy topology if virtual deployment
-    if is_virtual:
-        clab_pb_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, "manage_clab_topology_playbook.yml")
-        if not os.path.exists(clab_pb_path):
-            return jsonify({"ok": False, "message": "manage_clab_topology_playbook.yml missing on controller"}), 500
-
-        clab_extra_vars = {"reservation_id": reservation_id, "action": "destroy"}
-
-        rc, out, err = run_ansible_playbook(inv_path, clab_pb_path, extra_vars=clab_extra_vars)
-
-        if rc != 0:
-            return jsonify({"ok": False, "message": "Containerlab topology destroy failed", "rc": rc, "stdout": out, "stderr": err}), 500
 
     # delete inventory and playbook files
     # remove inventory file
