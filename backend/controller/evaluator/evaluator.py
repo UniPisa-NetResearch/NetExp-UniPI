@@ -8,10 +8,8 @@ from stat import S_ISDIR, S_ISREG
 from flask import request, send_file, jsonify
 from ...database.db import Experiment
 from ..experimenter.experimenter import EXPERIMENT_RESULTS_DIR
-from ...controller.controller import NAS_IP, MINIPC_USER, MINIPC_PASS
 from ...app import app
-
-NAS_EXPORT_BASE = "/export"
+from ...config import NAS_EXPORT_BASE, NAS_IP, MINIPC_USER, MINIPC_PASS
 
 @app.route('/api/evaluator/getExperimentResults', methods=['POST'])
 def get_experiment_results():

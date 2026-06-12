@@ -1,10 +1,10 @@
 import uuid
 from ..database.db import db, Reservation, User
 from ..app import create_app
+from ..config import REDIS_URL
 import json
 from redis import Redis
 
-REDIS_URL = "redis://localhost:6379"
 r = Redis.from_url(REDIS_URL)
 
 def reservation_start_job(reservation_id):
