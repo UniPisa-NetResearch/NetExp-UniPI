@@ -1,7 +1,7 @@
 from flask import Flask
 from flask_cors import CORS
 from backend.database.db import db
-from config import DB_USER, DB_PASSWORD, DB_HOST, DB_NAME, DB_PORT, FRONTEND_URL
+from .config import DB_USER, DB_PASSWORD, DB_HOST, DB_NAME, DB_PORT, FRONTEND_URL
 
 def create_app():
     application = Flask(__name__)
