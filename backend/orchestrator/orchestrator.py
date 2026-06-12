@@ -9,7 +9,6 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from sqlalchemy import tuple_, and_
 from sqlalchemy.exc import SQLAlchemyError
-import os
 import pynetbox
 from redis import Redis
 from redis.lock import Lock
@@ -19,20 +18,15 @@ import requests
 import subprocess
 import ipaddress
 from ..app import app
-
-NETBOX_URL = os.getenv("NETBOX_URL", "http://localhost:8080")
-NETBOX_TOKEN = os.getenv("NETBOX_TOKEN", "6152fbb91529522c72307b194a690c4ca5253e93")
+from ..config import NETBOX_URL, NETBOX_TOKEN, NETBOX_SITE_PHYSICAL, NETBOX_SITE_VIRTUAL, REDIS_URL, CONTROLLER_URL, FRONTEND_URL, LOCAL_TEST
 
 MAX_HOURS = 72
 TEST = True                             # test mode, each reservation starts at current date + 2 min
 TEST_DOUBLE_RES = False                 # test two consecutive reservations mode
 EXPERIMENT_DURATION = 300               # expressed in minutes
-NETBOX_SITE_PHYSICAL = "testbed"        # netbox site for physical testbed
-NETBOX_SITE_VIRTUAL = "containerlab"    # netbox site for virtual testbed
-TEST_WSL = True                         # test ping using wsl in windows if true
+
 nb = pynetbox.api(NETBOX_URL, token=NETBOX_TOKEN)
 
-REDIS_URL = "redis://localhost:6379"
 redis = Redis.from_url(REDIS_URL)
 
 # return the correct netbox site
@@ -132,7 +126,7 @@ def send_to_controller(msg_type, user_id, reservation_id, job_data):
 
                     # send to controller
                     try:
-                        resp = requests.post("http://localhost:5002/api/controller/grantAccess", json=grant_payload, timeout=420)
+                        resp = requests.post(f"{CONTROLLER_URL}/api/controller/grantAccess", json=grant_payload, timeout=420)
                         if resp.status_code == 200:
                             print(f"grantAccess successful for user {user_id} reservation {reservation_id}: {resp.status_code}")
                         else:
@@ -152,7 +146,7 @@ def send_to_controller(msg_type, user_id, reservation_id, job_data):
                     }
 
                     try:
-                        resp = requests.post("http://localhost:5002/api/controller/revokeAccess", json=revoke_payload, timeout=420)
+                        resp = requests.post(f"{CONTROLLER_URL}/api/controller/revokeAccess", json=revoke_payload, timeout=420)
                         if resp.status_code == 200:
                             print(f"revokeAccess successful for user {user_id} reservation {reservation_id}: {resp.status_code}")
                         else:
@@ -211,7 +205,7 @@ def _redis_listener():
         # send data to controller
         send_to_controller(msg_type, user_id, reservation_id, data)
 
-socketio.init_app(app, cors_allowed_origins="http://localhost:5173")
+socketio.init_app(app, cors_allowed_origins=FRONTEND_URL)
 import backend.orchestrator.orchestrator_ws_server                   # necessary to import socket handler after socketio initialization
 eventlet.spawn(_redis_listener)
 
@@ -245,7 +239,7 @@ def ping_host(ip, count=2, per_ping_timeout=2, overall_timeout=5):
         ipaddress.ip_address(ip)
     except ValueError:
         return False
-    if TEST_WSL:
+    if LOCAL_TEST:
         cmd = ["wsl", "ping", "-c", str(count), "-W", str(per_ping_timeout), str(ip)]
     else:
         cmd = ["ping", "-c", str(count), "-W", str(per_ping_timeout), str(ip)]

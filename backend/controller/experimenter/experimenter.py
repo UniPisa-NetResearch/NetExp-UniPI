@@ -15,8 +15,9 @@ from ...database.db import db, UserMetrics, Reservation, Experiment
 from pygnmi.client import gNMIclient
 from ...app import app
 from ...utils import get_next_available_id, parse_inventory
-from ..controller import (safe_filename, INVENTORY_DIR, TEST)
+from ..controller import (safe_filename, INVENTORY_DIR)
 from .experimenter_utils import (ensure_experiment_dirs, save_experiment_template, build_gnmi_path, collect_telemetry_data, convert_iperf_experiment_to_schedule, execute_experiment_schedule, validate_experiment_template_schema, finish_cleanup_and_remove, finalize_batch_results)
+from ...config import LOCAL_TEST
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 EXPERIMENT_TEMPLATES_DIR = os.path.join(BASE_DIR, "experimentTemplates")
@@ -966,7 +967,7 @@ def run_experiment():
                       reservation_id, username,
                             name_exp, data_exp, inventory_path,
                             EXPERIMENT_RESULTS_DIR, EXPERIMENT_PLAYBOOKS_DIR,
-                            running_experiments, experiments_lock, TEST,is_batch
+                            running_experiments, experiments_lock, LOCAL_TEST,is_batch
                         )
                         # telemetry worker
                         telemetry_future = executor.submit(

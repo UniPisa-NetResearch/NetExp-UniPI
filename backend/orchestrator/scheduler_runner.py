@@ -4,6 +4,7 @@ from redis import Redis
 from rq import Queue
 from datetime import datetime
 import logging
+from ..config import REDIS_URL
 
 logging.basicConfig(
     level=logging.INFO,
@@ -11,7 +12,6 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 
-REDIS_URL = "redis://localhost:6379"
 POLL_INTERVAL = 1  # seconds
 QUEUE_NAME = "default"
 

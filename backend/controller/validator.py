@@ -12,6 +12,7 @@ import zipfile
 import jsonschema
 from jsonschema import ValidationError
 from ..app import app
+from ..config import LOCAL_TEST, REDIS_HOST, REDIS_PORT, REDIS_DB
 from ..utils import parse_inventory, get_is_virtual_from_db
 from .controller import (
     ensure_inventory_dir, safe_filename, run_ansible_playbook, win_to_wsl_path,
@@ -20,12 +21,9 @@ from .controller import (
     USER_PLAYBOOKS_DIR,
     USER_CONFIGS_DIR
 )
-# true if development mode is active
-TEST = True
+
 # Redis connection
-REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.environ.get("REDIS_PORT", 6379))
-redis_conn = Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
+redis_conn = Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
 
 def get_inventory_path(reservation_id):
     inv_dir = ensure_inventory_dir()
@@ -88,7 +86,7 @@ def download_template():
 
     # if test mode, convert path to wsl
     full_dest_dir = os.path.join(CONTROLLER_CONFIGS_DIR, f"res_{reservation_id}_running_configs")
-    if TEST:
+    if LOCAL_TEST:
         controller_configs_dir = win_to_wsl_path(full_dest_dir)
     else:
         controller_configs_dir = full_dest_dir
@@ -756,7 +754,7 @@ def run_template():
             print(f"DEBUG: Extracted files to: {tmp_folder_path}")
             print(f"DEBUG: Files extracted: {os.listdir(tmp_folder_path)}")
 
-        if TEST:
+        if LOCAL_TEST:
             tmp_folder_path_wsl = win_to_wsl_path(tmp_folder_path)
             print(f"DEBUG: tmp_folder_path_wsl = {tmp_folder_path_wsl}")
         else:
@@ -769,7 +767,7 @@ def run_template():
         shutil.rmtree(tmp_folder_path)
         return {"ok": False, "message": f"Failed to extract zip: {e}"}, 500
 
-    if TEST:
+    if LOCAL_TEST:
         user_configs_folder = tmp_folder_path_wsl
     else:
         user_configs_folder = tmp_folder_path
@@ -818,7 +816,7 @@ def pingall_test():
     local_results_filename = f"pingall_res_{reservation_id}.json"
     local_results_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, local_results_filename)
 
-    if TEST:
+    if LOCAL_TEST:
        folder_path_wsl = win_to_wsl_path(local_results_path)
     else:
        folder_path_wsl = local_results_path.replace('\\', '/')

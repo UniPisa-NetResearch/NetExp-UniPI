@@ -13,6 +13,7 @@ from flask import jsonify, request
 import shutil
 from ..utils import get_is_virtual_from_db
 from ..app import app
+from ..config import LOCAL_TEST, SONIC_USER, SONIC_PASS, MINIPC_USER, MINIPC_PASS, NAS_IP, NAS_MOUNT_BASE, NFS_OPTS, USER_QUOTA_BYTES
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))                      # base project directory
 # every controller directory
@@ -54,18 +55,9 @@ INPUT_TEMPLATE_CONTENT = r"""- name: Apply per-host commands
 
 ANSIBLE_EXTRA_ARGS = ""            #  extra args (ex. -c paramiko)
 
-# default credentials per role
-SONIC_USER = "admin"
-SONIC_PASS = "YourPaSsWoRd"
-MINIPC_USER = "oem"
-MINIPC_PASS = "oem123"
-NAS_IP = "192.168.1.166"            # IP of the nfs server
-NAS_MOUNT_BASE = "/mnt/nas"         # local mount point on devices
-NFS_OPTS = "rw,sync,hard,intr,timeo=600,retrans=2"
 active_reservations = {}    # dictionary that contains active and usable (after key insertion) reservation
-TEST = True                 # if true uses wsl on windows (/mnt), otherwise normal paths
+#TEST = True                 # if true uses wsl on windows (/mnt), otherwise normal paths
 IS_WINDOWS = platform.system() == 'Windows'
-USER_QUOTA_BYTES =536870912
 
 def safe_filename(name: str) -> str:
     # sanitize a string for use as filename
@@ -154,7 +146,7 @@ def win_to_wsl_path(path):
 
 def run_ansible_playbook(inventory_path: str, playbook_path: str, extra_vars: dict = None, timeout: int = 900, remote_user: str = None):
     # function to run ansible-playbook
-    if TEST:
+    if LOCAL_TEST:
         inv_path_wsl = win_to_wsl_path(inventory_path)  #convert paths if test mode, otherwise use normal path
         pb_path_wsl = win_to_wsl_path(playbook_path)
 
@@ -484,7 +476,7 @@ def revoke_access():
         return jsonify({"ok": False, "message": "Revoke playbook template missing on controller"}), 500
     print("Using revoke playbook:", pb_path)
 
-    if TEST:
+    if LOCAL_TEST:
         experimenter_results_path = win_to_wsl_path(exp_results_path)
     else:
         experimenter_results_path = exp_results_path
