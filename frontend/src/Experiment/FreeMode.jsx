@@ -21,7 +21,7 @@ export default function FreeMode({
     const downloadExperimentTemplate = async () => {
         setWaitOperation(true);
         try {
-            const response = await fetch(`http://localhost:5004/api/experimenter/downloadTemplate`, {
+            const response = await fetch('/api/experimenter/downloadTemplate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -67,7 +67,7 @@ export default function FreeMode({
         // check if file already exists
         const filename = templateFile.name;
         try {
-            const checkResponse = await fetch('http://localhost:5004/api/experimenter/checkFileExists', {
+            const checkResponse = await fetch('/api/experimenter/checkFileExists', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
@@ -102,7 +102,7 @@ export default function FreeMode({
         setTemplateValidation({ message: 'Validating...', type: '' });
 
         try {
-            const response = await fetch('http://localhost:5004/api/experimenter/validateTemplate', {
+            const response = await fetch('/api/experimenter/validateTemplate', {
                 method: 'POST',
                 body: formData
             });

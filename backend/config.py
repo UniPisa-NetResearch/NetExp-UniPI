@@ -15,7 +15,7 @@ REDIS_URL = "redis://172.16.4.77:6379"
 NETBOX_HOST = "172.16.4.77"
 NETBOX_PORT = 8080
 NETBOX_URL = "http://172.16.4.77:8080"
-NETBOX_TOKEN = "6152fbb91529522c72307b194a690c4ca5253e93"
+NETBOX_TOKEN = "WpM1oQ5v5EJGbrsnMP8XUJPwBYOQCME80NwsGNYa"
 NETBOX_SITE_PHYSICAL = "testbed"                            # netbox site for physical testbed
 NETBOX_SITE_VIRTUAL = "containerlab"                        # netbox site for virtual testbed
 

@@ -285,7 +285,7 @@ function App() {
 
         try {
             // Check running experiment
-            const statusResponse = await fetch('http://localhost:5004/api/experimenter/getExperimentStatus', {
+            const statusResponse = await fetch('/api/experimenter/getExperimentStatus', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ reservation_id: reservationId })
@@ -302,7 +302,7 @@ function App() {
             }
 
             // Check available results
-            const resultsResponse = await fetch('http://localhost:5005/api/evaluator/getExperimentResults', {
+            const resultsResponse = await fetch('/api/evaluator/getExperimentResults', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ reservation_id: reservationId })

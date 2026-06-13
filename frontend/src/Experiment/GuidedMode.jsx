@@ -280,7 +280,7 @@ export default function GuidedMode({
 
         const filename = `${guidedExperimentName.trim().toLowerCase().replace(/ /g, '_')}.yml`;
         try {
-            const checkResponse = await fetch('http://localhost:5004/api/experimenter/checkFileExists', {
+            const checkResponse = await fetch('/api/experimenter/checkFileExists', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
@@ -306,7 +306,7 @@ export default function GuidedMode({
 
         setWaitOperation(true);
         try {
-            const response = await fetch('http://localhost:5004/api/experimenter/createIperfExperiment', {
+            const response = await fetch('/api/experimenter/createIperfExperiment', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

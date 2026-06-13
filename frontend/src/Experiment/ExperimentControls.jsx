@@ -47,7 +47,7 @@ export default function ExperimentControls({
         if (batchMode && selectedExperiments.length > 0) {
             const fetchDurations = async () => {
                 try {
-                    const response = await fetch('http://localhost:5004/api/experimenter/calculateBatchDuration', {
+                    const response = await fetch('/api/experimenter/calculateBatchDuration', {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({
@@ -81,7 +81,7 @@ export default function ExperimentControls({
             if (!reservation_id) return;
 
             try {
-                const response = await fetch('http://localhost:5004/api/experimenter/getExperimentStatus', {
+                const response = await fetch('/api/experimenter/getExperimentStatus', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ reservation_id })
@@ -200,7 +200,7 @@ export default function ExperimentControls({
                             setExperimentRunMessageType('success');
 
                             // update the experiment status on database if it is ended
-                            fetch('http://localhost:5004/api/experimenter/updateExperimentStatus', {
+                            fetch('/api/experimenter/updateExperimentStatus', {
                                 method: 'POST',
                                 headers: {'Content-Type': 'application/json'},
                                 body: JSON.stringify({
@@ -297,7 +297,7 @@ export default function ExperimentControls({
     // check cleanup status
     const pollCleanupStatus = async (expId, expName) => {
         try {
-            const response = await fetch('http://localhost:5004/api/experimenter/getExperimentStatus', {
+            const response = await fetch('/api/experimenter/getExperimentStatus', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ reservation_id })
@@ -375,7 +375,7 @@ export default function ExperimentControls({
                 payload.experiment_name = selectedExp ? selectedExp.label : selectedExperimentDefinitionRun;
             }
 
-            const response = await fetch('http://localhost:5004/api/experimenter/runExperiment', {
+            const response = await fetch('/api/experimenter/runExperiment', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
@@ -424,7 +424,7 @@ export default function ExperimentControls({
                         setExperimentRunMessageType('success');
 
                         // experiment completed, update status
-                        fetch('http://localhost:5004/api/experimenter/updateExperimentStatus', {
+                        fetch('/api/experimenter/updateExperimentStatus', {
                             method: 'POST',
                             headers: {'Content-Type': 'application/json'},
                             body: JSON.stringify({
@@ -484,7 +484,7 @@ export default function ExperimentControls({
         setIsExperimentStopping(true);
 
         try {
-            const response = await fetch('http://localhost:5004/api/experimenter/finishExperiment', {
+            const response = await fetch('/api/experimenter/finishExperiment', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ reservation_id })
