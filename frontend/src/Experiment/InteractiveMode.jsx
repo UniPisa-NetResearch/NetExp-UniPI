@@ -242,7 +242,7 @@ export default function InteractiveMode({
     // download iperf3 and nfs example playbook
     const downloadIperfExample = async () => {
         try {
-            const response = await fetch('http://localhost:5004/api/experimenter/downloadTemplate', {
+            const response = await fetch('/api/experimenter/downloadTemplate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -382,7 +382,7 @@ export default function InteractiveMode({
 
         const filename = `${experimentName.trim().toLowerCase().replace(/ /g, '_')}.yml`;
         try {
-            const checkResponse = await fetch('http://localhost:5004/api/experimenter/checkFileExists', {
+            const checkResponse = await fetch('/api/experimenter/checkFileExists', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
@@ -425,7 +425,7 @@ export default function InteractiveMode({
 
         setWaitOperation(true);
         try {
-            const response = await fetch('http://localhost:5004/api/experimenter/createExperiment', {
+            const response = await fetch('/api/experimenter/createExperiment', {
                 method: 'POST',
                 body: formData
             });

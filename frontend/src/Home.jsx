@@ -672,7 +672,7 @@ const AdminReservationManager = () => {
                 if (response.ok) {
                     // call the cleanup of in memory and file reservation active status
                     try {
-                        const cleanupResponse = await fetch('http://localhost:5002/api/controller/cleanupReservation', {
+                        const cleanupResponse = await fetch('/api/controller/cleanupReservation', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
@@ -720,7 +720,7 @@ const AdminReservationManager = () => {
                 const sshKey = userData.ssh_key;
 
                 // call revoke_access
-                const revokeResponse = await fetch('http://localhost:5002/api/controller/revokeAccess', {
+                const revokeResponse = await fetch('/api/controller/revokeAccess', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({

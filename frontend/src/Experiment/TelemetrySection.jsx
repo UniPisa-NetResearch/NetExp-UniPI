@@ -233,7 +233,7 @@ export default function TelemetrySection({
         console.log("Check metrics on switch: ", switchDevice.ip);
 
         try {
-            const response = await fetch('http://localhost:5004/api/experimenter/addMetrics', {
+            const response = await fetch('/api/experimenter/addMetrics', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
@@ -267,7 +267,7 @@ export default function TelemetrySection({
                     return newRows;
                 });
                 // update user metrics list
-                const metricsResponse = await fetch('http://localhost:5004/api/experimenter/getUserMetrics', {
+                const metricsResponse = await fetch('/api/experimenter/getUserMetrics', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({username})
@@ -373,7 +373,7 @@ export default function TelemetrySection({
 
         const filename = `${telemetryBaseName}.yml`;
         try {
-            const checkResponse = await fetch('http://localhost:5004/api/experimenter/checkFileExists', {
+            const checkResponse = await fetch('/api/experimenter/checkFileExists', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
@@ -419,7 +419,7 @@ export default function TelemetrySection({
 
         setWaitOperation(true);
         try {
-            const res = await fetch('http://localhost:5004/api/experimenter/createTelemetryFile', {
+            const res = await fetch('/api/experimenter/createTelemetryFile', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
