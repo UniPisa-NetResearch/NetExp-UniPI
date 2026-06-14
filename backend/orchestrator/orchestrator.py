@@ -18,7 +18,7 @@ import requests
 import subprocess
 import ipaddress
 from ..app import app
-from ..config import NETBOX_URL, NETBOX_TOKEN, NETBOX_SITE_PHYSICAL, NETBOX_SITE_VIRTUAL, REDIS_URL, CONTROLLER_URL, FRONTEND_URL, LOCAL_TEST
+from ..config import NETBOX_URL, NETBOX_TOKEN, NETBOX_SITE_PHYSICAL, NETBOX_SITE_VIRTUAL, REDIS_URL, REDIS_QUEUE_NAME, CONTROLLER_URL, FRONTEND_URL, LOCAL_TEST
 
 MAX_HOURS = 72
 TEST = True                             # test mode, each reservation starts at current date + 2 min
@@ -210,7 +210,8 @@ import backend.orchestrator.orchestrator_ws_server                   # necessary
 eventlet.spawn(_redis_listener)
 
 # to create a new queue with a specific name use: Queue(name='high', connection=Redis())
-queue = Queue(connection=Redis())
+redis_connection = Redis.from_url(REDIS_URL)
+queue = Queue(REDIS_QUEUE_NAME, connection=redis_connection)
 
 def serialize_reservation(reservation):
 
