@@ -10,6 +10,7 @@ REDIS_HOST = "172.16.4.77"
 REDIS_PORT = 6379
 REDIS_DB = 0
 REDIS_URL = "redis://172.16.4.77:6379"
+REDIS_QUEUE_NAME = "default"
 
 # netbox connection parameters
 NETBOX_HOST = "172.16.4.77"

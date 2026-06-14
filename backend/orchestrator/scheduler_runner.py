@@ -4,7 +4,7 @@ from redis import Redis
 from rq import Queue
 from datetime import datetime
 import logging
-from ..config import REDIS_URL
+from ..config import REDIS_URL, REDIS_QUEUE_NAME
 
 logging.basicConfig(
     level=logging.INFO,
@@ -13,18 +13,17 @@ logging.basicConfig(
 )
 
 POLL_INTERVAL = 1  # seconds
-QUEUE_NAME = "default"
 
 def move_scheduled_jobs_to_queue():
     # move ready jobs in main queue
     redis_connection = Redis.from_url(REDIS_URL)
-    queue = Queue(QUEUE_NAME, connection=redis_connection)
+    queue = Queue(REDIS_QUEUE_NAME, connection=redis_connection)
 
     current_timestamp = time.time()
     moved_count = 0
 
     # access to the Redis sorted set
-    key_scheduled = f"rq:scheduled:{QUEUE_NAME}"
+    key_scheduled = f"rq:scheduled:{REDIS_QUEUE_NAME}"
 
     # get every job with score <= current_timestamp
     # ZRANGEBYSCORE returns: [(job_id, score), ...]
@@ -80,7 +79,7 @@ if __name__ == '__main__':
         redis_conn.ping()
         logging.info("Redis connection succeeded")
 
-        scheduled_key = f"rq:scheduled:{QUEUE_NAME}"
+        scheduled_key = f"rq:scheduled:{REDIS_QUEUE_NAME}"
         count = redis_conn.zcard(scheduled_key)
         logging.info(f"Scheduled jobs: {count}")
 

@@ -9,6 +9,9 @@ import Configuration from './Configuration.jsx';
 import Experiment from "./Experiment.jsx";
 import Evaluation from "./Evaluation.jsx";
 
+const ORCHESTRATOR_URL = import.meta.env.VITE_ORCHESTRATOR_URL;
+
+
 const ProtectedPageGuard = ({ isReservationActive, isAccessGranted, children }) => {
   const navigate = useNavigate();
 
@@ -182,10 +185,10 @@ function App() {
 
         if (!isAuthenticated || !currentUser || !currentUserId) return;
 
-        const serverUrl = "http://localhost:5001"; // orchestrator socket server
+        //const serverUrl = "http://localhost:5001"; // orchestrator socket server
 
         // create socket and connect
-        const socket = io(serverUrl, {
+        const socket = io(ORCHESTRATOR_URL, {
           transports: ["websocket"],
           autoConnect: true,
           reconnectionAttempts: 5,
