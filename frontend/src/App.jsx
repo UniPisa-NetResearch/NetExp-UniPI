@@ -182,7 +182,7 @@ function App() {
 
         if (!isAuthenticated || !currentUser || !currentUserId) return;
 
-        const serverUrl = "http://localhost:5001"; // orchestrator socket server
+        const serverUrl = "http://172.16.2.21:5001"; // orchestrator socket server
 
         // create socket and connect
         const socket = io(serverUrl, {
