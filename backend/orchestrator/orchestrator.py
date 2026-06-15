@@ -1,5 +1,6 @@
-import eventlet
-eventlet.monkey_patch()
+from gevent import monkey
+monkey.patch_all()          
+import gevent
 from flask import jsonify, request
 from backend.orchestrator.socketio_instance import socketio
 from backend.orchestrator.orchestrator_jobs import reservation_start_job, reservation_end_job
@@ -207,7 +208,7 @@ def _redis_listener():
 
 socketio.init_app(app, cors_allowed_origins=FRONTEND_URL)
 import backend.orchestrator.orchestrator_ws_server                   # necessary to import socket handler after socketio initialization
-eventlet.spawn(_redis_listener)
+gevent.spawn(_redis_listener)
 
 # to create a new queue with a specific name use: Queue(name='high', connection=Redis())
 redis_connection = Redis.from_url(REDIS_URL)

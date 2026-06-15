@@ -5,5 +5,6 @@ socketio = SocketIO(
     #logger=True,
     cors_allowed_origins=FRONTEND_URL,
     message_queue=REDIS_URL,
-    async_mode='eventlet'
+    async_mode='gevent',
+    manage_session=False
 )

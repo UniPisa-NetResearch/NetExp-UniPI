@@ -55,7 +55,7 @@ export default function Evaluation({ username, reservation_id }) {
     useEffect(() => {
         const fetchDevices = async () => {
             try {
-                const response = await fetch('http://localhost:5004/api/experimenter/getDevices', {
+                const response = await fetch('/api/experimenter/getDevices', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ reservation_id, only_device_name: true })
@@ -108,7 +108,7 @@ export default function Evaluation({ username, reservation_id }) {
               payload.experiment_name = selectedBatchExperiment;
             }
 
-            const response = await fetch('http://localhost:5005/api/evaluator/getExperimentResults', {
+            const response = await fetch('/api/evaluator/getExperimentResults', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
@@ -163,7 +163,7 @@ export default function Evaluation({ username, reservation_id }) {
         if (!experimentData) return;
 
         try {
-            const response = await fetch('http://localhost:5005/api/evaluator/downloadResults', {
+            const response = await fetch('/api/evaluator/downloadResults', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -198,7 +198,7 @@ export default function Evaluation({ username, reservation_id }) {
         setDownloadingNFS(true);
         setDownloadNFSSuccess(false);
         try {
-            const response = await fetch('http://localhost:5005/api/evaluator/downloadNFSData', {
+            const response = await fetch('/api/evaluator/downloadNFSData', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
