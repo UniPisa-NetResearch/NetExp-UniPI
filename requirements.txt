@@ -10,7 +10,6 @@ pynetbox~=7.5.0
 redis~=6.4.0
 rq~=2.6.0
 flask-socketio~=5.5.1
-#eventlet~=0.40.3
 gevent~=24.2.1
 gevent-websocket~=0.10.1
 requests~=2.31.0

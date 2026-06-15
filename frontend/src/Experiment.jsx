@@ -126,7 +126,7 @@ export default function Experiment({username, reservation_id}) {
     useEffect(() => {
         const fetchDevices = async () => {
             try {
-                const response = await fetch('http://localhost:5004/api/experimenter/getDevices', {
+                const response = await fetch('/api/experimenter/getDevices', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ reservation_id, only_device_name: false })
@@ -159,7 +159,7 @@ export default function Experiment({username, reservation_id}) {
                     console.error('Failed to load predefined metrics');
                 }
 
-                const customResponse = await fetch('http://localhost:5004/api/experimenter/getUserMetrics', {
+                const customResponse = await fetch('/api/experimenter/getUserMetrics', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ username })
@@ -185,7 +185,7 @@ export default function Experiment({username, reservation_id}) {
           if (!reservation_id) return;
 
           try {
-            const res = await fetch('http://localhost:5004/api/experimenter/showExperiments', {
+            const res = await fetch('/api/experimenter/showExperiments', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ reservation_id })
