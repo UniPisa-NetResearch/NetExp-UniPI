@@ -459,7 +459,8 @@ def check_reservation():
     if delta_seconds <= 0 or delta_seconds > MAX_HOURS * 3600:
         return jsonify({"ok": False, "message": f"Invalid duration (must be >0 and <={MAX_HOURS}h)"}), 400
 
-    now = datetime.now()
+    rome_tz = ZoneInfo("Europe/Rome")
+    now = datetime.now(rome_tz)
     print(f"Current time: {now.isoformat()}, start_dt: {start_dt.isoformat()}, end_dt: {end_dt.isoformat()}")
 
     # overlap test: res.start < requested_end  AND  res.end > requested_start
@@ -591,8 +592,11 @@ def delete_reservation():
             reservation_to_delete.startDate,
             reservation_to_delete.startTime
         )
-        current_dt = datetime.now()
+        
+        rome_tz = ZoneInfo("Europe/Rome")
+        current_dt = datetime.now(rome_tz).replace(tzinfo=None)
         print(f"Current time: {current_dt.isoformat()}, reservation_start_dt: {reservation_start_dt.isoformat()}")
+        
         if current_dt >= reservation_start_dt:
             return jsonify({
                 "message": "Cannot delete: reservation is already in progress or has finished."
@@ -632,7 +636,8 @@ def get_active_reservation_status():
     if not username:
         return jsonify({"ok": False, "message": "Missing username"}), 400
 
-    now = datetime.now()
+    rome_tz = ZoneInfo("Europe/Rome")
+    now = datetime.now(rome_tz)
     now_tuple = (now.date(), now.time().replace(second=0, microsecond=0))
     print(f"Checking active reservation for user {username} at {now.isoformat()}")
 
