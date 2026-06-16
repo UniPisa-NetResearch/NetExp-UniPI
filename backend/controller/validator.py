@@ -468,9 +468,10 @@ def run_playbook():
     except Exception as e:
         return jsonify({"ok": False, "message": f"Failed to save uploaded playbook {f.filename}: {e}"}), 500
 
+    extra_vars = {"reservation_id": reservation_id}
     # execute playbook
     try:
-        rc, out, err = run_ansible_playbook(inv_path, target_path)
+        rc, out, err = run_ansible_playbook(inv_path, target_path, extra_vars=extra_vars)
 
         if rc == 0:
             return jsonify({
@@ -805,7 +806,7 @@ def pingall_test():
     if not reservation_id:
         return jsonify({"error": "reservation_id is required"}), 400
 
-    is_virtual = get_is_virtual_from_db(reservation_id)
+    #is_virtual = get_is_virtual_from_db(reservation_id)
 
     # find inventory
     inv_path = get_inventory_path(reservation_id)
@@ -819,12 +820,12 @@ def pingall_test():
     if LOCAL_TEST:
        folder_path_wsl = win_to_wsl_path(local_results_path)
     else:
-       folder_path_wsl = local_results_path.replace('\\', '/')
+       folder_path_wsl = local_results_path
 
     pb_filename = "pingall_test_playbook.yml"
     pb_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, pb_filename)
 
-    extra_vars = {"results_file": folder_path_wsl, "containerlab_test": is_virtual}
+    extra_vars = {"results_file": folder_path_wsl, "reservation_id": reservation_id}
 
     # execute pingall playbook
     print(f"Running pingall_test_playbook with inventory {inv_path}")

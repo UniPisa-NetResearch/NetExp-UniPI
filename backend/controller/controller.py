@@ -13,7 +13,7 @@ from flask import jsonify, request
 import shutil
 from ..utils import get_is_virtual_from_db
 from ..app import app
-from ..config import LOCAL_TEST, SONIC_USER, SONIC_PASS, MINIPC_USER, MINIPC_PASS, NAS_IP, NAS_MOUNT_BASE, NFS_OPTS, USER_QUOTA_BYTES
+from ..config import LOCAL_TEST, SONIC_USER, SONIC_PASS, MINIPC_USER, MINIPC_PASS, NAS_IP, NAS_MOUNT_BASE, NFS_OPTS, USER_QUOTA_BYTES, CONTAINERLAB_HOST, CONTAINERLAB_HOST_USER
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))                      # base project directory
 # every controller directory
@@ -146,18 +146,28 @@ def win_to_wsl_path(path):
 
 def run_ansible_playbook(inventory_path: str, playbook_path: str, extra_vars: dict = None, timeout: int = 900, remote_user: str = None):
     # function to run ansible-playbook
+    if extra_vars is None:
+        extra_vars = {}
+    
+    # get reservation_id from extra_vars if present, and check in database for virtual reservation
+    reservation_id = extra_vars.get("reservation_id")
+    is_virtual = get_is_virtual_from_db(reservation_id) if reservation_id is not None else False
+        
     if LOCAL_TEST:
         inv_path_wsl = win_to_wsl_path(inventory_path)  #convert paths if test mode, otherwise use normal path
         pb_path_wsl = win_to_wsl_path(playbook_path)
 
         cmd = ["wsl", "ansible-playbook", "-i", inv_path_wsl, pb_path_wsl]
     else:
+        if is_virtual:
+             # if virtual reservation, use proxy command to reach devices through containerlab host
+            proxy_cmd = f"-o StrictHostKeyChecking=no -o ProxyCommand=\"ssh -W %h:%p -o StrictHostKeyChecking=no {CONTAINERLAB_HOST_USER}@{CONTAINERLAB_HOST}\""
+            extra_vars['ansible_ssh_common_args'] = proxy_cmd
+    
         cmd = ["ansible-playbook", "-i", inventory_path, playbook_path]
 
     cmd += ["--forks", "15"]                                # useful for parallel operations
 
-    if extra_vars is None:
-        extra_vars = {}
 
     if remote_user:
         extra_vars['ansible_become'] = True
