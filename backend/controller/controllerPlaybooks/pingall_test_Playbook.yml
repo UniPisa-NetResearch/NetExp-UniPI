@@ -59,7 +59,8 @@
         {% endif %}
       loop: "{{ groups['all'] | difference(['localhost', inventory_hostname]) }}"
       register: connectivity_tests
-      ignore_errors: true
+      #ignore_errors: true
+      failed_when: false
       changed_when: false
       when:
         - inventory_hostname != 'localhost'

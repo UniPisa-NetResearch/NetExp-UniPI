@@ -831,6 +831,22 @@ def pingall_test():
     print(f"Running pingall_test_playbook with inventory {inv_path}")
     rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars)
 
+    if os.path.exists(local_results_path):
+        try:
+            with open(local_results_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # remove temporary file after read
+            os.remove(local_results_path)
+            
+            # Se abbiamo i dati, ignoriamo l'rc di Ansible e restituiamo 200
+            return jsonify(data), 200
+            
+        except json.JSONDecodeError:
+            return jsonify({"error": "Failed to parse JSON result file.", "__raw_text": out}), 500
+        except Exception as e:
+            return jsonify({"error": f"Internal server error reading results: {str(e)}", "__raw_text": out}), 500
+        
     # error during playbook execution
     if rc != 0:
         return jsonify({
@@ -840,24 +856,9 @@ def pingall_test():
             "__raw_text": f"STDOUT:\n{out}\n\nSTDERR:\n{err}"
         }), 500
 
-    try:
-        with open(local_results_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-
-        # remove temporary file after read
-        os.remove(local_results_path)
-
-        # return formatted result
-        return jsonify(data), 200
-
-    except FileNotFoundError:
-        return jsonify({"error": "Results file not found. Ansible succeeded but failed to generate output.",
-                        "__raw_text": out}), 500
-    except json.JSONDecodeError:
-        return jsonify({"error": "Failed to parse JSON result file.", "__raw_text": out}), 500
-    except Exception as e:
-        return jsonify({"error": f"Internal server error reading results: {str(e)}", "__raw_text": out}), 500
-
+    
+    return jsonify({"error": "Results file not found. Ansible succeeded but failed to generate output.", "__raw_text": out}), 500
+    
 if __name__ == '__main__':
 
     # host 0.0.0.0 often necessary in virtual environments or containers.
