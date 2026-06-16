@@ -460,6 +460,7 @@ def check_reservation():
         return jsonify({"ok": False, "message": f"Invalid duration (must be >0 and <={MAX_HOURS}h)"}), 400
 
     now = datetime.now()
+    print(f"Current time: {now.isoformat()}, start_dt: {start_dt.isoformat()}, end_dt: {end_dt.isoformat()}")
 
     # overlap test: res.start < requested_end  AND  res.end > requested_start
     # reservation terminated are ignored (res_end <= now)
@@ -591,6 +592,7 @@ def delete_reservation():
             reservation_to_delete.startTime
         )
         current_dt = datetime.now()
+        print(f"Current time: {current_dt.isoformat()}, reservation_start_dt: {reservation_start_dt.isoformat()}")
         if current_dt >= reservation_start_dt:
             return jsonify({
                 "message": "Cannot delete: reservation is already in progress or has finished."
@@ -632,6 +634,7 @@ def get_active_reservation_status():
 
     now = datetime.now()
     now_tuple = (now.date(), now.time().replace(second=0, microsecond=0))
+    print(f"Checking active reservation for user {username} at {now.isoformat()}")
 
     # res_end > now & now > res_start (reservation is currently active)
     start_condition = tuple_(Reservation.startDate, Reservation.startTime) <= now_tuple
