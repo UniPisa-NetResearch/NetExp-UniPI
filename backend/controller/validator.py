@@ -468,9 +468,10 @@ def run_playbook():
     except Exception as e:
         return jsonify({"ok": False, "message": f"Failed to save uploaded playbook {f.filename}: {e}"}), 500
 
+    extra_vars = {"reservation_id": reservation_id}
     # execute playbook
     try:
-        rc, out, err = run_ansible_playbook(inv_path, target_path)
+        rc, out, err = run_ansible_playbook(inv_path, target_path, extra_vars=extra_vars)
 
         if rc == 0:
             return jsonify({
@@ -824,7 +825,7 @@ def pingall_test():
     pb_filename = "pingall_test_playbook.yml"
     pb_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, pb_filename)
 
-    extra_vars = {"results_file": folder_path_wsl, "containerlab_test": is_virtual}
+    extra_vars = {"results_file": folder_path_wsl, "containerlab_test": is_virtual, "reservation_id": reservation_id}
 
     # execute pingall playbook
     print(f"Running pingall_test_playbook with inventory {inv_path}")

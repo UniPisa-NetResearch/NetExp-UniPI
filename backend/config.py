@@ -27,6 +27,7 @@ FRONTEND_URL = "http://172.16.2.21:5173"
 
 # VM with containerlab and sonic images
 CONTAINERLAB_HOST = "172.16.6.55"
+CONTAINERLAB_HOST_USER = "ubuntu"                   # user for ssh connection to the containerlab host
 
 #local tet mode flag
 LOCAL_TEST = False                                  # if true, the deployment is on a single windows host, if false, the deployment is on different linux virtual machines
