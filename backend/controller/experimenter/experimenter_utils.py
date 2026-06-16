@@ -634,6 +634,8 @@ def execute_experiment_schedule(reservation_id, username, experiment_name, exper
                 running_experiments[reservation_id]['playbook_running'] = True
                 running_experiments[reservation_id]['current_playbook'] = playbook_name
 
+            extra_vars['reservation_id'] = reservation_id
+
             returncode, stdout, stderr = run_ansible_playbook(inventory_path=inventory_path, playbook_path=playbook_path, extra_vars=extra_vars, timeout=500, remote_user=remote_user)
             # reset flag after execution
             with experiments_lock:
@@ -781,7 +783,7 @@ def finish_cleanup_and_remove(reservation_id, running_experiment, playbooks_base
             returncode, stdout, stderr = run_ansible_playbook(
                 inventory_path=inventory_path,
                 playbook_path=cleanup_playbook_path,
-                extra_vars={'save_results': False},
+                extra_vars={'save_results': False, 'reservation_id': reservation_id},
                 timeout=500
             )
 

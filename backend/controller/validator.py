@@ -806,7 +806,7 @@ def pingall_test():
     if not reservation_id:
         return jsonify({"error": "reservation_id is required"}), 400
 
-    #is_virtual = get_is_virtual_from_db(reservation_id)
+    is_virtual = get_is_virtual_from_db(reservation_id)
 
     # find inventory
     inv_path = get_inventory_path(reservation_id)
@@ -825,7 +825,7 @@ def pingall_test():
     pb_filename = "pingall_test_playbook.yml"
     pb_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, pb_filename)
 
-    extra_vars = {"results_file": folder_path_wsl, "reservation_id": reservation_id}
+    extra_vars = {"results_file": folder_path_wsl, "containerlab_test": is_virtual, "reservation_id": reservation_id}
 
     # execute pingall playbook
     print(f"Running pingall_test_playbook with inventory {inv_path}")

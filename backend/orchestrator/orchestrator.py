@@ -19,7 +19,7 @@ import requests
 import subprocess
 import ipaddress
 from ..app import app
-from ..config import NETBOX_URL, NETBOX_TOKEN, NETBOX_SITE_PHYSICAL, NETBOX_SITE_VIRTUAL, REDIS_URL, REDIS_QUEUE_NAME, CONTROLLER_URL, FRONTEND_URL, LOCAL_TEST
+from ..config import NETBOX_URL, NETBOX_TOKEN, NETBOX_SITE_PHYSICAL, NETBOX_SITE_VIRTUAL, REDIS_URL, REDIS_QUEUE_NAME, CONTROLLER_URL, FRONTEND_URL, LOCAL_TEST, CONTAINERLAB_HOST, CONTAINERLAB_HOST_USER
 
 MAX_HOURS = 72
 TEST = True                             # test mode, each reservation starts at current date + 2 min
@@ -234,7 +234,7 @@ def serialize_reservation(reservation):
         'devices': devices
     }
 
-def ping_host(ip, count=2, per_ping_timeout=2, overall_timeout=5):
+def ping_host(ip, count=2, per_ping_timeout=2, overall_timeout=5, is_virtual=False):
     # perform a ping to 'ip' to verify reachability
     try:
         # address validation
@@ -243,6 +243,8 @@ def ping_host(ip, count=2, per_ping_timeout=2, overall_timeout=5):
         return False
     if LOCAL_TEST:
         cmd = ["wsl", "ping", "-c", str(count), "-W", str(per_ping_timeout), str(ip)]
+    elif is_virtual:
+        cmd = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes", f"{CONTAINERLAB_HOST_USER}@{CONTAINERLAB_HOST}", "ping", "-c", str(count), "-W", str(per_ping_timeout), str(ip)]
     else:
         cmd = ["ping", "-c", str(count), "-W", str(per_ping_timeout), str(ip)]
 
@@ -258,8 +260,11 @@ def verify_host_availability_endpoint():
     ip = request.args.get("ip", None)
     if not ip:
         return jsonify({"ok": False, "message": "Missing 'ip' parameter"}), 400
+    
+    virtual_param = request.args.get("virtual", "false").strip().lower()
+    is_virtual = virtual_param == "true"
 
-    reachable = ping_host(ip)
+    reachable = ping_host(ip, is_virtual=is_virtual)
     return jsonify({"ip": ip, "reachable": reachable}), 200
 
 @app.route("/api/orchestrator/showDevices", methods=["GET"])
@@ -278,7 +283,7 @@ def show_devices():
             info = resolve_netbox_device(d)
 
             # check if the host is reachable
-            reachable = ping_host(info["ip"]) if info["ip"] else False
+            reachable = ping_host(info["ip"], is_virtual=is_virtual) if info["ip"] else False
 
             print(f"ip address: {info['ip']} - reachable: {reachable}")
 

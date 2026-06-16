@@ -149,9 +149,13 @@ def run_ansible_playbook(inventory_path: str, playbook_path: str, extra_vars: di
     if extra_vars is None:
         extra_vars = {}
     
-    # get reservation_id from extra_vars if present, and check in database for virtual reservation
-    reservation_id = extra_vars.get("reservation_id")
-    is_virtual = get_is_virtual_from_db(reservation_id) if reservation_id is not None else False
+    containerlab_test = extra_vars.get("containerlab_test")
+    if containerlab_test is not None:
+        is_virtual = bool(containerlab_test)
+    else:
+        # get reservation_id from extra_vars if present, and check in database for virtual reservation
+        reservation_id = extra_vars.get("reservation_id")
+        is_virtual = get_is_virtual_from_db(reservation_id) if reservation_id is not None else False
         
     if LOCAL_TEST:
         inv_path_wsl = win_to_wsl_path(inventory_path)  #convert paths if test mode, otherwise use normal path
