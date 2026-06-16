@@ -819,8 +819,8 @@ def pingall_test():
 
     if LOCAL_TEST:
        folder_path_wsl = win_to_wsl_path(local_results_path)
-    #else:
-       #folder_path_wsl = local_results_path.replace('\\', '/')
+    else:
+       folder_path_wsl = local_results_path
 
     pb_filename = "pingall_test_playbook.yml"
     pb_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, pb_filename)
