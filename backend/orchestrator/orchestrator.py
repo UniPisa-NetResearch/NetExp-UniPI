@@ -25,7 +25,7 @@ from ..config import NETBOX_URL, NETBOX_TOKEN, NETBOX_SITE_PHYSICAL, NETBOX_SITE
 MAX_HOURS = 72
 TEST = True                             # test mode, each reservation starts at current date + 2 min
 TEST_DOUBLE_RES = False                 # test two consecutive reservations mode
-EXPERIMENT_DURATION = 10               # expressed in minutes
+EXPERIMENT_DURATION = 300               # expressed in minutes
 
 nb = pynetbox.api(NETBOX_URL, token=NETBOX_TOKEN)
 
