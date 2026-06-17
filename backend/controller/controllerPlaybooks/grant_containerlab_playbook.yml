@@ -186,13 +186,8 @@
           tshark: tshark
 
     - name: Create list of packages to install
-      ansible.builtin.set_fact: 
-        pkgs_to_install: >-
-          {% if is_sonic %}
-            {{ ((missing_cmds | intersect(pkg_map.keys() | list) | map('extract', pkg_map) | list) + ['acl'])| difference(['netperf']) }}
-          {% else %}
-            {{ (missing_cmds | intersect(pkg_map.keys() | list) | map('extract', pkg_map) | list) + ['acl'] }}
-          {% endif %}
+      ansible.builtin.set_fact:
+        pkgs_to_install: "{{ ((missing_cmds | intersect(pkg_map.keys() | list) | map('extract', pkg_map) | list) + ['acl']) | difference(['netperf'] if is_sonic else []) }}"
 
     # Install asynchronously missing packets
     - name: Install packages for missing commands (batch)
