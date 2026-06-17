@@ -192,10 +192,11 @@
     # Install asynchronously missing packets
     - name: Install packages for missing commands (batch)
       ansible.builtin.apt:
-        name: "{{ pkgs_to_install }}"
+        name: "{{ item }}"
         state: present
+      loop: "{{ pkgs_to_install }}"
       when: pkgs_to_install | length > 0
-      #ignore_errors: yes
+      ignore_errors: yes
       #async: 300
       #poll: 0
       #register: apt_install_async
