@@ -137,14 +137,12 @@ def send_to_controller(msg_type, user_id, reservation_id, job_data):
                         print(f"Error calling grantAccess for reservation {reservation_id}: {e}")
 
                 elif msg_type == "revoked":
-                    # run rollback if we do not use containerlab
-                    rollback = not is_virtual
 
                     revoke_payload = {
                         "ssh_key": ssh_key,
                         "username": username,
                         "reservation_id": reservation_id,
-                        "rollback": rollback                      # always run rollback when reservation expires (if the admin revoke the reservation, can choose to run rollback or not)
+                        "rollback": True                      # always run rollback when reservation expires (if the admin revoke the reservation, can choose to run rollback or not)
                     }
 
                     try:
