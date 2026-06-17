@@ -9,7 +9,11 @@ def create_app():
     application.config['SQLALCHEMY_DATABASE_URI'] = f'postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}'
     application.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     # Aumenta timeout per connessioni lente in caso di avvio DB
-    application.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'connect_args': {'connect_timeout': 10}}
+    application.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+        'connect_args': {'connect_timeout': 5},
+        'pool_pre_ping': True,                              # check connection is active before querying
+        'pool_recycle': 300                                 # recycle connections after 5 minutes to avoid stale connections
+    }
 
     db.init_app(application)
 

@@ -11,6 +11,7 @@ import stat as stat_module
 import platform
 from flask import jsonify, request
 import shutil
+import socket
 from ..utils import get_is_virtual_from_db
 from ..app import app
 from ..config import LOCAL_TEST, SONIC_USER, SONIC_PASS, MINIPC_USER, MINIPC_PASS, NAS_IP, NAS_MOUNT_BASE, NFS_OPTS, USER_QUOTA_BYTES, CONTAINERLAB_HOST, CONTAINERLAB_HOST_USER
@@ -828,7 +829,9 @@ def rollback():
 def get_nas_sftp_client():
     # create SFTP connection to the NAS using password
     try:
-        transport = paramiko.Transport((NAS_IP, 22))
+        # create a connection with a maximum timeout of 2 seconds
+        sock = socket.create_connection((NAS_IP, 22), timeout=2)
+        transport = paramiko.Transport(sock)
         transport.connect(username=MINIPC_USER, password=MINIPC_PASS)
         sftp = paramiko.SFTPClient.from_transport(transport)
         return sftp, transport

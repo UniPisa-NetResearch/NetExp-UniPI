@@ -14,6 +14,7 @@ import pynetbox
 from redis import Redis
 from redis.lock import Lock
 from rq import Queue
+from concurrent.futures import ThreadPoolExecutor
 import json
 import requests
 import subprocess
@@ -234,7 +235,7 @@ def serialize_reservation(reservation):
         'devices': devices
     }
 
-def ping_host(ip, count=2, per_ping_timeout=2, overall_timeout=5, is_virtual=False):
+def ping_host(ip, count=1, per_ping_timeout=1, overall_timeout=2, is_virtual=False):
     # perform a ping to 'ip' to verify reachability
     try:
         # address validation
@@ -277,9 +278,9 @@ def show_devices():
         netbox_site = get_netbox_site(is_virtual)
         # retrieve devices from testbed site
         devices = nb.dcim.devices.filter(site=netbox_site)
-
-        out = []
-        for d in devices:
+        
+        # helper function to process each device and check reachability
+        def process_device(d):
             info = resolve_netbox_device(d)
 
             # check if the host is reachable
@@ -287,14 +288,18 @@ def show_devices():
 
             print(f"ip address: {info['ip']} - reachable: {reachable}")
 
-            out.append({
+            return {
                 "name": info["name"],
                 "asset_tag": info["asset_tag"],
                 "primary_ip": info["ip"],
                 "role": info["role"],
                 "reachable": reachable
-            })
+            }
 
+        # execute ping in parallel (up to 15 simultaneous threads)
+        with ThreadPoolExecutor(max_workers=15) as executor:
+            out = list(executor.map(process_device, devices))
+           
         return jsonify(out), 200
 
     except Exception as exc:
