@@ -235,7 +235,7 @@ def serialize_reservation(reservation):
         'devices': devices
     }
 
-def ping_host(ip, count=2, per_ping_timeout=2, overall_timeout=5, is_virtual=False):
+def ping_host(ip, count=1, per_ping_timeout=1, overall_timeout=2, is_virtual=False):
     # perform a ping to 'ip' to verify reachability
     try:
         # address validation
