@@ -187,7 +187,7 @@
 
     - name: Create list of packages to install
       ansible.builtin.set_fact:
-        pkgs_to_install: "{{ missing_cmds | intersect(pkg_map.keys() | list) | map('extract', pkg_map) | list }}"
+        pkgs_to_install: "{{ (missing_cmds | intersect(pkg_map.keys() | list) | map('extract', pkg_map) | list) + ['acl'] }}"
 
     # Install asynchronously missing packets
     - name: Install packages for missing commands (batch)
@@ -195,22 +195,22 @@
         name: "{{ pkgs_to_install }}"
         state: present
       when: pkgs_to_install | length > 0
-      ignore_errors: yes
-      async: 300
-      poll: 0
-      register: apt_install_async
+      #ignore_errors: yes
+      #async: 300
+      #poll: 0
+      #register: apt_install_async
 
     # wait for asynchronous completion
-    - name: Wait for package installation to complete
-      async_status:
-        jid: "{{ item.ansible_job_id }}"
-      loop: "{{ apt_install_async.results | default([]) }}"
-      when: apt_install_async is defined and item.ansible_job_id is defined
-      register: apt_install_result
-      until: apt_install_result.finished
-      retries: 60
-      delay: 5
-      ignore_errors: yes
+    #- name: Wait for package installation to complete
+    #  async_status:
+    #    jid: "{{ item.ansible_job_id }}"
+    #  loop: "{{ apt_install_async.results | default([]) }}"
+    #  when: apt_install_async is defined and item.ansible_job_id is defined
+    #  register: apt_install_result
+    #  until: apt_install_result.finished
+    #  retries: 60
+    #  delay: 5
+    #  ignore_errors: yes
 
     # Override path with wrapper
     - name: Override found_cmd_paths to use wrappers
