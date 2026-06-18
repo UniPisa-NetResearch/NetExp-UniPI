@@ -54,11 +54,7 @@ INPUT_TEMPLATE_CONTENT = r"""- name: Apply per-host commands
       when: commands_map[inventory_hostname] is defined and (commands_map[inventory_hostname] | length > 0)  
 """
 
-ANSIBLE_EXTRA_ARGS = ""            #  extra args (ex. -c paramiko)
-
 active_reservations = {}    # dictionary that contains active and usable (after key insertion) reservation
-#TEST = True                 # if true uses wsl on windows (/mnt), otherwise normal paths
-IS_WINDOWS = platform.system() == 'Windows'
 
 def safe_filename(name: str) -> str:
     # sanitize a string for use as filename
@@ -183,8 +179,6 @@ def run_ansible_playbook(inventory_path: str, playbook_path: str, extra_vars: di
 
         print(f"[ANSIBLE] Forcing remote_user={remote_user}", flush=True)
 
-    if ANSIBLE_EXTRA_ARGS:
-        cmd += ANSIBLE_EXTRA_ARGS.split()                   # add extra args if present
     if extra_vars:
         cmd += ["--extra-vars", json.dumps(extra_vars)]     # add extra vars if present
     print("Running:", " ".join(cmd))

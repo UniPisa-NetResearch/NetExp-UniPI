@@ -32,6 +32,16 @@ CONTAINERLAB_HOST_USER = "ubuntu"                   # user for ssh connection to
 #local tet mode flag
 LOCAL_TEST = False                                  # if true, the deployment is on a single windows host, if false, the deployment is on different linux virtual machines
 
+# authentication public key types accepted
+SUPPORTED_KEY_TYPES = ['ssh-ed25519', 'ssh-rsa']
+
+# orchestrator parameters
+TEST_MODE = True                                # test mode, each reservation starts at current date + 2 min
+TEST_DOUBLE_RES = False                         # test two consecutive reservations mode
+EXPERIMENT_DURATION = 300                       # expressed in minutes
+MAX_HOURS = 72                                  # maximum duration of a reservation in hours
+                                                # if changed, also change in Reservation.jsx line 11
+
 # default credentials per device role
 SONIC_USER = "admin"
 SONIC_PASS = "YourPaSsWoRd"

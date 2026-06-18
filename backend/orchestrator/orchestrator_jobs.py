@@ -50,9 +50,6 @@ def reservation_end_job(reservation_id):
             db.session.commit()
             print(f"End Job: Token removed from Reservation {reservation_id} (User: {res.username}). Testbed access revoked.")
 
-            # 3. Chiamata al Controller per la pulizia (rollback allo snapshot0)
-            # Esempio: call_controller_cleanup(res.username)
-
             # publish end reservation event on redis
             user = User.query.filter_by(username=res.username).first()
             if user:
@@ -62,7 +59,7 @@ def reservation_end_job(reservation_id):
                     "user_id": user.id
                 }
                 r.publish("reservation_events", json.dumps(payload))
-                print("Published reservation start on Redis")
+                print("Published reservation end on Redis")
 
         except Exception as ex:
             db.session.rollback()

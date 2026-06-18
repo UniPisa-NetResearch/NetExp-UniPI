@@ -20,12 +20,11 @@ import requests
 import subprocess
 import ipaddress
 from ..app import app
-from ..config import NETBOX_URL, NETBOX_TOKEN, NETBOX_SITE_PHYSICAL, NETBOX_SITE_VIRTUAL, REDIS_URL, REDIS_QUEUE_NAME, CONTROLLER_URL, FRONTEND_URL, LOCAL_TEST, CONTAINERLAB_HOST, CONTAINERLAB_HOST_USER
-
-MAX_HOURS = 72
-TEST = True                             # test mode, each reservation starts at current date + 2 min
-TEST_DOUBLE_RES = False                 # test two consecutive reservations mode
-EXPERIMENT_DURATION = 300               # expressed in minutes
+from ..config import (
+    NETBOX_URL, NETBOX_TOKEN, NETBOX_SITE_PHYSICAL, NETBOX_SITE_VIRTUAL, 
+    REDIS_URL, REDIS_QUEUE_NAME, CONTROLLER_URL, FRONTEND_URL, LOCAL_TEST, 
+    CONTAINERLAB_HOST, CONTAINERLAB_HOST_USER, TEST_MODE, TEST_DOUBLE_RES, EXPERIMENT_DURATION, MAX_HOURS
+)
 
 nb = pynetbox.api(NETBOX_URL, token=NETBOX_TOKEN)
 
@@ -430,7 +429,7 @@ def check_reservation():
         }), 201
 
     # if true, create a reservation from now + 2 minutes (start) to start + EXPERIMENT_DURATION
-    if TEST:
+    if TEST_MODE:
         # necessary for date mismatch between server and redis
         rome_tz = ZoneInfo("Europe/Rome")
         now_local = datetime.now(rome_tz).replace(second=0, microsecond=0)
@@ -577,7 +576,11 @@ def user_reservation_list():
         # order by start date/hour asc
         reservations.sort(key=lambda r: datetime.combine(r.startDate, r.startTime))
 
-        return jsonify([serialize_reservation(res) for res in reservations])
+        return jsonify({
+            "reservations": [serialize_reservation(res) for res in reservations],
+            "max_hours": MAX_HOURS
+        }), 200
+    
     except Exception as e:
         app.logger.error(f"Error fetching user reservations: {e}")
         return jsonify({"message": "Error fetching reservations"}), 500
