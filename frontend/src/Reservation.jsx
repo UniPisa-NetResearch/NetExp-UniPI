@@ -7,9 +7,6 @@ import 'react-big-calendar/lib/css/react-big-calendar.css';
 
 const localizer = momentLocalizer(moment);
 
-// max allowed number of hours for the reservation
-const MAX_HOURS = 72;
-
 const formatLocalDate = (date) => {
   const dObj = typeof date === 'string' ? new Date(date) : date;
   const y = dObj.getFullYear();
@@ -37,13 +34,13 @@ const getCurrentHour = () => new Date().getHours();
 const generateTimeOptions = () => Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}:00`);
 const timeOptions = generateTimeOptions(); //all hours from 00:00 to 23:00
 
-const calculateEndTimeDetails = (startDate, startTime, endDate, endTime) => {
+const calculateEndTimeDetails = (startDate, startTime, endDate, endTime, maxHours) => {
   if (!startDate || !startTime || !endDate || !endTime) return null;
   const startDateTime = new Date(`${startDate}T${startTime}:00`);
   const endDateTime = new Date(`${endDate}T${endTime}:00`);
   const durationMs = endDateTime.getTime() - startDateTime.getTime();
   const durationHours = durationMs / (1000 * 60 * 60);
-  if (durationHours <= 0 || durationHours > MAX_HOURS) return { valid: false }; //valid duration if it is in (0, MAX_HOURS]
+  if (durationHours <= 0 || durationHours > maxHours) return { valid: false }; //valid duration if it is in (0, maxHours]
   return { valid: true, start: startDateTime, end: endDateTime };
 };
 
@@ -87,6 +84,9 @@ export default function Reservation({ username, isReservationActive}) {
   // form for reservation selection
   const [activeTab, setActiveTab] = useState('list');   // 'list' or 'new'
 
+  // maximum reservation duration in hours, fetched from server
+  const [maxHours, setMaxHours] = useState(72);
+
   // form data state
   const [startDate, setStartDate] = useState('');
   const [startTime, setStartTime] = useState('');
@@ -128,14 +128,14 @@ export default function Reservation({ username, isReservationActive}) {
   const maxEndInfo = useMemo(() => {
     if (!startDate || !startTime) return null;
     const startDt = new Date(`${startDate}T${startTime}:00`);
-    const maxEndDt = new Date(startDt.getTime() + MAX_HOURS * 3600 * 1000);   //end date = start date + MAX_HOURS
+    const maxEndDt = new Date(startDt.getTime() + maxHours * 3600 * 1000);   //end date = start date + maxHours
     return {
       startDt,
       maxEndDt,
       maxEndDateStr: formatLocalDate(maxEndDt),
       maxEndHour: maxEndDt.getHours()
     };
-  }, [startDate, startTime]);
+  }, [startDate, startTime, maxHours]);
 
   const availableEndTimes = useMemo(() => {
     if (!endDate || !startDate || !startTime || !maxEndInfo) return [];
@@ -154,7 +154,7 @@ export default function Reservation({ username, isReservationActive}) {
     return timeOptions.filter(t => parseInt(t.split(':')[0], 10) <= lastPossibleHour).map(t => String(t));
   }, [endDate, startDate, startTime, maxEndInfo]);
 
-  const finalDetails = useMemo(() => calculateEndTimeDetails(startDate, startTime, endDate, endTime), [startDate, startTime, endDate, endTime]);
+  const finalDetails = useMemo(() => calculateEndTimeDetails(startDate, startTime, endDate, endTime, maxHours), [startDate, startTime, endDate, endTime, maxHours]);
 
   // keep a ticking clock to update every reservation countdown without creating many intervals
   useEffect(() => {
@@ -175,11 +175,16 @@ export default function Reservation({ username, isReservationActive}) {
 
       if (resp.ok) {
         // server return a JSON
-        const arr = Array.isArray(data) ? data : [];
+        const arr = Array.isArray(data.reservations) ? data.reservations : [];
 
         // sort by startDate desc
         arr.sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime());
         setReservations(arr);
+        
+        if (data.max_hours) {
+          setMaxHours(data.max_hours);
+        }
+
       } else {
         console.error('Error fetching reservations', resp.status);
         setReservations([]);
@@ -800,10 +805,10 @@ export default function Reservation({ username, isReservationActive}) {
                     </div>
                   </div>
 
-                  {endDate && (<small>Max reservation duration: {MAX_HOURS} hours</small>)}
+                  {endDate && (<small>Max reservation duration: {maxHours} hours</small>)}
 
                   {isFormValid && finalDetails && !finalDetails.valid && (
-                      <p className="error-text">Reservation duration must be between 1 and {MAX_HOURS} hours.</p>
+                      <p className="error-text">Reservation duration must be between 1 and {maxHours} hours.</p>
                   )}
                   {/* Device Selection Section */}
                   <div className="form-section device-selection-section">

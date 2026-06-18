@@ -6,9 +6,8 @@ from rq import Queue
 from rq.job import Job
 from ..utils import get_next_available_id
 from ..app import app
-from ..config import REDIS_URL
+from ..config import REDIS_URL, SUPPORTED_KEY_TYPES
 
-SUPPORTED_KEY_TYPES = ['ssh-ed25519', 'ssh-rsa']
 redis = Redis.from_url(REDIS_URL)
 queue = Queue(connection=redis)
 
