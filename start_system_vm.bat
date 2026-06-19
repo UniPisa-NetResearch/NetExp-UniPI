@@ -1,0 +1,11 @@
+wt -w 0 new-tab --title "GUI" powershell.exe -NoExit -Command "ssh -t ubuntu@172.16.2.21 'cd NetExp-UniPI/frontend && npm run dev -- --host 0.0.0.0'"
+wt -w 0 new-tab --title "Authentication" powershell.exe -NoExit -Command "ssh -t ubuntu@172.16.2.21 'cd NetExp-UniPI && source backend-venv/bin/activate && python3 -m backend.authentication.authentication'"
+wt -w 0 new-tab --title "Orchestrator" powershell.exe -NoExit -Command "ssh -t ubuntu@172.16.2.21 'cd NetExp-UniPI && source backend-venv/bin/activate && python3 -m backend.orchestrator.orchestrator'"
+wt -w 0 new-tab --title "Controller" powershell.exe -NoExit -Command "ssh -t ubuntu@172.16.2.21 'cd NetExp-UniPI && source backend-venv/bin/activate && python3 -m backend.controller.controller'"
+wt -w 0 new-tab --title "Validator" powershell.exe -NoExit -Command "ssh -t ubuntu@172.16.2.21 'cd NetExp-UniPI && source backend-venv/bin/activate && python3 -m backend.controller.validator'"
+wt -w 0 new-tab --title "Experimenter" powershell.exe -NoExit -Command "ssh -t ubuntu@172.16.2.21 'cd NetExp-UniPI && source backend-venv/bin/activate && python3 -m backend.controller.experimenter.experimenter'"
+wt -w 0 new-tab --title "Evaluator" powershell.exe -NoExit -Command "ssh -t ubuntu@172.16.2.21 'cd NetExp-UniPI && source backend-venv/bin/activate && python3 -m backend.controller.evaluator.evaluator'"
+wt -w 0 new-tab --title "RQ Scheduler" powershell.exe -NoExit -Command "ssh -t ubuntu@172.16.2.21 'cd NetExp-UniPI && source backend-venv/bin/activate && python3 -m backend.orchestrator.scheduler_runner'"
+wt -w 0 new-tab --title "RQ Worker" powershell.exe -NoExit -Command "ssh -t ubuntu@172.16.2.21 'cd NetExp-UniPI && source backend-venv/bin/activate && rq worker -u redis://172.16.4.77:6379 default'"
+
+Write-Host "All services are in starting phase..."
