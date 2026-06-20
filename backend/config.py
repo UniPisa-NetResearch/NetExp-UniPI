@@ -1,3 +1,11 @@
+import os
+from dotenv import load_dotenv
+from pathlib import Path
+
+# carica backend/.env
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
+
 # database connection parameters
 DB_HOST = "172.16.4.77"
 DB_PORT = 5432
@@ -54,3 +62,9 @@ NAS_IP = "192.168.1.166"                            # IP of the nfs server
 NAS_MOUNT_BASE = "/mnt/nas"                         # local mount point on devices
 NFS_OPTS = "rw,sync,hard,intr,timeo=600,retrans=2"
 USER_QUOTA_BYTES =536870912
+
+# LLM parameters
+LLM_PROVIDER = "gemini"
+LLM_MODEL = "gemini-2.5-flash"
+OPENAI_API_KEY = os.getenv("GEMINI_API_KEY")
+OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
