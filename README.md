@@ -9,7 +9,7 @@ Considering the following deployment:
 
 - **VM NetExp1** for backend and frontend — username: `ubuntu` — IP address: `172.16.2.21` — RAM: 8GB — disk: 40GB
 - **VM NetExp2** for backend services (**PostgreSQL**, **Redis**, **NetBox**) — username: `ubuntu` — IP address: `172.16.4.77` — RAM: 8GB — disk: 40GB
-- **VM NetExp-containerlab** for containerlab deployment — username: `ubuntu` — IP address: `172.16.6.55` — RAM: 8GB — disk: 40GB
+- **VM NetExp-containerlab** for containerlab deployment — username: `ubuntu` — IP address: `172.16.6.55` — RAM: 32GB — disk: 40GB
 
 ### NetExp1 Setup
 
