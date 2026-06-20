@@ -172,6 +172,47 @@ Considering the following deployment:
    sudo containerlab deploy
    ```
 
+### Configuration Files
+
+The system parameters are defined in two main configuration files:
+
+1. **`backend/config.py`** - Main configuration file with non-sensitive parameters
+   - Database connection parameters
+   - Redis connection parameters
+   - NetBox connection parameters
+   - Frontend and backend URLs
+   - Containerlab host configuration
+   - Orchestrator parameters (test mode, experiment duration, max hours)
+   - NFS server parameters
+   - Default credentials per device role (device hostnames, SSH usernames)
+   - LLM parameters (provider, model name)
+
+2. **`backend/.env`** - Environment file for sensitive parameters
+   - API keys and tokens
+
+The `.env` file should include all the fields defined in **`backend/.env.example`**:
+
+```bash
+# Copy .env.example to create your .env file
+cp backend/.env.example backend/.env
+
+# Edit .env with your actual values
+# (DO NOT commit .env to Git - it's already ignored by .gitignore)
+```
+
+### Modifying Parameters
+
+To modify non-sensitive parameters:
+1. Open `backend/config.py`
+2. Edit the desired values (e.g., `DB_HOST`, `NETBOX_URL`, `TEST_MODE`)
+3. Restart the backend services
+
+To modify sensitive parameters:
+1. Open `backend/.env`
+2. Edit the values (e.g., `GEMINI_API_KEY`)
+3. Restart the backend services
+
+
 ### Starting the System
 
 To start the system, create 9 terminals connected to **NetExp1**.
