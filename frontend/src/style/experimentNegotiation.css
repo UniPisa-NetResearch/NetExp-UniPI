@@ -1,0 +1,280 @@
+.experiment-negotiation-container {
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  background-color: #ffffff;
+  color: #0b2e6b;
+  height: 100%;
+  box-sizing: border-box;
+  margin-top: 20px;
+}
+
+.experiment-negotiation-header h1 {
+  margin: 0;
+  font-size: 24px;
+  color: #0b2e6b;
+}
+
+.experiment-negotiation-header p {
+  margin-top: 8px;
+  font-size: 14px;
+  color: #32508a;
+}
+
+.experiment-negotiation-main {
+  display: flex;
+  flex-direction: row;
+  margin-top: 20px;
+  gap: 20px;
+  height: calc(100vh - 180px);
+}
+
+.en-fixed-message {
+  margin-top: 8px;
+  font-size: 14px;
+  color: #32508a;
+}
+
+/* Chat area */
+
+.experiment-negotiation-chat {
+  flex: 2;
+  display: flex;
+  flex-direction: column;
+  background-color: #f6f8fc;
+  border: 1px solid #d4e1ff;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.en-chat-window {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+  border-radius: 6px;
+  background-color: #ffffff;
+  border: 1px solid #d4e1ff;
+}
+
+/* Message bubbles */
+
+.en-message-bubble {
+  max-width: 80%;
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.en-message-user {
+  margin-left: auto;
+  background-color: #0b6efb;
+  color: #ffffff;
+  border-bottom-right-radius: 2px;
+}
+
+.en-message-assistant {
+  margin-right: auto;
+  background-color: #e4edff;
+  color: #0b2e6b;
+  border-bottom-left-radius: 2px;
+}
+
+.en-message-role {
+  font-weight: 600;
+  font-size: 12px;
+  margin-bottom: 4px;
+  opacity: 0.8;
+}
+
+.en-message-content {
+  white-space: pre-wrap;
+}
+
+/* Input area */
+
+.en-input-area {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.en-file-input-hidden {
+  display: none;
+}
+
+.en-file-button {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background-color: #0b6efb;
+  color: #ffffff;
+  font-size: 20px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.en-file-button:hover {
+  background-color: #084dc2;
+}
+
+.en-files-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.en-file-label {
+  font-size: 13px;
+  color: #32508a;
+}
+
+.en-file-input {
+  margin-top: 4px;
+}
+
+.en-file-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.en-file-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background-color: #e4edff;
+  color: #0b2e6b;
+  font-size: 12px;
+}
+
+.en-file-name {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.en-file-remove {
+  border: none;
+  background: transparent;
+  color: #0b2e6b;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+
+.en-file-remove:hover {
+  color: #c0392b;
+}
+
+/* Text + button */
+
+.en-input-row {
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.en-textarea {
+  flex: 1;
+  resize: vertical;
+  min-height: 60px;
+  max-height: 150px;
+  border-radius: 6px;
+  border: 1px solid #d4e1ff;
+  padding: 8px;
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+}
+
+.en-textarea:focus {
+  border-color: #0b6efb;
+  box-shadow: 0 0 0 1px rgba(11, 110, 251, 0.2);
+}
+
+.en-send-button {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  background-color: #0b6efb;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.en-send-icon {
+  font-size: 22px;
+  transform: translateY(-1px);
+}
+
+.en-send-button:hover {
+  background-color: #056fe1;
+}
+
+.en-send-button:disabled,
+.en-send-button.en-send-button-disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.en-error-message {
+  margin-top: 4px;
+  color: #c0392b;
+  font-size: 13px;
+}
+
+/* Sidebar */
+
+.experiment-negotiation-sidebar {
+  flex: 1;
+  background-color: #f0f4ff;
+  border-radius: 8px;
+  border: 1px solid #d4e1ff;
+  padding: 16px;
+  font-size: 14px;
+  color: #0b2e6b;
+}
+
+.experiment-negotiation-sidebar h2 {
+  margin-top: 0;
+  font-size: 18px;
+  margin-bottom: 8px;
+}
+
+.experiment-negotiation-sidebar ul {
+  padding-left: 18px;
+  margin: 0;
+}
+
+.experiment-negotiation-sidebar li {
+  margin-bottom: 6px;
+}
+
+/* Responsive */
+
+@media (max-width: 900px) {
+  .experiment-negotiation-main {
+    flex-direction: column;
+    height: auto;
+  }
+
+  .experiment-negotiation-chat {
+    min-height: 300px;
+  }
+}

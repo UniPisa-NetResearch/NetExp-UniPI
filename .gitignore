@@ -1,3 +1,7 @@
 backend/.env
 backend/.env.*
 !backend/.env.example
+backend-venv/
+venv/
+__pycache__/
+*.pyc
