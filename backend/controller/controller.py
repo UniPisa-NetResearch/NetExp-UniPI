@@ -8,7 +8,6 @@ import zipfile
 import paramiko
 from flask import send_file
 import stat as stat_module
-import platform
 from flask import jsonify, request
 import shutil
 import socket

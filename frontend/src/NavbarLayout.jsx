@@ -7,6 +7,7 @@ const navItems = [
     { name: 'Home', path: '/' },
     { name: 'Reservation', path: '/reservation' },
     { name: 'Configuration', path: '/configuration' },
+    { name: 'Experiment Negotiation', path: '/experimentNegotiation' },
     { name: 'Experiment', path: '/experiment' },
     { name: 'Evaluation', path: '/evaluation' },
 ];
@@ -15,7 +16,7 @@ const isLinkActive = (itemPath, currentPath) => {
     if (itemPath === '/') {
         return currentPath === '/';     // on the root, only Home link must be active
     }
-    return currentPath.startsWith(itemPath);    // for other links, check if path starts item path.
+    return currentPath === itemPath;
 };
 
 // this component will receive teh children component to show (Home, Reservation, etc)
@@ -75,14 +76,14 @@ const NavbarLayout = ({ children, onLogout, showLogoutButton = true, isReservati
 
     const handleNavClick = async (e, item) => {
         // block navigation to configuration if there is no active reservation/token
-        if ((item.path === '/configuration' || item.path === '/experiment' || item.path === '/evaluation') && !isReservationActive) {
+        if ((item.path === '/configuration' || item.path=== '/experimentNegotiation' || item.path === '/experiment' || item.path === '/evaluation') && !isReservationActive) {
             e.preventDefault();
             // give feedback and remain on current page
             alert('⚠️ Access denied: you do not have an active reservation.');
             return;
         }
 
-        if ((item.path === '/configuration' || item.path === '/experiment') && !isAccessGranted) {
+        if ((item.path === '/configuration' || item.path=== '/experimentNegotiation' || item.path === '/experiment') && !isAccessGranted) {
             e.preventDefault();
             // give feedback and remain on current page
             alert('⏳ Account creation in progress on devices. Please wait before accessing this page.');

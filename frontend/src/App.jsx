@@ -6,6 +6,7 @@ import NavbarLayout from './NavbarLayout.jsx';
 import Home from './Home.jsx';
 import Reservation from './Reservation.jsx';
 import Configuration from './Configuration.jsx';
+import ExperimentNegotiation from "./ExperimentNegotiation.jsx";
 import Experiment from "./Experiment.jsx";
 import Evaluation from "./Evaluation.jsx";
 
@@ -354,6 +355,7 @@ function App() {
                 <Route path="/" element={<NavbarWrapper><Home username={currentUser} isAdmin={isAdmin} userId={currentUserId}/></NavbarWrapper>} />
                 <Route path="/reservation" element={<NavbarWrapper><Reservation username={currentUser} isReservationActive={isReservationActive} /> </NavbarWrapper>} />
                 <Route path="/configuration" element={<NavbarWrapper><ProtectedPageGuard isReservationActive={isReservationActive} isAccessGranted={isAccessGranted}><Configuration username={currentUser} reservation_id={reservationId}/> </ProtectedPageGuard></NavbarWrapper>} />
+                <Route path="/experimentNegotiation" element={<NavbarWrapper><ProtectedPageGuard isReservationActive={isReservationActive} isAccessGranted={isAccessGranted}><ExperimentNegotiation username={currentUser} reservation_id={reservationId}/> </ProtectedPageGuard></NavbarWrapper>} />
                 <Route path="/experiment" element={<NavbarWrapper><ProtectedPageGuard isReservationActive={isReservationActive} isAccessGranted={isAccessGranted}><Experiment username={currentUser} reservation_id={reservationId}/> </ProtectedPageGuard></NavbarWrapper>} />
                 <Route path="/evaluation" element={<NavbarWrapper><ProtectedPageGuard isReservationActive={isReservationActive} isAccessGranted={isEvaluationAccessGranted}><Evaluation username={currentUser} reservation_id={reservationId}/></ProtectedPageGuard></NavbarWrapper>} />
             </Route>
