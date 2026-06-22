@@ -35,6 +35,11 @@ export default defineConfig({
         target: 'http://localhost:5005',
         changeOrigin: true,
         secure: false,
+      },
+      '/api/agent_server': {
+        target: 'http://localhost:5006',
+        changeOrigin: true,
+        secure: false,
       }
     },
   },

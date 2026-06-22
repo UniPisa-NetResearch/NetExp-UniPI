@@ -6,6 +6,7 @@ import subprocess
 import time
 import zipfile
 import paramiko
+import requests
 from flask import send_file
 import stat as stat_module
 from flask import jsonify, request
@@ -13,7 +14,7 @@ import shutil
 import socket
 from ..utils import get_is_virtual_from_db
 from ..app import app
-from ..config import LOCAL_TEST, SONIC_USER, SONIC_PASS, MINIPC_USER, MINIPC_PASS, NAS_IP, NAS_MOUNT_BASE, NFS_OPTS, USER_QUOTA_BYTES, CONTAINERLAB_HOST, CONTAINERLAB_HOST_USER
+from ..config import LOCAL_TEST, SONIC_USER, SONIC_PASS, MINIPC_USER, MINIPC_PASS, NAS_IP, NAS_MOUNT_BASE, NFS_OPTS, USER_QUOTA_BYTES, CONTAINERLAB_HOST, CONTAINERLAB_HOST_USER, AGENT_SERVER_URL
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))                      # base project directory
 # every controller directory
@@ -545,6 +546,19 @@ def revoke_access():
     # remove active res file
     remove_files(f"res{reservation_id}", "file")
     print("Deleted generated files for reservation", reservation_id)
+
+    # remove chat history of the reservation through agent_server API, if agent_server is not reachable just print a warning and continue with the cleanup
+    try:
+        agent_server_url = AGENT_SERVER_URL + "/api/agent_server/history"
+        payload = {"username": username, "reservation_id": reservation_id}
+        response = requests.delete(agent_server_url, json=payload, timeout=5)
+        
+        if response.status_code == 200:
+            print(f"Chat history deleted successfully via API for user {username} and res {reservation_id}")
+        else:
+            print(f"Warning: Failed to delete chat history. Status code: {response.status_code}, Response: {response.text}")
+    except requests.exceptions.RequestException as e:
+        print(f"Warning: Could not reach agent_server to delete history: {e}")
 
     if username in active_reservations:
         del active_reservations[username]  # remove reservation from active reservation list
