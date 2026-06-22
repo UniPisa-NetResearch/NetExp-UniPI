@@ -308,6 +308,18 @@ ssh -J ubuntu@172.16.6.55 gabripian@172.20.20.161
   ```bash
   date -d @1781456460
   ```
+- To see how many subscriptions are present for reservation_events (must be 1), use:
+  ```bash
+  PUBSUB NUMSUB reservation_events
+  ```
+- To see all redis keys for chat history, use:
+  ```bash
+  redis-cli KEYS "agent_history:*"
+  ```
+- To see the content of a certain key (agent_history:gabripian:3:02d62338-b002-48fe-8bdd-7ed94012da5f), use:
+  ```bash
+  redis-cli GET agent_history:gabripian:3:02d62338-b002-48fe-8bdd-7ed94012da5f | python3 -m json.tool
+  ```
 - To remove a device (for example `172.20.20.164`) from the `known_hosts` file when the virtual topology is redeployed, use:
   ```bash
   ssh-keygen -f '~/.ssh/known_hosts' -R '172.20.20.164'

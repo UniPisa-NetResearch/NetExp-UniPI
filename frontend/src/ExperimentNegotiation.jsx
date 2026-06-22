@@ -7,9 +7,12 @@ const ExperimentNegotiation = ({ username, reservation_id }) => {
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState(null);
-
+  // State to hold saved chat sessions
   const [savedChats, setSavedChats] = useState([]);
   const [activeChatId, setActiveChatId] = useState(null);
+  // Determine if the user input is empty (no text and no files)
+  const isInputEmpty = inputValue.trim() === "" && selectedFiles.length === 0;
+  const isButtonDisabled = isSending || isInputEmpty;
 
   useEffect(() => {
     const fetchSessions = async () => {
@@ -155,6 +158,18 @@ const ExperimentNegotiation = ({ username, reservation_id }) => {
 
   const renderMessage = (message) => {
     const isUser = message.role === "user";
+
+    let displayContent = message.content;
+
+    if (isUser && displayContent) {
+      // remove file content from the user message and replace with a placeholder
+      const fileRegex = /--- Start attached file content: (.*?) ---[\s\S]*?--- End attached file content: \1 ---/g;
+      // show the file name in the user message and remove the content for better readability
+      displayContent = displayContent.replace(fileRegex, "\n[Attached file: $1]\n");
+      
+      displayContent = displayContent.trim();
+    }
+
     return (
       <div
         key={message.id}
@@ -165,7 +180,7 @@ const ExperimentNegotiation = ({ username, reservation_id }) => {
         <div className="en-message-role">
           {isUser ? "You" : "LLM Agent"}
         </div>
-        <div className="en-message-content">{message.content}</div>
+        <div className="en-message-content">{displayContent}</div>
       </div>
     );
   };
@@ -183,20 +198,20 @@ const ExperimentNegotiation = ({ username, reservation_id }) => {
       <div className="experiment-negotiation-main">
         <div className="experiment-negotiation-sidebar">
           <button className="en-new-chat-btn" onClick={startNewChat}>
-            ➕ New Chat
+            New Chat
           </button>
           <h3>Recent Chats</h3>
           {savedChats.length === 0 ? (
             <p className="en-sidebar-empty">No previous conversations.</p>
           ) : (
             <ul className="en-chat-list">
-              {savedChats.map((chatId) => (
+              {savedChats.map((chatId, index) => (
                 <li key={chatId}>
                   <button
                     className={`en-chat-list-btn ${activeChatId === chatId ? "active" : ""}`}
                     onClick={() => loadHistory(chatId)}
                   >
-                    Chat {chatId.substring(0, 8)}...
+                    Conversation {savedChats.length - index}
                   </button>
                 </li>
               ))}
@@ -206,6 +221,12 @@ const ExperimentNegotiation = ({ username, reservation_id }) => {
         <div className="experiment-negotiation-chat">
           <div className="en-chat-window">
             {messages.map((msg) => renderMessage(msg))}
+            {isSending && (
+               <div className="en-message-bubble en-message-assistant">
+                 <div className="en-message-role">LLM Agent</div>
+                 <div className="en-message-content">Computing response, please wait...</div>
+               </div>
+            )}
           </div>
 
           <form className="en-input-area" onSubmit={handleSubmit} autoComplete="off">
@@ -248,8 +269,8 @@ const ExperimentNegotiation = ({ username, reservation_id }) => {
               />
               <button
                 type="submit"
-                className={`en-send-button ${isSending ? "en-send-button-disabled" : ""}`}
-                disabled={isSending}
+                className={`en-send-button ${isButtonDisabled ? "en-send-button-disabled" : ""}`}
+                disabled={isButtonDisabled}
                 aria-label="Send"
               >
                 <span className="en-send-icon">↑</span>

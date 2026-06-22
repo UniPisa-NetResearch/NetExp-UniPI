@@ -9,13 +9,21 @@
   margin-top: 20px;
 }
 
+.experiment-negotiation-header {
+  display: flex;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 15px;
+}
+
 .experiment-negotiation-header h1 {
   margin: 0;
   font-size: 24px;
   color: #0b2e6b;
+  white-space: nowrap;
 }
 
-.experiment-negotiation-header p {
+.experiment-negotiation-header p, .en-fixed-message {
   margin-top: 8px;
   font-size: 14px;
   color: #32508a;
@@ -24,9 +32,9 @@
 .experiment-negotiation-main {
   display: flex;
   flex-direction: row;
-  margin-top: 20px;
+  margin-top: 10px;
   gap: 20px;
-  height: calc(100vh - 180px);
+  height: calc(100vh - 150px);
 }
 
 .en-fixed-message {
@@ -38,13 +46,14 @@
 /* Chat area */
 
 .experiment-negotiation-chat {
-  flex: 2;
+  flex: 3;
   display: flex;
   flex-direction: column;
   background-color: #f6f8fc;
   border: 1px solid #d4e1ff;
   border-radius: 8px;
   padding: 16px;
+  min-height: 400px;
 }
 
 .en-chat-window {
@@ -281,7 +290,7 @@
 
 .experiment-negotiation-sidebar {
   flex: 1;
-  max-width: 260px;
+  max-width: 200px;
   background-color: #f0f4ff;
   border-radius: 8px;
   border: 1px solid #d4e1ff;
@@ -368,7 +377,4 @@
     max-height: 200px;
   }
 
-  .experiment-negotiation-chat {
-    min-height: 400px;
-  }
 }
