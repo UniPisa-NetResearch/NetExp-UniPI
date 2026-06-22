@@ -32,6 +32,7 @@ NETBOX_SITE_VIRTUAL = "containerlab"                        # netbox site for vi
 FRONTEND_PORT = 5173
 CONTROLLER_URL = "http://172.16.2.21:5002"
 FRONTEND_URL = "http://172.16.2.21:5173"
+AGENT_SERVER_URL = "http://172.16.2.21:5006"
 
 # VM with containerlab and sonic images
 CONTAINERLAB_HOST = "172.16.6.55"
