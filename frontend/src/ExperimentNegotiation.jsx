@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import "./style/experimentNegotiation.css";
 
 const ExperimentNegotiation = ({ username, reservation_id }) => {
@@ -7,6 +7,59 @@ const ExperimentNegotiation = ({ username, reservation_id }) => {
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState(null);
+
+  const [savedChats, setSavedChats] = useState([]);
+  const [activeChatId, setActiveChatId] = useState(null);
+
+  useEffect(() => {
+    const fetchSessions = async () => {
+      if (!username || !reservation_id) return;
+      try {
+        const response = await fetch(
+          `/api/agent_server/sessions?username=${encodeURIComponent(username)}&reservation_id=${encodeURIComponent(reservation_id)}`
+        );
+        if (response.ok) {
+          const data = await response.json();
+          setSavedChats(data.chat_ids || []);
+        }
+      } catch (err) {
+        console.error("Error fetching sessions:", err);
+      }
+    };
+    fetchSessions();
+  }, [username, reservation_id]);
+
+  // load the chat history for a specific chat_id
+  const loadHistory = async (chatId) => {
+    try {
+      const response = await fetch(
+        `/api/agent_server/history?username=${encodeURIComponent(username)}&reservation_id=${encodeURIComponent(reservation_id)}&chat_id=${encodeURIComponent(chatId)}`
+      );
+      if (response.ok) {
+        const data = await response.json();
+        if (data.messages) {
+          const formattedMessages = data.messages.map((msg, index) => ({
+            id: index + 1,
+            role: msg.role,
+            content: msg.content,
+          }));
+          setMessages(formattedMessages);
+          setActiveChatId(chatId);
+          setError(null);
+        }
+      }
+    } catch (err) {
+      console.error("Error loading history:", err);
+    }
+  };
+
+  const startNewChat = () => {
+    setActiveChatId(null);
+    setMessages([]);
+    setInputValue("");
+    setSelectedFiles([]);
+    setError(null);
+  };
 
   const handleInputChange = (e) => {
     setInputValue(e.target.value);
@@ -58,12 +111,15 @@ const ExperimentNegotiation = ({ username, reservation_id }) => {
       if (reservation_id) {
         formData.append("reservation_id", reservation_id);
       }
+      if (activeChatId) {
+        formData.append("chat_id", activeChatId);
+      }
 
       selectedFiles.forEach((file) => {
         formData.append("files", file);
       });
 
-      const response = await fetch("/api/experiment-negotiation/chat", {
+      const response = await fetch("/api/agent_server/chat", {
         method: "POST",
         body: formData,
       });
@@ -76,6 +132,11 @@ const ExperimentNegotiation = ({ username, reservation_id }) => {
       const data = await response.json();
       if (data.reply) {
         appendMessage("assistant", data.reply);
+      }
+
+      if (data.chat_id && !activeChatId) {
+        setActiveChatId(data.chat_id);
+        setSavedChats((prev) => [...prev, data.chat_id]);
       }
 
       setInputValue("");
@@ -120,52 +181,62 @@ const ExperimentNegotiation = ({ username, reservation_id }) => {
       </div>
       {/* Agent response area */}
       <div className="experiment-negotiation-main">
+        <div className="experiment-negotiation-sidebar">
+          <button className="en-new-chat-btn" onClick={startNewChat}>
+            ➕ New Chat
+          </button>
+          <h3>Recent Chats</h3>
+          {savedChats.length === 0 ? (
+            <p className="en-sidebar-empty">No previous conversations.</p>
+          ) : (
+            <ul className="en-chat-list">
+              {savedChats.map((chatId) => (
+                <li key={chatId}>
+                  <button
+                    className={`en-chat-list-btn ${activeChatId === chatId ? "active" : ""}`}
+                    onClick={() => loadHistory(chatId)}
+                  >
+                    Chat {chatId.substring(0, 8)}...
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
         <div className="experiment-negotiation-chat">
           <div className="en-chat-window">
             {messages.map((msg) => renderMessage(msg))}
           </div>
 
-          <form
-            className="en-input-area"
-            onSubmit={handleSubmit}
-            autoComplete="off"
-          >
-          <div className="en-files-row">
-            <input
-                id="en-file-input"
-                type="file"
-                multiple
-                onChange={handleFileChange}
-                className="en-file-input-hidden"
-            />
-            <button
-                type="button"
-                className="en-file-button"
-                onClick={() => {
-                    const input = document.getElementById("en-file-input");
-                    if (input) {input.click();}
-                }}
-            >
-            +
-            </button>
-            {selectedFiles.length > 0 && (
-                <div className="en-file-list">
-                    {selectedFiles.map((f) => (
-                        <span key={f.name} className="en-file-pill">
-                            <span className="en-file-name">{f.name}</span>
-                            <button
-                                type="button"
-                                className="en-file-remove"
-                                onClick={() => handleRemoveFile(f.name)}
-                            >
-                                ×
-                            </button>
-                        </span>
+          <form className="en-input-area" onSubmit={handleSubmit} autoComplete="off">
+            <div className="en-files-row">
+              <input id="en-file-input" type="file" multiple onChange={handleFileChange} className="en-file-input-hidden"/>
+              <button type="button" className="en-file-button"
+                  onClick={() => {
+                      const input = document.getElementById("en-file-input");
+                      if (input) {input.click();}
+                  }}
+              >
+              +
+              </button>
+              {selectedFiles.length > 0 && (
+                  <div className="en-file-list">
+                      {selectedFiles.map((f) => (
+                          <span key={f.name} className="en-file-pill">
+                              <span className="en-file-name">{f.name}</span>
+                              <button
+                                  type="button"
+                                  className="en-file-remove"
+                                  onClick={() => handleRemoveFile(f.name)}
+                              >
+                                  ×
+                              </button>
+                          </span>
 
-                    ))}
-                </div>
-            )}
-          </div>
+                      ))}
+                  </div>
+              )}
+            </div>
 
             <div className="en-input-row">
               <textarea
@@ -184,12 +255,7 @@ const ExperimentNegotiation = ({ username, reservation_id }) => {
                 <span className="en-send-icon">↑</span>
               </button>
             </div>
-
-            {error && (
-              <div className="en-error-message">
-                {error}
-              </div>
-            )}
+              {error && (<div className="en-error-message">{error}</div>)}
           </form>
         </div>
       </div>
