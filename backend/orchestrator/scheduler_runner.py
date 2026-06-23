@@ -56,11 +56,17 @@ def move_scheduled_jobs_to_queue():
             logging.info(f"Moving job {job_id} to queue (scheduled: {scheduled_dt})")
 
             # remove from scheduled sorted set
-            redis_connection.zrem(key_scheduled, job_id)
-
-            # add to main queue
-            queue.enqueue_job(job)
-            moved_count += 1
+            removed = redis_connection.zrem(key_scheduled, job_id)
+            
+            # if removed == 1, it means that the job was successfully removed and we can enqueue it
+            if removed == 1:
+                    logging.info(f"[SCHEDULER] moved job {job_id} in the main queue")
+                    # add to main queue
+                    queue.enqueue_job(job)
+                    moved_count += 1
+            else:
+                # if removed == 0, it means that the job was already removed by another scheduler instance, so we can skip it to avoid duplicates
+                logging.warning(f"[SCHEDULER] avoided duplicate for job {job_id} (already processed)")
 
         except Exception as ex:
             logging.error(f"Error processing job {job_id}: {ex}")

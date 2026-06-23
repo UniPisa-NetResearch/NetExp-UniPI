@@ -16,6 +16,11 @@ def reservation_start_job(reservation_id):
                 print(f"Error: Reservation {reservation_id} not found.")
                 return
 
+            # if the reservation has a token, it means the grant has already been started
+            if res.token is not None:
+                print(f"[WORKER] jump Start Job for res {reservation_id}: already started and token is present.")
+                return
+            
             # publish start reservation event on redis
             user = User.query.filter_by(username=res.username).first()
             if user:
@@ -45,6 +50,11 @@ def reservation_end_job(reservation_id):
                 print(f"Error: Reservation {reservation_id} not found.")
                 return
 
+            # if the token is already None, it means the access has already been revoked by a previous job
+            if res.token is None:
+                print(f"[WORKER] jump End Job for res {reservation_id}: access already revoked (token is None).")
+                return
+            
             res.token = None                                                    # remove token
 
             db.session.commit()

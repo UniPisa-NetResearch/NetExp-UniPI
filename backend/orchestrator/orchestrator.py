@@ -77,6 +77,10 @@ def send_to_controller(msg_type, user_id, reservation_id, job_data):
                 netbox_site = get_netbox_site(is_virtual)
 
                 if msg_type == "granted":
+                    # if the reservation in the DB already has a token associated, it means a previous request has already completed the grant
+                    if res.token is not None:
+                        print(f"[ORCHESTRATOR - LOCK] jump grantAccess for res {reservation_id}: API already invoked previously.")
+                        return
                     # assign token to the reservation
                     res.token = job_data.get("token")
                     db.session.commit()
