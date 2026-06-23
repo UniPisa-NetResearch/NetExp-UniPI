@@ -451,6 +451,11 @@ def revoke_access():
     safe_res = safe_filename(f"res-{reservation_id}-inventory")
     inv_path = os.path.join(INVENTORY_DIR, f"{safe_res}.ini")
 
+    # if the inventory file does not exist, it means that the revoke was already executed for the current reservation
+    if not os.path.exists(inv_path):
+        print(f"[CONTROLLER] Revoke already executed or reservation deleted for ID {reservation_id}. Inventory not found.")
+        return jsonify({"ok": True, "message": "Access already revoked or files already removed correctly"}), 200
+
     # get template path
     safe_res_template = safe_filename(f"res_{reservation_id}_playbook_template")
     playbook_template_path = os.path.join(CONTROLLER_PLAYBOOKS_DIR, f"{safe_res_template}.yml")

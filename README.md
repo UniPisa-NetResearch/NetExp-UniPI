@@ -310,7 +310,7 @@ ssh -J ubuntu@172.16.6.55 gabripian@172.20.20.161
   ```
 - To see how many subscriptions are present for reservation_events (must be 1), use:
   ```bash
-  PUBSUB NUMSUB reservation_events
+  redis-cli PUBSUB NUMSUB reservation_events
   ```
 - To see all redis keys for chat history, use:
   ```bash
