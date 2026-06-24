@@ -66,6 +66,6 @@ USER_QUOTA_BYTES =536870912
 
 # LLM parameters
 LLM_PROVIDER = "gemini"
-LLM_MODEL = "gemini-2.5-flash"
+LLM_MODEL = "gemini-3.1-flash-lite"
 OPENAI_API_KEY = os.getenv("GEMINI_API_KEY")
 OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"

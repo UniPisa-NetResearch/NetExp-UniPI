@@ -38,9 +38,7 @@
 }
 
 .en-fixed-message {
-  margin-top: 8px;
-  font-size: 14px;
-  color: #32508a;
+  margin-left: 10%;
 }
 
 /* Chat area */
@@ -137,6 +135,12 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.en-add-files-row{
+  display: flex;
+  align-items: center;
+   gap: 8px;
 }
 
 .en-file-label {
