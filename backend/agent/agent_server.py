@@ -1,6 +1,7 @@
 import json
 import redis
 import uuid
+import time
 from flask import request, jsonify
 from ..app import app
 from .llm_client import chat_with_llm
@@ -27,7 +28,7 @@ def chat():
 
     # if there is no chat_id, it means the user is starting a new chat. We generate one.
     if not chat_id:
-        chat_id = str(uuid.uuid4())
+        chat_id = f"{int(time.time())}_{uuid.uuid4().hex[:8]}"          # added timestamp to guarantee chronological order
 
     session_key = f"agent_history:{username}:{reservation_id}:{chat_id}"
 
@@ -41,9 +42,24 @@ def chat():
             {
                 "role": "system",
                 "content": (
-                    "You are a network automation agent. "
-                    "You help the user plan and execute experiments "
-                    "on a testbed with SONiC switches and Linux miniPCs managed via Containerlab."
+                    "You are an Experiment Planner & Intent Interface for a network testbed (SONiC and Linux via Containerlab). "
+                    "Your goal is to understand the user's experiment and generate an execution plan. "
+                    "You MUST strictly follow the following rules:\n"
+                    "1. NO CHITCHAT: Do not use polite formulas, do not say 'I understand', 'Great question' or 'Here is the plan'. Get straight to the point.\n"
+                    "2. NO ASSUMPTIONS (CRITICAL): If the user does NOT explicitly specify the routing protocol (e.g., Static, BGP, OSPF), the IP subnetting scheme OR other essential information, DO NOT INVENT THEM. You MUST stop, leave the Execution Plan as 'Awaiting clarifications', and ask the user specific questions to gather this missing information.\n"
+                    "3. EXHAUSTIVE EXECUTION (ANTI-LAZINESS): When you have all the information and generate the EXECUTION PLAN, you MUST provide the FULL, EXACT commands for EVERY SINGLE DEVICE required for the experiment. "
+                    "The use of phrases like 'Example for sw1', 'Repeat logic for...', or 'etc are absolutely FORBIDDEN'. If N switches need BGP, write the full `vtysh` command block for ALL N switches explicitly.\n"
+                    "4. MINIMAL SCOPE: Configure ONLY the specific devices and interfaces strictly necessary to achieve the user's explicitly stated goal. Do not over-provision or configure the entire topology if only a subset of nodes is involved in the experiment.\n"
+                    "5. MANDATORY STRUCTURE: Your response MUST be formatted EXACTLY into four sections using Markdown:\n\n"
+                    "### EXPERIMENT SUMMARY\n"
+                    "[Write here a concise and technical summary of what you understood]\n\n"
+                    "### CLARIFYING QUESTIONS\n"
+                    "[Select and write here the questions for the user, otherwise write 'None']\n\n"
+                    "### EXECUTION PLAN\n"
+                    "[Provide the complete, exhaustive commands. You may use an Ansible YAML code block, or a list of bash commands in the exact format: `device_name: <command>`]\n\n"
+                    "If you are not yet ready for the Execution Plan because you need information, fill the Summary, write the Questions, and under 'Execution Plan' write 'Awaiting clarifications'."
+                    "### VERIFICATION\n"
+                    "[Provide the specific commands or steps to execute in order to verify the objective and the final outcome of the experiment. If you are still awaiting clarifications, write ONLY 'Awaiting clarifications'.]"
                 )
             }
         ]
@@ -69,8 +85,8 @@ def chat():
         reply = chat_with_llm(history)
         # add response to history and save it back to Redis
         history.append({"role": "assistant", "content": reply})
-        # save updated history to Redis (expiration set to 24 hours to avoid filling up memory)
-        redis_client.set(session_key, json.dumps(history), ex=86400)
+        # save updated history to Redis (expiration set to 5 days as security, when the reservation ends, the key is automatically removed)
+        redis_client.set(session_key, json.dumps(history), ex=432000)
         
         return jsonify({"reply": reply, "chat_id": chat_id})
     except Exception as e:
@@ -88,6 +104,12 @@ def get_sessions():
     # find all chats relative to thie current reservation
     pattern = f"agent_history:{username}:{reservation_id}:*"
     keys = redis_client.keys(pattern)
+
+    # extract last part (chat_id)
+    chat_ids = [key.split(":")[-1] for key in keys]
+    
+    # order chat_ids in descendent order
+    chat_ids.sort(reverse=True)
     
     # extract the last part (the chat_id)
     chat_ids = [key.split(":")[-1] for key in keys]

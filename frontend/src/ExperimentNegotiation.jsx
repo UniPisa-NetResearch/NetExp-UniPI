@@ -69,8 +69,23 @@ const ExperimentNegotiation = ({ username, reservation_id }) => {
   };
 
   const handleFileChange = (e) => {
-    const files = Array.from(e.target.files || []);
-    setSelectedFiles(files);
+    const newFiles = Array.from(e.target.files || []);
+   
+    setSelectedFiles((prev) => {
+      // array with already selected files to avoid duplicates
+      const existingFileNames = prev.map((f) => f.name);
+      
+      // filtering new files, files already selected are not included
+      const uniqueNewFiles = newFiles.filter(
+        (f) => !existingFileNames.includes(f.name)
+      );
+
+      // merge of old and filtered new files
+      return [...prev, ...uniqueNewFiles];
+    });
+
+    // reset input, browser will allow a new selection of a file that was removed
+    e.target.value = null;
   };
 
   const handleRemoveFile = (fileName) => {
@@ -139,7 +154,7 @@ const ExperimentNegotiation = ({ username, reservation_id }) => {
 
       if (data.chat_id && !activeChatId) {
         setActiveChatId(data.chat_id);
-        setSavedChats((prev) => [...prev, data.chat_id]);
+        setSavedChats((prev) => [data.chat_id, ...prev]);
       }
 
       setInputValue("");
@@ -231,15 +246,18 @@ const ExperimentNegotiation = ({ username, reservation_id }) => {
 
           <form className="en-input-area" onSubmit={handleSubmit} autoComplete="off">
             <div className="en-files-row">
-              <input id="en-file-input" type="file" multiple onChange={handleFileChange} className="en-file-input-hidden"/>
-              <button type="button" className="en-file-button"
-                  onClick={() => {
-                      const input = document.getElementById("en-file-input");
-                      if (input) {input.click();}
-                  }}
-              >
-              +
-              </button>
+              <div className="en-add-files-row">               
+                <input id="en-file-input" type="file" multiple onChange={handleFileChange} className="en-file-input-hidden"/>
+                <button type="button" className="en-file-button"
+                    onClick={() => {
+                        const input = document.getElementById("en-file-input");
+                        if (input) {input.click();}
+                    }}
+                >
+                +
+                </button>
+                <span>Add files</span> 
+              </div>
               {selectedFiles.length > 0 && (
                   <div className="en-file-list">
                       {selectedFiles.map((f) => (

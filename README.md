@@ -271,6 +271,12 @@ To start the system, create 9 terminals connected to **NetExp1**.
    source backend-venv/bin/activate
    rq worker -u redis://172.16.4.77:6379 default
    ```
+10. Start the llm server:
+   ```bash
+   cd NetExp-UniPI/
+   source backend-venv/bin/activate
+   python3 -m backend.agent.agent_server
+   ```
 
 ### GUI Access
 
