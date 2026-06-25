@@ -7,7 +7,7 @@ const navItems = [
     { name: 'Home', path: '/' },
     { name: 'Reservation', path: '/reservation' },
     { name: 'Configuration', path: '/configuration' },
-    { name: 'Experiment Negotiation', path: '/experimentNegotiation' },
+    { name: 'LLM Agent', isDropdown: true },
     { name: 'Experiment', path: '/experiment' },
     { name: 'Evaluation', path: '/evaluation' },
 ];
@@ -23,6 +23,15 @@ const isLinkActive = (itemPath, currentPath) => {
 const NavbarLayout = ({ children, onLogout, showLogoutButton = true, isReservationActive = false, activeReservationExpiration = null, isAccessGranted = false, isEvaluationAccessGranted = false, checkEvaluationAccess }) => {
     const location = useLocation();
     const navigate = useNavigate();
+    const [isAgentMenuOpen, setIsAgentMenuOpen] = useState(false);
+
+    // dynamic text of agent menu based on the pae of user
+    let agentMenuLabel = "LLM Agent";
+    if (location.pathname === "/negotiation") {
+        agentMenuLabel = "Negotiation";
+    } else if (location.pathname === "/safetyCheck") {
+        agentMenuLabel = "Safety Check";
+    }
 
     const handleLogout = () => {
         onLogout();
@@ -76,14 +85,14 @@ const NavbarLayout = ({ children, onLogout, showLogoutButton = true, isReservati
 
     const handleNavClick = async (e, item) => {
         // block navigation to configuration if there is no active reservation/token
-        if ((item.path === '/configuration' || item.path=== '/experimentNegotiation' || item.path === '/experiment' || item.path === '/evaluation') && !isReservationActive) {
+        if ((item.path === '/configuration' || item.path=== '/negotiation' || item.path === '/safetyCheck' || item.path === '/experiment' || item.path === '/evaluation') && !isReservationActive) {
             e.preventDefault();
             // give feedback and remain on current page
             alert('⚠️ Access denied: you do not have an active reservation.');
             return;
         }
 
-        if ((item.path === '/configuration' || item.path=== '/experimentNegotiation' || item.path === '/experiment') && !isAccessGranted) {
+        if ((item.path === '/configuration' || item.path=== '/negotiation' || item.path === '/safetyCheck' || item.path === '/experiment') && !isAccessGranted) {
             e.preventDefault();
             // give feedback and remain on current page
             alert('⏳ Account creation in progress on devices. Please wait before accessing this page.');
@@ -109,16 +118,47 @@ const NavbarLayout = ({ children, onLogout, showLogoutButton = true, isReservati
                 <img src="/NetExp.png" alt="NetExp Logo" className="navbar-logo"/>
 
                 <div className="navbar-links">
-                    {navItems.map((item) => (
-                        <Link
-                            key={item.name}
-                            to={item.path}
-                            onClick={(e) => handleNavClick(e, item)}
-                            className={`nav-link ${isLinkActive(item.path, location.pathname) ? 'active' : ''}`}
-                        >
-                            {item.name}
-                        </Link>
-                    ))}
+                    {navItems.map((item) => {
+                        if (item.isDropdown) {
+                            return (
+                                <div key={item.name} className="nav-item-dropdown" onMouseEnter={() => setIsAgentMenuOpen(true)} onMouseLeave={() => setIsAgentMenuOpen(false)}>
+                                    <span className={`nav-link ${location.pathname.includes('/negotiation') || location.pathname.includes('/safetyCheck') ? 'active' : ''}`} >
+                                        {agentMenuLabel} ▾
+                                    </span>
+                            
+                                    {isAgentMenuOpen && (
+                                        <div className="dropdown-content">
+                                            <Link 
+                                                to="/negotiation"
+                                                className="dropdown-link" 
+                                                onClick={(e) => {setIsAgentMenuOpen(false); handleNavClick(e, {path: '/negotiation'});}}
+                                            >
+                                                Negotiation
+                                            </Link>
+                                            <Link 
+                                                to="/safetyCheck"
+                                                className="dropdown-link" 
+                                                onClick={(e) => {setIsAgentMenuOpen(false); handleNavClick(e, {path: '/safetyCheck'});}}
+                                            >
+                                                Safety Check
+                                            </Link>
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        }
+                        return (
+                            <Link
+                                key={item.name}
+                                to={item.path}
+                                onClick={(e) => handleNavClick(e, item)}
+                                className={`nav-link ${isLinkActive(item.path, location.pathname) ? 'active' : ''}`}
+                            >
+                                {item.name}
+                            </Link>
+                        );                 
+                    
+                    })}
                 </div>
 
                 <div className="navbar-menu">

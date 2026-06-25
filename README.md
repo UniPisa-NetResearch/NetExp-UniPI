@@ -272,11 +272,11 @@ To start the system, create 9 terminals connected to **NetExp1**.
    rq worker -u redis://172.16.4.77:6379 default
    ```
 10. Start the llm server:
-   ```bash
-   cd NetExp-UniPI/
-   source backend-venv/bin/activate
-   python3 -m backend.agent.agent_server
-   ```
+    ```bash
+    cd NetExp-UniPI/
+    source backend-venv/bin/activate
+    python3 -m backend.agent.agent_server
+    ```
 
 ### GUI Access
 
@@ -325,6 +325,22 @@ ssh -J ubuntu@172.16.6.55 gabripian@172.20.20.161
 - To see the content of a certain key (agent_history:gabripian:3:02d62338-b002-48fe-8bdd-7ed94012da5f), use:
   ```bash
   redis-cli GET agent_history:gabripian:3:02d62338-b002-48fe-8bdd-7ed94012da5f | python3 -m json.tool
+  ```
+- To see every redis worker process, use:
+  ```bash
+  ps aux | grep -E 'rq worker|worker-pool|python.*rq' | grep -v grep | wc -l
+  ```
+- To kill every rq worker process, use:
+  ```bash
+  pkill -f 'rq worker'
+  ```
+- To observe every registered worker id on redis, use:
+  ```bash
+  redis-cli SMEMBERS rq:workers
+  ```
+- To oremove every worker of a set in redis, use:
+  ```bash
+  redis-cli DEL rq:workers
   ```
 - To remove a device (for example `172.20.20.164`) from the `known_hosts` file when the virtual topology is redeployed, use:
   ```bash
