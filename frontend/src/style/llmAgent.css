@@ -4,9 +4,14 @@
   padding: 20px;
   background-color: #ffffff;
   color: #0b2e6b;
-  height: 100%;
+  min-height: 100%;
+  height: auto;
   box-sizing: border-box;
   margin-top: 20px;
+  margin-bottom: 20px;
+  margin-left: 30px;
+  margin-right: 30px;
+  border-radius: 8px;
 }
 
 .experiment-negotiation-header {
@@ -37,10 +42,6 @@
   height: calc(100vh - 150px);
 }
 
-.en-fixed-message {
-  margin-left: 10%;
-}
-
 /* Chat area */
 
 .experiment-negotiation-chat {
@@ -51,7 +52,7 @@
   border: 1px solid #d4e1ff;
   border-radius: 8px;
   padding: 16px;
-  min-height: 400px;
+  min-height: 200px;
 }
 
 .en-chat-window {
@@ -190,8 +191,6 @@
   color: #c0392b;
 }
 
-/* Text + button */
-
 .en-input-row {
   display: flex;
   flex-direction: row;
@@ -237,7 +236,7 @@
 }
 
 .en-send-button:hover {
-  background-color: #056fe1;
+  background-color: #084dc2;
 }
 
 .en-send-button:disabled,
@@ -320,7 +319,7 @@
 }
 
 .en-new-chat-btn:hover {
-  background-color: #056fe1;
+  background-color: #084dc2;
 }
 
 .experiment-negotiation-sidebar h3 {
@@ -369,7 +368,102 @@
   border-color: #0b6efb;
   font-weight: 600;
 }
+.experiment-negotiation-playbooks-section {
+  flex: 2;
+  background-color: #f0f4ff;
+  border: 1px solid #d4e1ff;
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
 
+.en-playbooks-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.en-playbooks-header h3 {
+  margin: 0;
+  font-size: 16px;
+  color: #0b2e6b;
+}
+
+.en-add-playbook-btn {
+  background-color: #0b6efb;
+  color: #ffffff;
+  border: none;
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.en-add-playbook-btn:hover {
+  background-color: #084dc2;
+}
+
+.en-playbooks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.en-playbook-item {
+  background: #ffffff;
+  border: 1px solid #d4e1ff;
+  border-radius: 6px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.en-playbook-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: #32508a;
+}
+
+.en-remove-playbook-btn {
+  background: transparent;
+  border: none;
+  color: #c0392b;
+  font-size: 18px;
+  font-weight: bold;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+.en-remove-playbook-btn:hover {
+  color: #962d22;
+}
+
+.en-safety-playbook {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid #d4e1ff;
+  border-radius: 4px;
+  padding: 8px;
+  font-family: monospace;
+  font-size: 13px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.en-safety-playbook:focus {
+  border-color: #0b6efb;
+  box-shadow: 0 0 0 1px rgba(11, 110, 251, 0.2);
+}
 @media (max-width: 900px) {
   .experiment-negotiation-main {
     flex-direction: column;
@@ -379,6 +473,10 @@
   .experiment-negotiation-sidebar {
     max-width: 100%;
     max-height: 200px;
+  }
+
+  .experiment-negotiation-playbooks-section {
+    min-height: 300px;
   }
 
 }

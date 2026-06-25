@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
-import "./style/experimentNegotiation.css";
+import "./style/llmAgent.css";
 
-const ExperimentNegotiation = ({ username, reservation_id }) => {
+const LLMAgent = ({ username, reservation_id, mode }) => {
   const [messages, setMessages] = useState([]);
   const [inputValue, setInputValue] = useState("");
   const [selectedFiles, setSelectedFiles] = useState([]);
@@ -13,13 +13,44 @@ const ExperimentNegotiation = ({ username, reservation_id }) => {
   // Determine if the user input is empty (no text and no files)
   const isInputEmpty = inputValue.trim() === "" && selectedFiles.length === 0;
   const isButtonDisabled = isSending || isInputEmpty;
+  // state for commands/playbook upload
+  const [playbooks, setPlaybooks] = useState([{ id: 1, content: ""}]);
+
+  const handleAddPlaybook = () => {
+    const nextId = playbooks.length > 0 ? Math.max(...playbooks.map(p => p.id)) + 1 : 1;
+    setPlaybooks([...playbooks, { id: nextId, content: "" }]);
+  };
+
+  const handleRemovePlaybook = (id) => {
+    setPlaybooks(playbooks.filter((p) => p.id !== id));
+  };
+
+  const handlePlaybookChange = (id, newContent) => {
+    setPlaybooks(playbooks.map((p) => (p.id === id ? { ...p, content: newContent } : p)));
+  };
+
+  
+  const startNewChat = () => {
+    setActiveChatId(null);
+    setMessages([]);
+    setInputValue("");
+    setSelectedFiles([]);
+    setPlaybooks([{ id: 1, content: "" }]);
+    setError(null);
+  };
+  // reset all fields between different agents
+  useEffect(() =>{
+
+    startNewChat();
+
+  }, [mode]);
 
   useEffect(() => {
     const fetchSessions = async () => {
       if (!username || !reservation_id) return;
       try {
         const response = await fetch(
-          `/api/agent_server/sessions?username=${encodeURIComponent(username)}&reservation_id=${encodeURIComponent(reservation_id)}`
+          `/api/agent_server/sessions?username=${encodeURIComponent(username)}&reservation_id=${encodeURIComponent(reservation_id)}&agent_role=${encodeURIComponent(mode)}`
         );
         if (response.ok) {
           const data = await response.json();
@@ -30,13 +61,13 @@ const ExperimentNegotiation = ({ username, reservation_id }) => {
       }
     };
     fetchSessions();
-  }, [username, reservation_id]);
+  }, [username, reservation_id, mode]);
 
   // load the chat history for a specific chat_id
   const loadHistory = async (chatId) => {
     try {
       const response = await fetch(
-        `/api/agent_server/history?username=${encodeURIComponent(username)}&reservation_id=${encodeURIComponent(reservation_id)}&chat_id=${encodeURIComponent(chatId)}`
+        `/api/agent_server/history?username=${encodeURIComponent(username)}&reservation_id=${encodeURIComponent(reservation_id)}&chat_id=${encodeURIComponent(chatId)}&agent_role=${encodeURIComponent(mode)}`
       );
       if (response.ok) {
         const data = await response.json();
@@ -54,14 +85,6 @@ const ExperimentNegotiation = ({ username, reservation_id }) => {
     } catch (err) {
       console.error("Error loading history:", err);
     }
-  };
-
-  const startNewChat = () => {
-    setActiveChatId(null);
-    setMessages([]);
-    setInputValue("");
-    setSelectedFiles([]);
-    setError(null);
   };
 
   const handleInputChange = (e) => {
@@ -120,8 +143,21 @@ const ExperimentNegotiation = ({ username, reservation_id }) => {
 
     try {
       const formData = new FormData();
-      if (trimmed) {
-        formData.append("message", trimmed);
+
+      let messageToSend = trimmed;
+      
+      if (mode === "safety") {
+        const combinedPlaybooks = playbooks.filter(p => p.content.trim() !== "").map((p, index) => `--- File/Script ${index + 1} ---\n${p.content}`).join("\n\n");
+        if (combinedPlaybooks !== "") {
+          messageToSend = `PLAYBOOK/COMMANDS TO ANALYZE:\n${combinedPlaybooks}\n\nREQUEST:\n${trimmed}`;
+        }
+      }  
+        
+      if(messageToSend){
+        formData.append("message", messageToSend)
+      }
+      if(mode){
+        formData.append("agent_role", mode);
       }
       if (username) {
         formData.append("username", username);
@@ -203,10 +239,12 @@ const ExperimentNegotiation = ({ username, reservation_id }) => {
   return (
     <div className="experiment-negotiation-container">
       <div className="experiment-negotiation-header">
-        <h1>Negotiation Agent</h1>
+        <h1>{mode === "negotiation" ? "Negotiation Agent" : "Safety Check Agent"}</h1>
         <p className="en-fixed-message">
-            Describe the network experiment you want to run. You can also attach
-            files (topologies, configurations, diagrams).
+          {mode === "negotiation"
+            ? "Describe the network experiment you want to run. You can also attach files (topologies, configurations, diagrams)."
+            : "Paste the execution plan/playbook and describe the topology."
+          }
         </p>
       </div>
       {/* Agent response area */}
@@ -233,6 +271,39 @@ const ExperimentNegotiation = ({ username, reservation_id }) => {
             </ul>
           )}
         </div>
+
+        {mode === "safety" && (
+          <div className="experiment-negotiation-playbooks-section">
+            <div className="en-playbooks-header">
+              <h3>Playbooks / Scripts</h3>
+              <button type="button" onClick={handleAddPlaybook} className="en-add-playbook-btn">
+                + Add Field
+              </button>
+            </div>
+            <div className="en-playbooks-list">
+              {playbooks.map((playbook, index) => (
+                <div key={playbook.id} className="en-playbook-item">
+                  <div className="en-playbook-item-header">
+                    <span>File {index + 1}</span>
+                    {playbooks.length > 1 && (
+                      <button type="button" onClick={() => handleRemovePlaybook(playbook.id)} className="en-remove-playbook-btn" title="Remove">
+                        ×
+                      </button>
+                    )}
+                  </div>
+                  <textarea 
+                    className="en-safety-playbook" 
+                    placeholder="Paste the generated Ansible playbook or bash commands here..." 
+                    value={playbook.content} 
+                    onChange={(e) => handlePlaybookChange(playbook.id, e.target.value)}
+                    rows={8}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>    
+        )}
+
         <div className="experiment-negotiation-chat">
           <div className="en-chat-window">
             {messages.map((msg) => renderMessage(msg))}
@@ -282,7 +353,7 @@ const ExperimentNegotiation = ({ username, reservation_id }) => {
                 className="en-textarea"
                 value={inputValue}
                 onChange={handleInputChange}
-                placeholder="Describe the experiment you want to run..."
+                placeholder={mode === "negotiation" ? "Describe the experiment you want to run..." : "Describe the topology and insert all requested information..."}
                 rows={3}
               />
               <button
@@ -302,4 +373,4 @@ const ExperimentNegotiation = ({ username, reservation_id }) => {
   );
 };
 
-export default ExperimentNegotiation;
+export default LLMAgent;
