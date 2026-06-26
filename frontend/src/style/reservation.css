@@ -28,7 +28,8 @@
   min-width: 0;
   padding: 30px 40px;
   box-sizing: border-box;
-  max-width: 64%;
+  max-width: 100%;
+  margin-right: 40px;
 }
 .row-bottom {
   display: flex;
@@ -609,7 +610,8 @@ select {
   flex: 1;
   padding: 0;
   overflow: hidden;
-  min-width: 1224px;
+  max-width: 100%;
+  margin-right: 40px;
 }
 .tab-switcher {
   display: flex;
