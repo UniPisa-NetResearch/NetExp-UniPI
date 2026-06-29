@@ -1,0 +1,78 @@
+name: virtualTopology
+
+topology:
+  nodes:
+    h1:
+      kind: linux
+      image: ubuntu:22.04
+      mgmt-ipv4: 172.20.20.161
+
+    
+    h2:
+      kind: linux
+      image: ubuntu:22.04
+      mgmt-ipv4: 172.20.20.162
+
+    
+    h3:
+      kind: linux
+      image: ubuntu:22.04
+      mgmt-ipv4: 172.20.20.163
+
+    
+    h4:
+      kind: linux
+      image: ubuntu:22.04
+      mgmt-ipv4: 172.20.20.164
+
+    
+    sw5:
+      kind: sonic-vs
+      image: docker-sonic-vs:latest
+      mgmt-ipv4: 172.20.20.155
+
+    
+    sw6:
+      kind: sonic-vs
+      image: docker-sonic-vs:latest
+      mgmt-ipv4: 172.20.20.156
+
+    
+    sw1:
+      kind: sonic-vs
+      image: docker-sonic-vs:latest
+      mgmt-ipv4: 172.20.20.151
+
+    
+    sw2:
+      kind: sonic-vs
+      image: docker-sonic-vs:latest
+      mgmt-ipv4: 172.20.20.152
+
+    
+    sw3:
+      kind: sonic-vs
+      image: docker-sonic-vs:latest
+      mgmt-ipv4: 172.20.20.153
+
+    
+    sw4:
+      kind: sonic-vs
+      image: docker-sonic-vs:latest
+      mgmt-ipv4: 172.20.20.154
+
+
+  links:
+    - endpoints: ["sw5:eth1", "sw1:eth1"]
+    - endpoints: ["sw6:eth1", "sw1:eth2"]
+    - endpoints: ["sw5:eth2", "sw2:eth1"]
+    - endpoints: ["sw6:eth2", "sw2:eth2"]
+    - endpoints: ["sw5:eth3", "sw3:eth1"]
+    - endpoints: ["sw6:eth3", "sw3:eth2"]
+    - endpoints: ["sw5:eth4", "sw4:eth1"]
+    - endpoints: ["sw6:eth4", "sw4:eth2"]
+    - endpoints: ["h1:eth1", "sw1:eth3"]
+    - endpoints: ["h2:eth1", "sw2:eth3"]
+    - endpoints: ["h3:eth1", "sw3:eth3"]
+    - endpoints: ["h4:eth1", "sw4:eth3"]
+  
