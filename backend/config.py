@@ -69,3 +69,4 @@ LLM_PROVIDER = "gemini"
 LLM_MODEL = "gemini-3.1-flash-lite"
 OPENAI_API_KEY = os.getenv("GEMINI_API_KEY")
 OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+SAFETY_ITERATIONS = 3

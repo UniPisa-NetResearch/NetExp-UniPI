@@ -2,10 +2,11 @@ import json
 import redis
 import uuid
 import time
+import os
 from flask import request, jsonify
 from ..app import app
 from .llm_client import chat_with_llm
-from ..config import REDIS_HOST, REDIS_PORT, REDIS_DB
+from ..config import REDIS_HOST, REDIS_PORT, REDIS_DB, SAFETY_ITERATIONS
 from .agents_util.prompts import AGENT_PROMPTS, FORBIDDEN_RULES
 
 # redis store for conversation history, keyed by username and reservation_id
@@ -15,6 +16,14 @@ redis_client = redis.Redis(
     db=REDIS_DB, 
     decode_responses=True   # automatically decodes bytes in strings
 )
+
+topology_file_path = os.path.join(os.path.dirname(__file__), "agents_util", "topology_plain.yaml")
+try:
+    with open(topology_file_path, "r") as topo_file:
+        testbed_topology = topo_file.read()
+except FileNotFoundError:
+    testbed_topology = "# Topology file not found"
+    print(f"Warning: Could not find {topology_file_path}")
 
 @app.route("/api/agent_server/chat", methods=["POST"])
 def chat():
@@ -39,10 +48,14 @@ def chat():
     if history_str:
         history = json.loads(history_str)
     else:
+
         system_prompt = AGENT_PROMPTS.get(agent_role)
+        system_prompt += f"\n\nTESTBED PHYSICAL TOPOLOGY:\n```yaml\n{testbed_topology}\n```\n"
+
         if agent_role == "safety":
             rules_formatted = "\n".join([f"- {rule}" for rule in FORBIDDEN_RULES])
             system_prompt += f"\n\nFORBIDDEN RULES FOR THIS TESTBED:\n{rules_formatted}"
+        
         # initialize history if it doesn't exist
         history = [{"role": "system", "content": system_prompt}]
 
@@ -64,13 +77,43 @@ def chat():
     history.append({"role": "user", "content": user_content})
 
     try:
-        reply = chat_with_llm(history)
-        # add response to history and save it back to Redis
-        history.append({"role": "assistant", "content": reply})
+        reasoning_steps = []
+        reply = ""
+        
+        # autocorrection loop for Safety Check (max N iterations)
+        if agent_role == "safety":
+            for iteration in range(SAFETY_ITERATIONS):
+                reply = chat_with_llm(history)
+                reasoning_steps.append({"iteration": iteration + 1, "content": reply})
+                history.append({"role": "assistant", "content": reply})
+                
+                is_approved = "APPROVED" in reply
+                is_awaiting_info = "AWAITING INFORMATION" in reply
+                
+                has_questions = False
+                if "### CLARIFYING QUESTIONS" in reply:
+                    questions_section = reply.split("### CLARIFYING QUESTIONS")[-1].strip()
+        
+                    if questions_section and "none" not in questions_section.lower():
+                        has_questions = True
+                
+                # exit the loop if approved or has questions for the user
+                if is_approved or is_awaiting_info or has_questions:
+                    break 
+            
+                # if rejected, we instruct the LLM for the next iteration
+                correction_prompt = "The plan you generated above still contains safety violations or logical errors. Please analyze the '### EXECUTABLE PLAN' you just proposed, fix the remaining issues and generate a new complete response."
+                history.append({"role": "user", "content": correction_prompt})
+
+        else:
+            reply = chat_with_llm(history)
+            # add response to history and save it back to Redis
+            history.append({"role": "assistant", "content": reply})
+        
         # save updated history to Redis (expiration set to 5 days as security, when the reservation ends, the key is automatically removed)
         redis_client.set(session_key, json.dumps(history), ex=432000)
         
-        return jsonify({"reply": reply, "chat_id": chat_id})
+        return jsonify({"reply": reply, "chat_id": chat_id, "reasoning_steps": reasoning_steps})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     
@@ -122,11 +165,16 @@ def delete_history():
     data = request.get_json() or {}
     username = data.get("username", "")
     reservation_id = data.get("reservation_id", "")
+    chat_id = data.get("chat_id", "")
 
     if not username or not reservation_id:
         return jsonify({"error": "Missing parameters"}), 400
-
-    pattern = f"agent_history:*:{username}:{reservation_id}:*"
+    
+    if not chat_id:
+        pattern = f"agent_history:*:{username}:{reservation_id}:*"
+    else:
+        pattern = f"agent_history:*:{username}:{reservation_id}:{chat_id}"
+        
     keys = redis_client.keys(pattern)
     if keys:
         redis_client.delete(*keys) # remove all keys matching the pattern
