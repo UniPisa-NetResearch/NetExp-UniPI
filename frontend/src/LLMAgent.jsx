@@ -1,9 +1,6 @@
 import React, { useState, useEffect } from "react";
 import "./style/llmAgent.css";
 
-// pipeline phases (each phase corresponds to an agent)
-const PHASES = ['negotiation', 'planning', 'safety', 'execution'];
-
 const LLMAgent = ({ username, reservation_id}) => {
   const [messages, setMessages] = useState([]);
   const [inputValue, setInputValue] = useState("");
@@ -16,17 +13,25 @@ const LLMAgent = ({ username, reservation_id}) => {
 
   const [currentPhase, setCurrentPhase] = useState('negotiation');
   const [canAdvance, setCanAdvance] = useState(false);
-  const [extractedPayload, setExtractedPayload] = useState("");
   const [needsClarification, setNeedsClarification] = useState(false);
 
   // to distinguish experiment running or chat visualization after experiment
   const [isReadOnly, setIsReadOnly] = useState(false);
+  // pipeline phases (each phase corresponds to an agent)
+  const [phases, setPhases] = useState([]);
   // input enabled only for negotiation phase and safety phase in case of clarification is needed
-  const isInputDisabled = isReadOnly || currentPhase === 'planning' || currentPhase === 'execution' || (currentPhase === 'safety' && !needsClarification);
+  const isInputDisabled = isReadOnly || canAdvance ||currentPhase === 'planning' || currentPhase === 'execution' || (currentPhase === 'safety' && !needsClarification);
   
   // determine if the user input is empty (no text and no files)
   const isInputEmpty = inputValue.trim() === "" && selectedFiles.length === 0;
   const isButtonDisabled = isSending || isInputEmpty || isInputDisabled;
+
+  // phases states to use navigation buttons
+  const currentPhaseIndex = phases.indexOf(currentPhase);
+  const hasPreviousPhase = currentPhaseIndex > 0;
+  const hasNextPhase = currentPhaseIndex !== -1 && currentPhaseIndex < phases.length - 1;
+  const previousPhase = hasPreviousPhase ? phases[currentPhaseIndex - 1] : null;
+  const nextPhase = hasNextPhase ? phases[currentPhaseIndex + 1] : null;
   
   const startNewChat = () => {
     setActiveChatId(null);
@@ -38,32 +43,32 @@ const LLMAgent = ({ username, reservation_id}) => {
     setCurrentPhase('negotiation');
     setIsReadOnly(false);
   };
-  // reset all fields between different agents
-  useEffect(() =>{
-
-    startNewChat();
-
-  }, []);
+  // reset all fields when a new chat is started (either from the button or after the execution phase)
+  useEffect(() =>{ startNewChat(); }, []);
 
   useEffect(() => {
     const fetchSessions = async () => {
       if (!username || !reservation_id) return;
       try {
         const response = await fetch(
-          `/api/agent_server/sessions?username=${encodeURIComponent(username)}&reservation_id=${encodeURIComponent(reservation_id)}&agent_role=${encodeURIComponent(currentPhase)}`
+          `/api/agent_server/sessions?username=${encodeURIComponent(username)}&reservation_id=${encodeURIComponent(reservation_id)}&agent_role=${encodeURIComponent("negotiation")}`
         );
         if (response.ok) {
+          // retrieve the list of chats and the ist of ordered phases from the backend
           const data = await response.json();
           setSavedChats(data.chat_ids || []);
+          if (data.phases_order && phases.length === 0) {
+            setPhases(data.phases_order);
+          }
         }
       } catch (err) {
         console.error("Error fetching sessions:", err);
       }
     };
     fetchSessions();
-  }, [username, reservation_id, currentPhase]);
+  }, [username, reservation_id]);
 
-  // load the chat history for a specific chat_id
+  // load the chat history for a specific chat_id and phase
   const loadHistory = async (chatId, phase) => {
     try {
       const response = await fetch(
@@ -169,91 +174,119 @@ const LLMAgent = ({ username, reservation_id}) => {
     ]);
   };
 
+  // parse a JSON string returned by the backend and update UI state, so the user can proceed to the next phase when allowed
   const parseLLMResponse = (reply, phase) => {
-    if (!reply) return;
-    let payload = "";
+    // ignore empty values or non-string payloads to keep parsing predictable
+    if (!reply || typeof reply !== "string") return;
 
-    const isApproved = /###\s*STATUS[\s\S]*?APPROVED/i.test(reply);
+    try {
+      // backend responses are normalized as JSON strings
+      const parsed = JSON.parse(reply);
 
-    if (phase === 'negotiation' && isApproved) {
+      // normalize status checks to avoid case-sensitivity issues
+      const status = (parsed.status || "").toUpperCase();
 
-      setCanAdvance(true);
+      // negotiation and planning can advance only after an approved status
+      if (phase === 'negotiation' || phase === 'planning') {
 
-      const match = reply.match(/###\s*CONTEXT FOR PLANNING AGENT([\s\S]*)/i);
-      if (match) payload = match[1].trim();
+        if (status.includes("APPROVED")) setCanAdvance(true);
 
-    } else if (phase === 'planning' && isApproved) {
+      // safety may either approve the plan or require more user input  
+      } else if (phase === 'safety') {
 
-      setCanAdvance(true);
+        if (status.includes("APPROVED")) {
 
-      let executionPlan = "";
-      let safetyContext = "";
-      
-      const matchExecution = reply.match(/###\s*EXECUTION PLAN[\s\S]*?(?=###\s*VERIFICATION|###\s*STATUS|###\s*CONTEXT|$)/i);
-      if (matchExecution) executionPlan = matchExecution[0].trim();
+          setCanAdvance(true);
+          setNeedsClarification(false);
 
-      
-      const matchContext= reply.match(/###\s*CONTEXT FOR SAFETY AGENT[\s\S]*/i);
-      if (matchContext) safetyContext = matchContext[0].trim();
-
-      // merge two headers
-      if (executionPlan || safetyContext) {
-        payload = `${matchExecution}\n\n${matchContext}`;
-      }
-
-    } else if (phase === 'safety') {
-
-      if (isApproved) {
-
-        setCanAdvance(true);
-        setNeedsClarification(false);
-
-        const match = reply.match(/###\s*EXECUTABLE PLAN([\s\S]*?)(?=###\s*CLARIFYING QUESTIONS|$)/i);
-        
-        if (match){
-          const planText = match[1].trim();
-          
-          // if the plan is not 'N/A', we extract it
-          if (!/^N\/A$/i.test(planText)) {
-            payload = planText;
-          }
-        }
-      } else {
-        // if not Approved, backend exausted each attempt, unlock user input
-        setNeedsClarification(true);
-      }
-
-      const questionsMatch = reply.match(/###\s*CLARIFYING QUESTIONS([\s\S]*)/i);
-
-      if (questionsMatch) {
-        
-        const questionsText = questionsMatch[1].trim();
-        
-        // enable user input if the section is not empty or "None"
-        if (questionsText && !/^none$/i.test(questionsText)) {
+        } else {
           setNeedsClarification(true);
         }
+
+        // any clarification question keeps the input enabled for the user
+        const questions = parsed.clarifying_questions;
+        if (questions && String(questions).toLowerCase() !== "none") {
+
+          setNeedsClarification(true);
+
+        }
+
+      // execution is the terminal phase, so completion unlocks the final action
+      } else if (phase === 'execution') {
+        setCanAdvance(true);
       }
+    } catch (e) {
+      console.error("Failed to parse JSON response:", e);
     }
-    if (payload) setExtractedPayload(payload);
   };
 
-  const handleAdvance = () => {
-    const currentIndex = PHASES.indexOf(currentPhase);
-    if (currentIndex < PHASES.length - 1) {
-      const nextPhase = PHASES[currentIndex + 1];
+  // move the current conversation to the next agent phase, in read-only mode, this only loads stored history from Redis
+  const handleAdvance = async () => {
+    
+    // advance only if a next phase exists
+    if (hasNextPhase) {
 
       if (isReadOnly) {
-      // MODALITÀ STORICO: Non chiamiamo l'LLM, carichiamo solo la history della fase successiva da Redis
-      loadHistory(activeChatId, nextPhase);
+
+        // load only history of next phase on redis in history mode
+        loadHistory(activeChatId, nextPhase);
+
       } else {
+
+        // switch the UI immediately to the next phase and show a loading state
         setCurrentPhase(nextPhase);
         setCanAdvance(false);
         setMessages([]); // clean chat for new view
-        
-        // automatic change to next agent
-        if (extractedPayload) {
-          handleSubmit(null, extractedPayload, nextPhase);
+        setIsSending(true);
+
+        try {
+          // ask the backend to forward the validated context to the next agent
+          const response = await fetch("/api/agent_server/advance", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              username: username,
+              reservation_id: reservation_id,
+              chat_id: activeChatId,
+              current_agent: currentPhase,
+              next_agent: nextPhase
+            }),
+          });
+
+          const data = await response.json();
+
+          if (response.ok) {
+            // show the auto-forwarded context so the user can see what was passed downstream
+            if (data.context_sent) {
+              appendMessage("user", `[System: Auto-forwarded context from ${currentPhase}]\n\n${data.context_sent}`);
+            }
+
+            // safety may return multiple correction iterations; render each one separately
+            if (data.reasoning_steps && data.reasoning_steps.length > 0) {
+
+              data.reasoning_steps.forEach((step) => {appendMessage("assistant", `[Iteration ${step.iteration}]\n${step.content}`);});
+
+            } else if (data.reply) {
+              // other phases return a single final reply
+              appendMessage("assistant", data.reply);
+            }
+
+            // use the last reasoning step as the authoritative result when present
+            const finalReply = (data.reasoning_steps && data.reasoning_steps.length > 0) ? data.reasoning_steps[data.reasoning_steps.length - 1].content : data.reply;
+
+            parseLLMResponse(finalReply, nextPhase);
+            
+          } else {
+            console.error("Error advancing:", data.error);
+            setError(data.error || "Failed to advance to the next agent.");
+          }
+        } catch (err) {
+          console.error("Network error advancing:", err);
+          setError("Network error advancing.");
+        } finally {
+          setIsSending(false);
         }
       }
     } else {
@@ -261,28 +294,37 @@ const LLMAgent = ({ username, reservation_id}) => {
     }
   };
 
+  // go to the previous phase in history navigation
+  const handleGoBackHistory = async () => {
+    if (!isReadOnly || !activeChatId || !hasPreviousPhase) return;
+    loadHistory(activeChatId, previousPhase);
+  };
+
+  // terminate experiment and return to negotiation phase
+  const handleCancelPipeline = () => {
+    if (isSending) return;
+    startNewChat();
+  };
+
+  // send a user message and optional files to the current agent
   const handleSubmit = async (e, autoText = null, autoPhase = null) => {
     if(e) e.preventDefault();
     setError(null);
 
-    const targetPhase = autoPhase || currentPhase;
-    const textToSend = autoText !== null ? autoText : inputValue.trim();
-    const filesToSend = autoText !== null ? [] : selectedFiles;
+    const textToSend = inputValue.trim();
+    const filesToSend = selectedFiles;
 
     if (!textToSend && filesToSend.length === 0) return;
 
-    if (autoText !== null) {
-      appendMessage("user", `${textToSend}`);
-    } else if (textToSend) {
-      appendMessage("user", textToSend);
-    }
-
+    appendMessage("user", textToSend);
+    
     setIsSending(true);
 
     try {
+      // build a multipart request because the payload may include uploaded files
       const formData = new FormData();
       if (textToSend) formData.append("message", textToSend);
-      formData.append("agent_role", targetPhase);
+      formData.append("agent_role", currentPhase);
       if (username) formData.append("username", username);
       if (reservation_id) formData.append("reservation_id", reservation_id);
       if (activeChatId) formData.append("chat_id", activeChatId);
@@ -301,30 +343,31 @@ const LLMAgent = ({ username, reservation_id}) => {
 
       const data = await response.json();
       
-      if (targetPhase === 'safety' && data.reasoning_steps) {
+      // safety can emit multiple self-correction iterations before producing a final outcome
+      if (currentPhase === 'safety' && data.reasoning_steps) {
+
          data.reasoning_steps.forEach((step, index) => {
             appendMessage("assistant", `[Iteration ${step.iteration}]\n${step.content}`);
          });
+
       } else if (data.reply) {
+        // other agents return only one message
          appendMessage("assistant", data.reply);
       }
 
+      // persist the generated chat id so later phases and history use the same session
       if (data.chat_id && !activeChatId) {
         setActiveChatId(data.chat_id);
-        if (targetPhase === 'negotiation') setSavedChats((prev) => [data.chat_id, ...prev]);
+        if (currentPhase === 'negotiation') setSavedChats((prev) => [data.chat_id, ...prev]);
       }
 
-      if (autoText === null) {
-        setInputValue("");
-        setSelectedFiles([]);
-      }
+      setInputValue("");
+      setSelectedFiles([]);
 
       // analyze response to unlock next phase
-      const finalReply = (data.reasoning_steps && data.reasoning_steps.length > 0)
-      ? data.reasoning_steps[data.reasoning_steps.length - 1].content : data.reply;
+      const finalReply = (data.reasoning_steps && data.reasoning_steps.length > 0) ? data.reasoning_steps[data.reasoning_steps.length - 1].content : data.reply;
 
-      parseLLMResponse(finalReply, targetPhase);
-      if (targetPhase === 'execution') setCanAdvance(true);
+      parseLLMResponse(finalReply, currentPhase);
 
     } catch (err) {
       console.error("Error sending message:", err);
@@ -335,31 +378,100 @@ const LLMAgent = ({ username, reservation_id}) => {
     }
   };
 
+  // render structured JSON responses in a readable key/value layout
+  const renderStructuredContent = (parsed) => {
+    // list of fields to show without numbers
+    const plainCommandFields = ["execution_plan", "verification", "executable_plan"];
+    return (
+      <div>
+        {Object.entries(parsed).map(([key, value]) => (
+          <div key={key} className="en-backend-message">
+            {/* convert keys into readable section labels */}
+            <strong className="en-backend-message-header"> {key.replace(/_/g, " ")} </strong>
+            {/* add None for empty arrays or a list of items */}
+            {Array.isArray(value) ? (
+              value.length === 0 ? (
+                <p className="en-backend-message-key">None</p>
+              ) : plainCommandFields.includes(key) ? (
+                <div className="en-backend-message-list-plain">
+                  {value.map((item, i) => (
+                    <div key={i} className="en-backend-message-list-element">{item}</div>
+                  ))}
+                </div>
+              ) : (
+                <div className="en-backend-message-numbered-list">
+                  {value.map((item, i) => (
+                    <div key={i} className="en-backend-message-numbered-row">
+                      <span className="en-backend-message-number">{i + 1}.</span>
+                      <span className="en-backend-message-list-element">{item}</span>
+                    </div>
+                  ))}
+                </div>
+              )
+            ) : (
+              <p className="en-backend-message-key">{String(value)}</p>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  // render user and assistant messages with phase-aware formatting
   const renderMessage = (message) => {
     const isUser = message.role === "user";
 
     let displayContent = message.content;
 
-    if (isUser && displayContent) {
+    if (isUser && typeof displayContent === "string" && displayContent) {
       // remove file content from the user message and replace with a placeholder
       const fileRegex = /--- Start attached file content: (.*?) ---[\s\S]*?--- End attached file content: \1 ---/g;
       // show the file name in the user message and remove the content for better readability
       displayContent = displayContent.replace(fileRegex, "\n[Attached file: $1]\n");
       
-      displayContent = displayContent.trim();
+      return (
+        <div key={message.id} className="en-message-bubble en-message-user">
+          <div className="en-message-role">{username}</div>
+          <div className="en-message-content">{displayContent}</div>
+        </div>
+      );
+    }
+
+    let formattedContent = null;
+
+    // support legacy/object payloads defensively, even though backend responses are expected as strings
+    if (!isUser && displayContent && typeof displayContent === "object") {
+      formattedContent = renderStructuredContent(displayContent);
+    }
+
+    try {
+      // extract and parse JSON assistant output, render raw text if parsing fails
+      if (typeof displayContent === "string") {
+        const jsonMatch = displayContent.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const parsedData = JSON.parse(jsonMatch[0]);
+          formattedContent = renderStructuredContent(parsedData);
+        }
+      }
+    } catch (e) {
+      // reasoning traces or malformed payloads are shown as plain text fallback
+      formattedContent = null;
     }
 
     return (
-      <div
-        key={message.id}
-        className={`en-message-bubble ${
-          isUser ? "en-message-user" : "en-message-assistant"
-        }`}
-      >
+      <div key={message.id} className="en-message-bubble en-message-assistant">
         <div className="en-message-role">
-          {isUser ? `${username}` : `LLM ${currentPhase.charAt(0).toUpperCase() + currentPhase.slice(1)} Agent`}
+          {`LLM ${currentPhase.charAt(0).toUpperCase() + currentPhase.slice(1)} Agent`}
         </div>
-        <div className="en-message-content">{displayContent}</div>
+        <div className="en-message-content">
+          {formattedContent ? (
+            formattedContent
+            ) : (
+              <span style={{ whiteSpace: "pre-wrap" }}>
+                {typeof displayContent === "string" ? displayContent : JSON.stringify(displayContent, null, 2)}
+              </span>
+            )}
+        </div>
       </div>
     );
   };
@@ -368,8 +480,8 @@ const LLMAgent = ({ username, reservation_id}) => {
     <div className="experiment-negotiation-container">
 
       <div className="en-stepper">
-        {PHASES.map((phase, idx) => (
-          <div key={phase} className={`en-step ${currentPhase === phase ? 'active' : ''} ${PHASES.indexOf(currentPhase) > idx ? 'completed' : ''}`}>
+        {phases.map((phase, idx) => (
+          <div key={phase} className={`en-step ${currentPhase === phase ? 'active' : ''} ${phases.indexOf(currentPhase) > idx ? 'completed' : ''}`}>
             {phase.toUpperCase()}
           </div>
         ))}
@@ -478,11 +590,48 @@ const LLMAgent = ({ username, reservation_id}) => {
             </div>
               {error && (<div className="en-error-message">{error}</div>)}
           </form>
-          {canAdvance && (
-            <button className="en-transition-btn" onClick={handleAdvance}>
-                {currentPhase === 'execution' ? "Finish & Return to Start" : (isReadOnly ? `View ${PHASES[PHASES.indexOf(currentPhase) + 1].toUpperCase()} History` : `Proceed to ${PHASES[PHASES.indexOf(currentPhase) + 1].toUpperCase()}`)}
-            </button>
-          )}
+          
+          <div className="en-transition-actions">
+            {/* transition buttons to navigate in the history*/}
+            {isReadOnly ? (
+              <>
+                <button
+                  className={`en-transition-btn en-secondary-transition-btn ${(!hasPreviousPhase || isSending) ? "en-transition-btn-disabled" : ""}`}
+                  onClick={handleGoBackHistory}
+                  disabled={!hasPreviousPhase || isSending}
+                >
+                  {hasPreviousPhase ? `View ${previousPhase.toUpperCase()} History` : "No Previous History"}
+                </button>
+
+                <button
+                  className={`en-transition-btn en-primary-transition-btn ${(!canAdvance || isSending) ? "en-transition-btn-disabled" : ""}`}
+                  onClick={handleAdvance}
+                  disabled={!canAdvance || isSending}
+                >
+                  {hasNextPhase ? `View ${nextPhase.toUpperCase()} History` : "Back to NEGOTIATION"}
+                </button>
+              </>
+            ) : (
+              <>
+                {/* transition buttons to navigate during experiment*/}
+                <button
+                  className={`en-transition-btn en-secondary-transition-btn ${isSending ? "en-transition-btn-disabled" : ""}`}
+                  onClick={handleCancelPipeline}
+                  disabled={isSending}
+                >
+                  Back to NEGOTIATION
+                </button>
+
+                <button
+                  className={`en-transition-btn en-primary-transition-btn ${(!canAdvance || isSending) ? "en-transition-btn-disabled" : ""}`}
+                  onClick={handleAdvance}
+                  disabled={!canAdvance || isSending}
+                >
+                  {hasNextPhase ? `Proceed to ${nextPhase.toUpperCase()}` : "Finish & Return to Start"}
+                </button>
+              </>
+            )}
+          </div>
         </div>
       </div>
     </div>
