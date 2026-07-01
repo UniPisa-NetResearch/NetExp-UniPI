@@ -11,6 +11,7 @@ def chat_with_llm(messages: list) -> str:
     response = client.chat.completions.create(
         model=LLM_MODEL,
         messages=messages,
-        temperature=0.2
+        temperature=0.2,
+        response_format={"type": "json_object"}
     )
     return response.choices[0].message.content

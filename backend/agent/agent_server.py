@@ -6,7 +6,7 @@ import os
 from flask import request, jsonify
 from ..app import app
 from .llm_client import chat_with_llm
-from ..config import REDIS_HOST, REDIS_PORT, REDIS_DB, SAFETY_ITERATIONS
+from ..config import REDIS_HOST, REDIS_PORT, REDIS_DB, SAFETY_ITERATIONS, PHASES_ORDER, JSON_RETRIES
 from .agents_util.prompts import AGENT_PROMPTS, FORBIDDEN_RULES
 
 # redis store for conversation history, keyed by username and reservation_id
@@ -25,18 +25,48 @@ except FileNotFoundError:
     testbed_topology = "# Topology file not found"
     print(f"Warning: Could not find {topology_file_path}")
 
-@app.route("/api/agent_server/chat", methods=["POST"])
-def chat():
-    message = request.form.get("message", "")
-    username = request.form.get("username", "")
-    reservation_id = request.form.get("reservation_id", "")
-    agent_role = request.form.get("agent_role", "")
-    chat_id = request.form.get("chat_id", "")
-    files = request.files.getlist("files")
+def validate_json_format(reply_text, agent_role):
+    # verigy the agent's output is a valid json
+    try:
+        data = json.loads(reply_text)
+        if agent_role == "negotiation" and not all(k in data for k in ["summary", "topology_diagram", "clarifying_questions", "status", "context_for_planning"]):
+            return False, "Missing keys. Required: summary, topology_diagram, clarifying_questions, status, context_for_planning"
+        if agent_role == "planning":
+            if not all(k in data for k in ["execution_plan", "verification", "status", "context_for_safety"]):
+                return False, "Missing keys. Required: execution_plan, verification, status, context_for_safety"
+            if not isinstance(data.get("execution_plan"), list):
+                return False, "execution_plan must be a JSON array"
+            if not isinstance(data.get("verification"), list):
+                return False, "verification must be a JSON array"  
+        if agent_role == "safety":
+            if not all(k in data for k in ["status", "issues", "executable_plan", "clarifying_questions"]):
+                return False, "Missing keys. Required: status, issues, executable_plan, clarifying_questions"
+            if not isinstance(data.get("issues"), list):
+                return False, "issues must be a JSON array"
+            if not isinstance(data.get("executable_plan"), list):
+                return False, "executable_plan must be a JSON array"
+            if not isinstance(data.get("clarifying_questions"), list):
+                return False, "clarifying_questions must be a JSON array"
+        return True, data
+    except json.JSONDecodeError:
+        return False, "The output is not a valid JSON object."
+    
+def get_validated_llm_reply(history, agent_role):
+    for _ in range(JSON_RETRIES):
+        reply_text = chat_with_llm(history)
 
-    if not username or not reservation_id:
-        return jsonify({"error": "Missing username or reservation_id"}), 400
+        is_valid, validation_result = validate_json_format(reply_text, agent_role)
+        if is_valid:
+            return True, reply_text, validation_result
 
+        history.append({"role": "assistant", "content": reply_text})
+        correction_prompt = f"Your previous response failed validation: {validation_result}. Please generate a new complete response in valid JSON following the mandatory structure."
+        
+        history.append({"role": "user", "content": correction_prompt})
+
+    return False, None, None
+    
+def handle_chat_logic(username, reservation_id, chat_id, agent_role, message, files=None):
     # if there is no chat_id, it means the user is starting a new chat. We generate one.
     if not chat_id:
         chat_id = f"{int(time.time())}_{uuid.uuid4().hex[:8]}"          # added timestamp to guarantee chronological order
@@ -74,48 +104,131 @@ def chat():
                     # message if the file is not a text file or cannot be decoded
                     user_content += f"\n\n[Note: The file {f.filename} was ignored because it is not a readable text file.]\n"
 
-    history.append({"role": "user", "content": user_content})
+    # add user message, if present, advancement send an empty message
+    if user_content.strip():
+        history.append({"role": "user", "content": user_content})
 
     try:
         reasoning_steps = []
         reply = ""
         
-        # autocorrection loop for Safety Check (max N iterations)
         if agent_role == "safety":
+            # autocorrection loop for Safety Check (max N iterations)
             for iteration in range(SAFETY_ITERATIONS):
-                reply = chat_with_llm(history)
-                reasoning_steps.append({"iteration": iteration + 1, "content": reply})
-                history.append({"role": "assistant", "content": reply})
+                valid_output, reply_text, reply = get_validated_llm_reply(history, agent_role)
+                if not valid_output:
+                    return {"error": "LLM failed to produce valid JSON after retries"}, 500
+
+                reasoning_steps.append({"iteration": iteration + 1, "content": reply_text})
+                history.append({"role": "assistant", "content": reply_text})
                 
-                is_approved = "APPROVED" in reply
-                is_awaiting_info = "AWAITING INFORMATION" in reply
-                
-                has_questions = False
-                if "### CLARIFYING QUESTIONS" in reply:
-                    questions_section = reply.split("### CLARIFYING QUESTIONS")[-1].strip()
-        
-                    if questions_section and "none" not in questions_section.lower():
-                        has_questions = True
-                
+                status = str(reply.get("status", "")).upper()
+                questions = reply.get("clarifying_questions", [])
+
+                is_approved = "APPROVED" in status
+                is_awaiting_info = "AWAITING INFORMATION" in status
+
+                has_questions = isinstance(questions, list) and len(questions) > 0
+            
                 # exit the loop if approved or has questions for the user
                 if is_approved or is_awaiting_info or has_questions:
                     break 
-            
+               
                 # if rejected, we instruct the LLM for the next iteration
-                correction_prompt = "The plan you generated above still contains safety violations or logical errors. Please analyze the '### EXECUTABLE PLAN' you just proposed, fix the remaining issues and generate a new complete response."
+                correction_prompt = "The plan you generated above still contains safety violations or logical errors. Please analyze the 'executable_plan' you just proposed, fix the remaining issues and generate a new complete response."
                 history.append({"role": "user", "content": correction_prompt})
 
         else:
-            reply = chat_with_llm(history)
+            valid_output, reply, _ = get_validated_llm_reply(history, agent_role)
+            if not valid_output:
+                return {"error": "LLM failed to produce valid JSON after retries"}, 500
+           
             # add response to history and save it back to Redis
-            history.append({"role": "assistant", "content": reply})
-        
+            history.append({"role": "assistant", "content": reply})    
+                
         # save updated history to Redis (expiration set to 5 days as security, when the reservation ends, the key is automatically removed)
         redis_client.set(session_key, json.dumps(history), ex=432000)
         
-        return jsonify({"reply": reply, "chat_id": chat_id, "reasoning_steps": reasoning_steps})
+        return {"reply": reply, "chat_id": chat_id, "reasoning_steps": reasoning_steps}, 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return {"error": str(e)}, 500
+
+
+@app.route("/api/agent_server/chat", methods=["POST"])
+def chat():
+    message = request.form.get("message", "")
+    username = request.form.get("username", "")
+    reservation_id = request.form.get("reservation_id", "")
+    agent_role = request.form.get("agent_role", "")
+    chat_id = request.form.get("chat_id", "")
+    files = request.files.getlist("files")
+
+    if not username or not reservation_id:
+        return jsonify({"error": "Missing username or reservation_id"}), 400
+
+    result, status_code = handle_chat_logic(username, reservation_id, chat_id, agent_role, message, files)
+    return jsonify(result), status_code
+
+    
+    
+@app.route("/api/agent_server/advance", methods=["POST"])
+def advance_agent():
+    data = request.get_json()
+    username = data.get("username", "")
+    reservation_id = data.get("reservation_id", "")
+    chat_id = data.get("chat_id", "")
+    current_role = data.get("current_agent", "")
+    next_role = data.get("next_agent", "")
+
+    if not all([username, reservation_id, chat_id, current_role, next_role]):
+        return jsonify({"error": "Missing parameters"}), 400
+
+    current_key = f"agent_history:{current_role}:{username}:{reservation_id}:{chat_id}"
+    next_key = f"agent_history:{next_role}:{username}:{reservation_id}:{chat_id}"
+
+    history_str = redis_client.get(current_key)
+    if not history_str:
+        return jsonify({"error": "Current session not found"}), 404
+
+    history = json.loads(history_str)
+    last_reply = history[-1]["content"]
+
+    is_valid, parsed = validate_json_format(last_reply, current_role)
+    if not is_valid:
+        return jsonify({"error": "Failed to parse last valid JSON for context extraction"}), 500
+    
+    # convert json lists in formatted text
+    def format_as_string(val):
+        if isinstance(val, list):
+            return "\n".join([str(item) for item in val])
+        return str(val)
+
+    # extract payload from current role
+    context_payload = ""
+    if current_role == "negotiation":
+        context_payload = format_as_string(parsed.get("context_for_planning", ""))
+    elif current_role == "planning":
+        plan = format_as_string(parsed.get("execution_plan", ""))
+        verification = format_as_string(parsed.get("verification", []))
+        ctx = format_as_string(parsed.get("context_for_safety", ""))
+        context_payload = f"EXECUTION PLAN:\n{plan}\n\nVERIFICATION COMMANDS:\n{verification}\n\nCONTEXT:\n{ctx}"
+    elif current_role == "safety":
+        plan = parsed.get("executable_plan", "[]")
+        if isinstance(plan, list) and len(plan) > 0:
+            context_payload = format_as_string(plan)
+        elif isinstance(plan, str) and plan.strip().upper() not in ["", "N/A", "NONE", "[]"]:
+            context_payload = plan
+        # se context_payload è vuoto, l'execution agent riceve una stringa vuota
+        # aggiungiamo un fallback esplicito:
+        if not context_payload.strip():
+            context_payload = "No execution plan was provided. Report that the safety check passed with no commands to execute."
+
+    result, status_code = handle_chat_logic(username, reservation_id, chat_id, next_role, context_payload, files=None)
+    
+    if status_code == 200:
+        result["context_sent"] = context_payload
+
+    return jsonify(result), status_code
     
 @app.route("/api/agent_server/sessions", methods=["GET"])
 def get_sessions():
@@ -137,7 +250,7 @@ def get_sessions():
     # order chat_ids in descendent order
     chat_ids.sort(reverse=True)
     
-    return jsonify({"chat_ids": chat_ids})
+    return jsonify({"chat_ids": chat_ids, "phases_order": PHASES_ORDER})
 
 @app.route("/api/agent_server/history", methods=["GET"])
 def get_history():

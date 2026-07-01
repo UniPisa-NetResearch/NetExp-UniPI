@@ -70,3 +70,5 @@ LLM_MODEL = "gemini-3.1-flash-lite"
 OPENAI_API_KEY = os.getenv("GEMINI_API_KEY")
 OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 SAFETY_ITERATIONS = 3
+JSON_RETRIES = 3
+PHASES_ORDER = ['negotiation', 'planning', 'safety', 'execution']

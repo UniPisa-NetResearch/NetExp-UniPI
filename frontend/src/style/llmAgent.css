@@ -68,29 +68,31 @@
 
 .en-message-bubble {
   max-width: 80%;
-  margin-bottom: 10px;
-  padding: 8px 12px;
-  border-radius: 12px;
-  font-size: 14px;
-  line-height: 1.4;
+  margin-bottom: 14px;
+  padding: 12px 16px;
+  border-radius: 14px;
+  font-size: 15px;
+  line-height: 1.45;
 }
 
 .en-message-user {
   margin-left: auto;
-  background-color: #0b6efb;
+  background-color: #3985ef;
   color: #ffffff;
-  border-bottom-right-radius: 2px;
+  border-bottom-right-radius: 3px;
+  border: 1px solid #478ced;
 }
 
 .en-message-assistant {
   margin-right: auto;
-  background-color: #e4edff;
+  background-color: #e8f0ff;
   color: #0b2e6b;
   border-bottom-left-radius: 2px;
+  border: 1px solid #d0dcf5;
 }
 
 .en-message-role {
-  font-weight: 600;
+  font-weight: 700;
   font-size: 12px;
   margin-bottom: 4px;
   opacity: 0.8;
@@ -399,12 +401,18 @@
   opacity: 0.6;
   pointer-events: none;
 }
+.en-transition-actions {
+  margin-top: 15px;
+  display: flex;
+  gap: 10px;
+}
+.en-transition-actions .en-transition-btn {
+  flex: 1;
+}
 .en-transition-btn {
   margin-top: 15px;
   width: 100%;
   padding: 12px;
-  background-color: #27ae60;
-  color: #ffffff;
   border: none;
   border-radius: 6px;
   font-size: 16px;
@@ -415,8 +423,24 @@
   justify-content: center;
   align-items: center;
 }
-.en-transition-btn:hover {
+.en-primary-transition-btn{
+  background-color: #27ae60;
+  color: #ffffff;
+}
+.en-primary-transition-btn:hover {
   background-color: #219653;
+}
+.en-secondary-transition-btn {
+  background-color: #ed2929;
+  color: #ffffff;
+}
+.en-secondary-transition-btn:hover {
+  background-color: #ce2c2c;
+}
+.en-transition-btn:disabled,
+.en-transition-btn.en-transition-btn-disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 .en-chat-item-container {
   display: flex;
@@ -446,6 +470,52 @@
 .en-delete-chat-btn:disabled {
   color: #aeb6c6;
   cursor: not-allowed;
+}
+.en-backend-message {
+  margin-bottom: 10px;
+}
+.en-backend-message-header {
+  text-transform: uppercase;
+  opacity: 0.7; 
+  display: block;
+  margin: 0 0 4px 0;
+}
+.en-backend-message-key,
+.en-backend-message-list-plain,
+.en-backend-message-numbered-list {
+  margin: 0;
+  padding: 0;
+  margin-left: 12px;
+}
+.en-backend-message-key {
+  margin: pre-wrap;
+}
+.en-backend-message-list-plain {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.en-backend-message-numbered-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.en-backend-message-numbered-row {
+  display: grid;
+  grid-template-columns: 15px 1fr;
+  column-gap: 8px;
+  align-items: start;
+  margin: 0;
+  padding: 0;
+}
+.en-backend-message-number {
+  font-family: monospace; 
+  opacity: 0.8;
+}
+.en-backend-message-list-element {
+  font-family: monospace;
+  margin: 0;
+  white-space: pre-wrap;
 }
 @media (max-width: 900px) {
   .experiment-negotiation-main {
