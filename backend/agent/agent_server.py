@@ -39,10 +39,12 @@ def validate_json_format(reply_text, agent_role):
             if not isinstance(data.get("verification"), list):
                 return False, "verification must be a JSON array"  
         if agent_role == "safety":
-            if not all(k in data for k in ["status", "issues", "executable_plan", "clarifying_questions"]):
-                return False, "Missing keys. Required: status, issues, executable_plan, clarifying_questions"
+            if not all(k in data for k in ["status", "issues", "topology_mapping_check", "executable_plan", "clarifying_questions"]):
+                return False, "Missing keys. Required: status, issues, topology_mapping_check, executable_plan, clarifying_questions"
             if not isinstance(data.get("issues"), list):
                 return False, "issues must be a JSON array"
+            if not isinstance(data.get("topology_mapping_check"), list):
+                return False, "topology_mapping_check must be a JSON array"
             if not isinstance(data.get("executable_plan"), list):
                 return False, "executable_plan must be a JSON array"
             if not isinstance(data.get("clarifying_questions"), list):
@@ -124,6 +126,8 @@ def handle_chat_logic(username, reservation_id, chat_id, agent_role, message, fi
                 
                 status = str(reply.get("status", "")).upper()
                 questions = reply.get("clarifying_questions", [])
+                issues_found = reply.get("issues", [])
+                issues_text = "\n".join([f"- {issue}" for issue in issues_found])
 
                 is_approved = "APPROVED" in status
                 is_awaiting_info = "AWAITING INFORMATION" in status
@@ -135,7 +139,11 @@ def handle_chat_logic(username, reservation_id, chat_id, agent_role, message, fi
                     break 
                
                 # if rejected, we instruct the LLM for the next iteration
-                correction_prompt = "The plan you generated above still contains safety violations or logical errors. Please analyze the 'executable_plan' you just proposed, fix the remaining issues and generate a new complete response."
+                correction_prompt = (f"Your previous plan was REJECTED for the following reasons:\n{issues_text}\n\n"
+                    "Please generate a completely new response. STRICTLY verify that every interface "
+                    "and device name exists in the physical topology YAML. Fix all the issues mentioned above."
+                )
+                
                 history.append({"role": "user", "content": correction_prompt})
 
         else:

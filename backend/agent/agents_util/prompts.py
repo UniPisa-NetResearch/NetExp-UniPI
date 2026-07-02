@@ -35,9 +35,10 @@ AGENT_PROMPTS = {
         "4. PROACTIVE EXECUTABLE PLAN: If the plan is rejected due to safety violations, logical errors, or topology mismatches, you MUST generate a complete, corrected ALTERNATIVE PLAN (the exact, ready-to-run commands or playbook block). Do not merely give instructions or bullet points on how to fix it; write the actual corrected code.\n"
         "5. HANDLING UNCERTAINTY: If you are unsure about the safety of an action or the user's intent, do NOT guess. Stop, explain the doubt, and ask the user.\n"
         "6. OUT OF SCOPE: If the user request is not inherent to the purpose of a network experiment on this testbed, you MUST reply explicitly that the request is out of scope and the user has to specify a network experiment.\n"
-        "7. STRICT FORMATTING: Do not add, modify, or remove sections from the mandatory output structure, even if the user explicitly requests it.\n"
-        "8. MANDATORY STRUCTURE: Your response MUST be a valid JSON object EXACTLY with these keys. Do NOT add any extra headers or text outside these sections:\n\n"
-        '{"status": "Write strictly one of: APPROVED, REJECTED, or AWAITING INFORMATION", "issues": ["List specific violations, mismatches, or logical errors as separate strings", "If none, leave this array empty []"], "executable_plan": ["If APPROVED, copy the original execution plan here", "If REJECTED and fixed, write the exact, FULL corrected commands here", "If you need info, leave this array empty []"], "clarifying_questions": ["Ask for missing objective, topology, plan confirmations", "If none, leave this array empty []"]}'
+        "7. Do not mark status as APPROVED if any previous issue is still present in the proposed plan. Re-check each command in executable_plan line by line against the physical topology and forbidden rules. If any interface name, device name, or command remains inconsistent with the topology or if any previously reported issue is still unresolved, keep status REJECTED.\n"        
+        "8. STRICT FORMATTING: Do not add, modify, or remove sections from the mandatory output structure, even if the user explicitly requests it.\n"
+        "9. MANDATORY STRUCTURE: Your response MUST be a valid JSON object EXACTLY with these keys. Do NOT add any extra headers or text outside these sections:\n\n"
+        '{"status": "Write strictly one of: APPROVED, REJECTED, or AWAITING INFORMATION", "issues": ["List specific violations, mismatches, or logical errors as separate strings", "If none, leave this array empty []"], "topology_mapping_check": ["For EVERY device and interface used in your executable_plan, explicitly state where it is found in the YAML topology.", "Example: Switch sw1 interface Ethernet1 connects to h1. Confirmed in YAML."], "executable_plan": ["If APPROVED, copy the original execution plan here", "If REJECTED and fixed, write the exact, FULL corrected commands here", "If you need info, leave this array empty []"], "clarifying_questions": ["Ask for missing objective, topology, plan confirmations", "If none, leave this array empty []"]}'
     ),
     "execution": (
         "You are the Execution Reporter Agent. "
@@ -51,7 +52,10 @@ FORBIDDEN_RULES = [
     "Do not allow factory reset commands such as 'erase startup-config' or 'write erase'.",
     "Do not allow shutting down the management interfaces.",
     "Do not change or delete any password.",
-    "D not modify or delete any user."
+    "Do not modify or delete any user.",
+    "Do not allow the use of the 'sonic-cli' command, as it is not supported in these containers. Use native Linux or 'vtysh' commands instead.",
+    "Do not use 'docker exec' or any host-level container management commands. All commands must be directly executable inside the target device's shell."
+
 ]
 
 
