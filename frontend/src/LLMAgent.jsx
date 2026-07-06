@@ -32,6 +32,15 @@ const LLMAgent = ({ username, reservation_id}) => {
   const hasNextPhase = currentPhaseIndex !== -1 && currentPhaseIndex < phases.length - 1;
   const previousPhase = hasPreviousPhase ? phases[currentPhaseIndex - 1] : null;
   const nextPhase = hasNextPhase ? phases[currentPhaseIndex + 1] : null;
+
+  const [maxExecutionIterations, setMaxExecutionIterations] = useState(null);
+  const [executionStatus, setExecutionStatus] = useState(null);                     // approved or rejected
+
+  const [executionCount, setExecutionCount] = useState(0);                          // count the number of execution iterations, reset at every new chat
+
+  // show "Go back to planning" if execution is rejected and iterations are not ended
+  const isExecutionLoopActive = currentPhase === 'execution' && executionStatus === 'REJECTED' && executionCount < maxExecutionIterations;
+
   
   const startNewChat = () => {
     setActiveChatId(null);
@@ -41,7 +50,9 @@ const LLMAgent = ({ username, reservation_id}) => {
     setError(null);
     setCanAdvance(false);
     setCurrentPhase('negotiation');
+    setExecutionCount(0);
     setIsReadOnly(false);
+    setExecutionStatus(null);
   };
   // reset all fields when a new chat is started (either from the button or after the execution phase)
   useEffect(() =>{ startNewChat(); }, []);
@@ -57,9 +68,10 @@ const LLMAgent = ({ username, reservation_id}) => {
           // retrieve the list of chats and the ist of ordered phases from the backend
           const data = await response.json();
           setSavedChats(data.chat_ids || []);
-          if (data.phases_order && phases.length === 0) {
-            setPhases(data.phases_order);
-          }
+          
+          if (data.phases_order && phases.length === 0) { setPhases(data.phases_order);}
+          
+          if (data.max_iterations) { setMaxExecutionIterations(data.max_iterations); }
         }
       } catch (err) {
         console.error("Error fetching sessions:", err);
@@ -87,13 +99,17 @@ const LLMAgent = ({ username, reservation_id}) => {
           setError(null);
           setCurrentPhase(phase);
 
+          if (phase === 'execution') {
+            // update execution messages count based on number of user messages in the history
+            const userMessageCount = data.messages.filter(msg => msg.role === 'user').length;
+            setExecutionCount(userMessageCount);
+          }
+
           // if we are loading from the sidebar or going ahead in the history
           setIsReadOnly(true); 
           
-          // we enable the advancing in the historical case (not for the execution phase)
-          if (phase !== 'execution') {
-            setCanAdvance(true);
-          }
+          // we enable the advancing in the historical case
+          setCanAdvance(true);
         }
       }
     } catch (err) {
@@ -214,6 +230,7 @@ const LLMAgent = ({ username, reservation_id}) => {
       // execution is the terminal phase, so completion unlocks the final action
       } else if (phase === 'execution') {
         setCanAdvance(true);
+        setExecutionStatus(status);
       }
     } catch (e) {
       console.error("Failed to parse JSON response:", e);
@@ -221,23 +238,30 @@ const LLMAgent = ({ username, reservation_id}) => {
   };
 
   // move the current conversation to the next agent phase, in read-only mode, this only loads stored history from Redis
-  const handleAdvance = async () => {
+  const handleAdvance = async (overrideNextPhase = null) => {
+    // overrideNextPhase has value when the current phase is execution and a new planning is needed
+    const actualNextPhase = overrideNextPhase || nextPhase;
     
     // advance only if a next phase exists
-    if (hasNextPhase) {
+    if (actualNextPhase) {
 
       if (isReadOnly) {
 
         // load only history of next phase on redis in history mode
-        loadHistory(activeChatId, nextPhase);
+        loadHistory(activeChatId, actualNextPhase);
 
       } else {
 
         // switch the UI immediately to the next phase and show a loading state
-        setCurrentPhase(nextPhase);
+        setCurrentPhase(actualNextPhase);
         setCanAdvance(false);
         setMessages([]); // clean chat for new view
         setIsSending(true);
+        
+        // increment execution counter
+        if (actualNextPhase === 'execution') {
+          setExecutionCount(prev => prev + 1);
+        }
 
         try {
           // ask the backend to forward the validated context to the next agent
@@ -251,7 +275,7 @@ const LLMAgent = ({ username, reservation_id}) => {
               reservation_id: reservation_id,
               chat_id: activeChatId,
               current_agent: currentPhase,
-              next_agent: nextPhase
+              next_agent: actualNextPhase
             }),
           });
 
@@ -276,7 +300,7 @@ const LLMAgent = ({ username, reservation_id}) => {
             // use the last reasoning step as the authoritative result when present
             const finalReply = (data.reasoning_steps && data.reasoning_steps.length > 0) ? data.reasoning_steps[data.reasoning_steps.length - 1].content : data.reply;
 
-            parseLLMResponse(finalReply, nextPhase);
+            parseLLMResponse(finalReply, actualNextPhase);
             
           } else {
             console.error("Error advancing:", data.error);
@@ -605,7 +629,7 @@ const LLMAgent = ({ username, reservation_id}) => {
 
                 <button
                   className={`en-transition-btn en-primary-transition-btn ${(!canAdvance || isSending) ? "en-transition-btn-disabled" : ""}`}
-                  onClick={handleAdvance}
+                  onClick={() => handleAdvance()}
                   disabled={!canAdvance || isSending}
                 >
                   {hasNextPhase ? `View ${nextPhase.toUpperCase()} History` : "Back to NEGOTIATION"}
@@ -622,13 +646,23 @@ const LLMAgent = ({ username, reservation_id}) => {
                   Back to NEGOTIATION
                 </button>
 
-                <button
-                  className={`en-transition-btn en-primary-transition-btn ${(!canAdvance || isSending) ? "en-transition-btn-disabled" : ""}`}
-                  onClick={handleAdvance}
-                  disabled={!canAdvance || isSending}
-                >
-                  {hasNextPhase ? `Proceed to ${nextPhase.toUpperCase()}` : "Finish & Return to Start"}
-                </button>
+                {isExecutionLoopActive ? (
+                  <button
+                      className={`en-transition-btn en-primary-transition-btn ${isSending ? "en-transition-btn-disabled" : ""}`}
+                      onClick={() => handleAdvance('planning')}
+                      disabled={isSending}
+                  >
+                      Go back to PLANNING
+                  </button>
+                ) : (
+                  <button
+                    className={`en-transition-btn en-primary-transition-btn ${(!canAdvance || isSending) ? "en-transition-btn-disabled" : ""}`}
+                    onClick={() => handleAdvance ()}
+                    disabled={!canAdvance || isSending}
+                  >
+                    {hasNextPhase ? `Proceed to ${nextPhase.toUpperCase()}` : "Finish & Return to Start"}
+                  </button>
+                )}
               </>
             )}
           </div>

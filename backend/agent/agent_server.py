@@ -3,10 +3,12 @@ import redis
 import uuid
 import time
 import os
+import subprocess
 from flask import request, jsonify
 from ..app import app
 from .llm_client import chat_with_llm
-from ..config import REDIS_HOST, REDIS_PORT, REDIS_DB, SAFETY_ITERATIONS, PHASES_ORDER, JSON_RETRIES
+from ..utils import get_is_virtual_from_db
+from ..config import REDIS_HOST, REDIS_PORT, REDIS_DB, SAFETY_ITERATIONS, PHASES_ORDER, JSON_RETRIES, MAX_EXECUTION_ITERATIONS, LOCAL_TEST, CONTAINERLAB_HOST, CONTAINERLAB_HOST_USER
 from .agents_util.prompts import AGENT_PROMPTS, FORBIDDEN_RULES
 
 # redis store for conversation history, keyed by username and reservation_id
@@ -25,31 +27,147 @@ except FileNotFoundError:
     testbed_topology = "# Topology file not found"
     print(f"Warning: Could not find {topology_file_path}")
 
+def run_agent_execution_plan(inventory_path: str, execution_plan: list, reservation_id):
+    
+    if LOCAL_TEST:
+        base_cmd = ["wsl","ansible"]
+    else:
+        base_cmd = ["ansible"]
+    
+    report_lines = []
+    extra_vars = {}
+
+    # if virtual deployment, we add proxy command to ansible ssh connection
+    is_virtual = get_is_virtual_from_db(reservation_id)
+
+    if is_virtual:
+        proxy_cmd = f"-o StrictHostKeyChecking=no -o ProxyCommand=\"ssh -W %h:%p -o StrictHostKeyChecking=no {CONTAINERLAB_HOST_USER}@{CONTAINERLAB_HOST}\""
+        extra_vars['ansible_ssh_common_args'] = proxy_cmd
+
+    for step in execution_plan:
+        if ":" not in step:
+            continue
+            
+        device, command = step.split(":", 1)
+        device = device.strip()
+        command = command.strip()
+
+        # create ansible command to execute the command on the device using the provided inventory
+        cmd = base_cmd + [device, "-i", inventory_path, "-m", "shell", "-a", command]
+        
+        # add extra vars if present
+        if extra_vars:
+            cmd += ["--extra-vars", json.dumps(extra_vars)]
+
+        try:
+            # execution with 1 minute timeout
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            
+            raw_out = proc.stdout.strip()
+            error_out = proc.stderr.strip()
+
+            print(f"[DEBUG] Device: {device} | Command: {command}")
+            print(f"[DEBUG] Return code: {proc.returncode}")
+            print(f"[DEBUG] STDOUT:\n{raw_out}")
+
+            if error_out:
+                print(f"[DEBUG] STDERR:\n{error_out}")
+            print("-" * 60)
+
+            # check if the command was executed successfully based on ansible output or return code
+            is_ansible_success = "CHANGED" in raw_out or "SUCCESS" in raw_out or proc.returncode == 0
+            
+            # ansible output cleaning
+            if ">>" in raw_out:
+                clean_out = raw_out.split(">>", 1)[1].strip()
+            else:
+                clean_out = raw_out
+            
+            # remove standard ansible string in case of non-zero return code
+            clean_out = clean_out.replace("non-zero return code", "").strip()
+
+            final_message = ""
+
+            if is_ansible_success:
+                # always caprure errors and warnings, even if the command was successful
+                if error_out:
+                    final_message = f"[WARNING: Ansible reported CHANGED/SUCCESS but generated stderr]:\n{error_out}"
+                    
+                    if clean_out:
+                        final_message = f"[SUCCESS]:\n{clean_out}"
+                
+                else:
+                    if not clean_out:
+                        # Ansible reported CHANGED without any output, so the command has been executed succesfully
+                        final_message = "[SUCCESS: Command applied successfully (Ansible reported CHANGED)]"
+                    else:
+                        final_message = f"[SUCCESS]:\n{clean_out}"
+
+            else:
+                final_message = f"[FAILED: Return code {proc.returncode}]"
+
+                if "UNREACHABLE" in raw_out:
+                    final_message = "[FAILED: Device UNREACHABLE (SSH/Network issue)]"
+                elif "FAILED" in raw_out:
+                    final_message = f"[FAILED: Ansible reported rc={proc.returncode}]"
+
+                if error_out:
+                    final_message += f"\n[STDERR]:\n{error_out}"
+                if clean_out:
+                    final_message += f"\n[STDOUT]:\n{clean_out}"
+                
+                if not error_out and not clean_out:
+                    final_message += "\n[No output or error message returned]"
+                    
+                
+            report_lines.append(f"{device}: {command} |\n{final_message}\n")
+
+        except subprocess.TimeoutExpired:
+            report_lines.append(f"{device}: {command} |\n[EXECUTION ERROR: Timeout expired (60s)]\n")
+        except Exception as e:
+            report_lines.append(f"{device}: {command} |\n[SYSTEM ERROR]: {str(e)}\n")
+
+    return "\n-------------------------\n".join(report_lines)
+
 def validate_json_format(reply_text, agent_role):
-    # verigy the agent's output is a valid json
+    # verify the agent's output is a valid json
     try:
         data = json.loads(reply_text)
         if agent_role == "negotiation" and not all(k in data for k in ["summary", "topology_diagram", "clarifying_questions", "status", "context_for_planning"]):
             return False, "Missing keys. Required: summary, topology_diagram, clarifying_questions, status, context_for_planning"
+        
         if agent_role == "planning":
-            if not all(k in data for k in ["execution_plan", "verification", "status", "context_for_safety"]):
-                return False, "Missing keys. Required: execution_plan, verification, status, context_for_safety"
+            if not all(k in data for k in ["execution_plan", "verification", "status"]):
+                return False, "Missing keys. Required: execution_plan, verification, status"
+            
             if not isinstance(data.get("execution_plan"), list):
                 return False, "execution_plan must be a JSON array"
+            
             if not isinstance(data.get("verification"), list):
-                return False, "verification must be a JSON array"  
+                return False, "verification must be a JSON array"
+              
         if agent_role == "safety":
             if not all(k in data for k in ["status", "issues", "topology_mapping_check", "executable_plan", "clarifying_questions"]):
                 return False, "Missing keys. Required: status, issues, topology_mapping_check, executable_plan, clarifying_questions"
+            
             if not isinstance(data.get("issues"), list):
                 return False, "issues must be a JSON array"
+            
             if not isinstance(data.get("topology_mapping_check"), list):
                 return False, "topology_mapping_check must be a JSON array"
+            
             if not isinstance(data.get("executable_plan"), list):
                 return False, "executable_plan must be a JSON array"
+            
             if not isinstance(data.get("clarifying_questions"), list):
                 return False, "clarifying_questions must be a JSON array"
+            
+        if agent_role == "execution":
+            if not all(k in data for k in ["status", "report"]):
+                return False, "Missing keys. Required: status, report"
+            
         return True, data
+    
     except json.JSONDecodeError:
         return False, "The output is not a valid JSON object."
     
@@ -82,11 +200,11 @@ def handle_chat_logic(username, reservation_id, chat_id, agent_role, message, fi
     else:
 
         system_prompt = AGENT_PROMPTS.get(agent_role)
-        system_prompt += f"\n\nTESTBED PHYSICAL TOPOLOGY:\n```yaml\n{testbed_topology}\n```\n"
+        system_prompt += f"\n\n<topology>\n```yaml\n{testbed_topology}\n```</topology>\n"
 
         if agent_role == "safety":
             rules_formatted = "\n".join([f"- {rule}" for rule in FORBIDDEN_RULES])
-            system_prompt += f"\n\nFORBIDDEN RULES FOR THIS TESTBED:\n{rules_formatted}"
+            system_prompt += f"\n\n<forbidden_rules>\n{rules_formatted}\n</forbidden_rules>\n"
         
         # initialize history if it doesn't exist
         history = [{"role": "system", "content": system_prompt}]
@@ -99,12 +217,11 @@ def handle_chat_logic(username, reservation_id, chat_id, agent_role, message, fi
                 try:
                     # read the content of the file and append it to the user message in a structured way
                     file_content = f.read().decode('utf-8')
-                    user_content += f"\n\n--- Start attached file content: {f.filename} ---\n"
-                    user_content += file_content
-                    user_content += f"\n--- End attached file content: {f.filename} ---\n"
+                    user_content += f"\n\n<attached_file name=\"{f.filename}\">\n{file_content}\n</attached_file>\n"
+                    
                 except UnicodeDecodeError:
                     # message if the file is not a text file or cannot be decoded
-                    user_content += f"\n\n[Note: The file {f.filename} was ignored because it is not a readable text file.]\n"
+                    user_content += f"\n\n<attached_file name=\"{f.filename}\">\n[Note: The file was ignored because it is not a readable text file.]\n</attached_file>\n"
 
     # add user message, if present, advancement send an empty message
     if user_content.strip():
@@ -114,10 +231,26 @@ def handle_chat_logic(username, reservation_id, chat_id, agent_role, message, fi
         reasoning_steps = []
         reply = ""
         
+        # extract system prompt (index 0) and last user message
+        system_msg = history[0] 
+        latest_user_msg = {"role": "user", "content": user_content} if user_content.strip() else None
+
         if agent_role == "safety":
+
+            # create isolate array for current turn
+            current_turn_safety_history = [system_msg]
+            if latest_user_msg:
+                current_turn_safety_history.append(latest_user_msg)
+
             # autocorrection loop for Safety Check (max N iterations)
             for iteration in range(SAFETY_ITERATIONS):
-                valid_output, reply_text, reply = get_validated_llm_reply(history, agent_role)
+                len_before = len(current_turn_safety_history)
+                valid_output, reply_text, reply = get_validated_llm_reply(current_turn_safety_history, agent_role)
+
+                # synchronize failed validation tries in the main history
+                for msg in current_turn_safety_history[len_before:]:
+                    history.append(msg)
+
                 if not valid_output:
                     return {"error": "LLM failed to produce valid JSON after retries"}, 500
 
@@ -144,10 +277,29 @@ def handle_chat_logic(username, reservation_id, chat_id, agent_role, message, fi
                     "and device name exists in the physical topology YAML. Fix all the issues mentioned above."
                 )
                 
+                # insert correction in the two arrays
                 history.append({"role": "user", "content": correction_prompt})
+                current_turn_safety_history.append({"role": "user", "content": correction_prompt})
 
         else:
-            valid_output, reply, _ = get_validated_llm_reply(history, agent_role)
+
+            # for planning and execution we use a minimal array. Negotiation use all the history.
+            if agent_role in ["planning", "execution"]:
+                llm_history = [system_msg]
+                if latest_user_msg:
+                    llm_history.append(latest_user_msg)
+            else:
+                llm_history = history 
+
+            len_before = len(llm_history)
+
+            valid_output, reply, _ = get_validated_llm_reply(llm_history, agent_role)
+
+            # update history
+            if agent_role in ["planning", "execution"]:
+                for msg in llm_history[len_before:]:
+                    history.append(msg)
+            
             if not valid_output:
                 return {"error": "LLM failed to produce valid JSON after retries"}, 500
            
@@ -177,7 +329,6 @@ def chat():
     result, status_code = handle_chat_logic(username, reservation_id, chat_id, agent_role, message, files)
     return jsonify(result), status_code
 
-    
     
 @app.route("/api/agent_server/advance", methods=["POST"])
 def advance_agent():
@@ -213,24 +364,75 @@ def advance_agent():
 
     # extract payload from current role
     context_payload = ""
+
+    # retrieve negotiation experiment context if available, it is common for next agents, usefull also in execution when the experiment is not approved
+    experiment_context = "No specific experiment context provided."
+    if current_role in ["planning", "safety", "execution"]:
+        negotiation_key = f"agent_history:negotiation:{username}:{reservation_id}:{chat_id}"
+        negotiation_history_str = redis_client.get(negotiation_key)
+        
+        if negotiation_history_str:
+            negotiation_history = json.loads(negotiation_history_str)
+            last_negotiation_msg = negotiation_history[-1]["content"]
+            is_valid_negotiation, parsed_negotiation = validate_json_format(last_negotiation_msg, "negotiation")
+            
+            if is_valid_negotiation and parsed_negotiation.get("status") == "APPROVED":
+                experiment_context = format_as_string(parsed_negotiation.get("context_for_planning", "No specific experiment context provided."))
+
     if current_role == "negotiation":
-        context_payload = format_as_string(parsed.get("context_for_planning", ""))
+
+        raw_context = format_as_string(parsed.get("context_for_planning", ""))
+        context_payload = f"<experiment_context>\n{raw_context}\n</experiment_context>"
+
     elif current_role == "planning":
         plan = format_as_string(parsed.get("execution_plan", ""))
         verification = format_as_string(parsed.get("verification", []))
-        ctx = format_as_string(parsed.get("context_for_safety", ""))
-        context_payload = f"EXECUTION PLAN:\n{plan}\n\nVERIFICATION COMMANDS:\n{verification}\n\nCONTEXT:\n{ctx}"
+        
+        context_payload = f"<experiment_context>\n{experiment_context}\n</experiment_context>\n\n<execution_plan>\n{plan}\n</execution_plan>\n\n<verification_commands>\n{verification}\n</verification_commands>"
+    
     elif current_role == "safety":
         plan = parsed.get("executable_plan", "[]")
-        if isinstance(plan, list) and len(plan) > 0:
-            context_payload = format_as_string(plan)
-        elif isinstance(plan, str) and plan.strip().upper() not in ["", "N/A", "NONE", "[]"]:
-            context_payload = plan
-        # se context_payload è vuoto, l'execution agent riceve una stringa vuota
-        # aggiungiamo un fallback esplicito:
-        if not context_payload.strip():
-            context_payload = "No execution plan was provided. Report that the safety check passed with no commands to execute."
 
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        inventory_path = os.path.abspath(os.path.join(base_dir, "..", "controller", "inventories", f"res-{reservation_id}-inventory.ini"))
+        
+        if isinstance(plan, str):
+            if plan.strip().upper() in ["", "N/A", "NONE", "[]"]:
+                plan = []
+            else:
+                # if the plan is a string, we parse as a list of commands
+                plan = [line.strip() for line in plan.strip().split('\n') if line.strip()]
+
+        if isinstance(plan, list) and len(plan) > 0:
+            execution_report = run_agent_execution_plan(inventory_path, plan, reservation_id)      
+            context_payload = f"<experiment_context>\n{experiment_context}\n</experiment_context>\n\n<execution_results>\n{execution_report}\n</execution_results>\n"
+            
+        else:    
+            context_payload = f"<experiment_context>\n{experiment_context}\n</experiment_context>\n\n<execution_results>\nNo execution plan was provided. Report that the safety check passed with no commands to execute.\n</execution_results>\n"
+            
+    elif current_role == "execution" and next_role == "planning":
+        # get the report generated by the execution agent
+        execution_report = format_as_string(parsed.get("report", ""))
+
+        # retrieve the approved experiment plan from the safety agent
+        safety_key = f"agent_history:safety:{username}:{reservation_id}:{chat_id}"
+        safety_history_str = redis_client.get(safety_key)
+        
+        if safety_history_str:
+            safety_history = json.loads(safety_history_str)
+            # get the last safety message
+            last_safety_msg = safety_history[-1]["content"]
+            is_parsed_safety_valid, parsed_safety = validate_json_format(last_safety_msg, "safety")
+
+            if is_parsed_safety_valid:
+                old_plan = format_as_string(parsed_safety.get("executable_plan", ""))
+            else:
+                old_plan = "No previous plan found."
+        else:
+            old_plan = "No previous plan found."
+
+        context_payload = f"Please analyze the errors below and generate a NEW corrected execution plan.\n\n<experiment_context>\n{experiment_context}\n</experiment_context>\n\n<failed_execution_plan>\n{old_plan}\n</failed_execution_plan>\n\n<execution_report>\n{execution_report}\n</execution_report>"
+        
     result, status_code = handle_chat_logic(username, reservation_id, chat_id, next_role, context_payload, files=None)
     
     if status_code == 200:
@@ -258,7 +460,7 @@ def get_sessions():
     # order chat_ids in descendent order
     chat_ids.sort(reverse=True)
     
-    return jsonify({"chat_ids": chat_ids, "phases_order": PHASES_ORDER})
+    return jsonify({"chat_ids": chat_ids, "phases_order": PHASES_ORDER, "max_iterations": MAX_EXECUTION_ITERATIONS})
 
 @app.route("/api/agent_server/history", methods=["GET"])
 def get_history():

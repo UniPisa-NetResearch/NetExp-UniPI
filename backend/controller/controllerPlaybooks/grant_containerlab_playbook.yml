@@ -7,7 +7,6 @@
   strategy: free
   vars:
     ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
-    # on containerlab mgmt interface of sonic-vs is eth0
     test: false
     res_group: resusers
     full_user: false
