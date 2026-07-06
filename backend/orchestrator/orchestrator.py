@@ -432,13 +432,13 @@ def check_reservation():
             "end": f"{first_end_dt.date()} {first_end_dt.time()}"
         }), 201
 
-    # if true, create a reservation from now + 2 minutes (start) to start + EXPERIMENT_DURATION
+    # if true, create a reservation from now + 10 seconds (start) to start + EXPERIMENT_DURATION
     if TEST_MODE:
         # necessary for date mismatch between server and redis
         rome_tz = ZoneInfo("Europe/Rome")
-        now_local = datetime.now(rome_tz).replace(second=0, microsecond=0)
+        now_local = datetime.now(rome_tz)
 
-        start_dt = now_local + timedelta(minutes=2)
+        start_dt = now_local + timedelta(seconds=10)
         end_dt = start_dt + timedelta(minutes=EXPERIMENT_DURATION)
 
         start_dt_utc = start_dt.astimezone(timezone.utc)
