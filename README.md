@@ -215,15 +215,9 @@ To modify sensitive parameters:
 
 ### Starting the System
 
-To start the system, create 2 terminals connected to **NetExp1**.
+To start the system, create one terminal connected to **NetExp1**.
 
-1. Start the frontend:
-   ```bash
-   cd NetExp-UniPI/
-   cd frontend
-   npm run dev -- --host 0.0.0.0
-   ```
-2. Start all backend services:
+Start all services:
    ```bash
    cd NetExp-UniPI/
    source backend-venv/bin/activate
@@ -231,10 +225,9 @@ To start the system, create 2 terminals connected to **NetExp1**.
    ```
 
 To stop the system, execute these commands on **NetExp1**:
-
    ```bash
    cd NetExp-UniPI/
-   xargs -r kill < pids.txt
+   while read -r pid; do kill -- "-$pid"; done < pids.txt
    ```
 
 To start the system as an alternative way, create 9 terminals connected to **NetExp1**.
