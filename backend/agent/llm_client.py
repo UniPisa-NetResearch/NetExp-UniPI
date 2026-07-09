@@ -1,3 +1,4 @@
+import json
 from openai import OpenAI
 from ..config import OPENAI_API_KEY, OPENAI_BASE_URL, LLM_MODEL
 
@@ -8,6 +9,12 @@ client = OpenAI(
 )
 
 def chat_with_llm(messages: list) -> str:
+
+    print("\n" + "="*70)
+    print(f"[DEBUG LLM] LLM CALL - PAYLOAD SENT:")
+    print(json.dumps(messages, indent=2)) 
+    print("="*70 + "\n")
+
     response = client.chat.completions.create(
         model=LLM_MODEL,
         messages=messages,

@@ -3,64 +3,44 @@ name: virtualTopology
 topology:
   nodes:
     ch1:
-      kind: linux
-      image: ubuntu:22.04
+      kind: linux (ubuntu:22.04)
       mgmt-ipv4: 172.20.20.161
 
-    
     ch2:
-      kind: linux
-      image: ubuntu:22.04
+      kind: linux (ubuntu:22.04)
       mgmt-ipv4: 172.20.20.162
 
-    
     ch3:
-      kind: linux
-      image: ubuntu:22.04
+      kind: linux (ubuntu:22.04)
       mgmt-ipv4: 172.20.20.163
 
-    
     ch4:
-      kind: linux
-      image: ubuntu:22.04
+      kind: linux (ubuntu:22.04)
       mgmt-ipv4: 172.20.20.164
 
-    
     csw5:
       kind: sonic-vs
-      image: docker-sonic-vs:latest
       mgmt-ipv4: 172.20.20.155
 
-    
     csw6:
       kind: sonic-vs
-      image: docker-sonic-vs:latest
       mgmt-ipv4: 172.20.20.156
 
-    
     csw1:
       kind: sonic-vs
-      image: docker-sonic-vs:latest
       mgmt-ipv4: 172.20.20.151
 
-    
     csw2:
       kind: sonic-vs
-      image: docker-sonic-vs:latest
       mgmt-ipv4: 172.20.20.152
 
-    
     csw3:
       kind: sonic-vs
-      image: docker-sonic-vs:latest
       mgmt-ipv4: 172.20.20.153
 
-    
     csw4:
       kind: sonic-vs
-      image: docker-sonic-vs:latest
       mgmt-ipv4: 172.20.20.154
-
 
   links:
     - endpoints: ["csw5:eth1", "csw1:eth1"]

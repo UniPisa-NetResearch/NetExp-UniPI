@@ -46,10 +46,6 @@ AGENT_PROMPTS = {
         "--- STRICT RULES ---\n"
         "- NO CHITCHAT: Do not use polite formulas, do not say 'I understand', 'Great question' or 'Here is the plan'. Get straight to the point. Return only the requested JSON structure.\n"
         "- EXHAUSTIVE EXECUTION (ANTI-LAZINESS): Provide the FULL, EXACT commands for EVERY SINGLE DEVICE. Never use placeholders like 'Example for sw1', 'Repeat for others', etc. If 5 switches need BGP, write the vtysh commands for all 5 explicitly.\n"
-        "- 'sonic-vs' CONFIGURATION SPLIT (CRITICAL): In this specific environment, configuring devices explicitly marked as `kind: sonic-vs` in the <topology> requires a strict split in command usage:\n"
-        "  1. INTERFACE IP & STATE: You MUST use ONLY native Linux bash commands (`ip addr add...`, `ip link set... up`) directly on the `ethX` interfaces for IP assignment and link state. NEVER use `vtysh` or `config` commands to assign IP addresses or bring up interfaces.\n"
-        "  2. ROUTING: You MUST use `vtysh` EXCLUSIVELY for routing protocols (e.g., BGP, OSPF). When writing vtysh commands, do not configure interfaces inside it.\n"
-        "- NO ALIASING FOR 'sonic-vs' (CRITICAL): Always use the exact Linux interface names from the <topology> (e.g., 'eth1', 'eth2'). For `kind: sonic-vs` devices, NEVER translate them into SONiC front-panel names like 'Ethernet0' or 'Ethernet4'.\n"
         "- MINIMAL SCOPE: Configure ONLY the specific devices and interfaces strictly necessary to achieve the user's explicitly stated goal. Do not over-provision or configure the entire topology if only a subset of nodes is involved in the experiment.\n"
         "- RESPECT PRE-EXISTING CONFIGURATIONS (CRITICAL): You MUST thoroughly read the <experiment_context>. If it lists any 'PRE-EXISTING CONFIGURATIONS' (e.g., IPs already assigned, routes already present), you MUST NOT generate ANY commands for them. Assume they are already applied and working perfectly. Generating duplicate commands for already applied configurations causes system failures and is STRICTLY FORBIDDEN. Only generate commands for the MISSING parts of the objective.\n"
         "- TOPOLOGY CONSTRAINTS (NO ASSUMPTIONS): You MUST ONLY use EXACT device and interface names that explicitly exist in the provided topology YAML (e.g., if the topology says 'eth1', you MUST write 'eth1' in your commands). Do NOT invent, assume, or guess interface names (e.g., NEVER change 'eth1' to 'Eth1') or device names. If they are not in the topology, you cannot use them.\n"
@@ -87,8 +83,7 @@ AGENT_PROMPTS = {
         "- NO CHITCHAT (CRITICAL): Do not use polite formulas, transitional phrases, or introductory text (e.g., 'After analyzing...', 'Here is the report'). Start directly with the mandatory Markdown structure and never add text outside of it.\n"
         "- HANDLING UNCERTAINTY: If you are unsure about the safety of an action or the user's intent, do NOT guess. Stop, explain the doubt, and ask the user.\n"
         "- OUT OF SCOPE: If the user request is not inherent to the purpose of a network experiment on this testbed, you MUST reply explicitly that the request is out of scope and the user has to specify a network experiment.\n"
-        "- NO HALLUCINATIONS & NO ALIASING: If a device or interface used in the plan is not in the <topology>, flag it as a violation immediately. For `kind: sonic-vs` devices, NEVER translate 'ethX' to 'EthernetX'.\n"
-        "- 'sonic-vs' CONFIGURATION CHECK (CRITICAL): Verify how devices marked as `kind: sonic-vs` in the <topology> are configured. Interface IP assignment and link state MUST be done using native Linux commands (`ip addr`, `ip link`), while `vtysh` MUST only be used for routing configuration. If the proposed plan assigns IPs inside `vtysh` (e.g., `vtysh -c 'interface eth1' -c 'ip address...'`), or uses 'EthernetX' names for a `sonic-vs` device, you MUST reject the plan as a critical violation and rewrite the exact corrected Linux commands in your executable_plan.\n"
+        "- NO HALLUCINATIONS & NO ALIASING: If a device or interface used in the plan is not in the <topology>, flag it as a violation immediately.\n"
         "- VERIFICATION LOGIC CHECK: You must ensure the verification commands are logically sound, use correct devices/interfaces from the topology, and use allowed commands (e.g., native Linux `ping`, `ip route`, or `vtysh -c 'show...'` for routing). If they are hallucinated, unsafe, or use wrong IPs, correct them.\n"
         "- MANDATORY VERIFICATION INCLUSION (CRITICAL): Never drop the verification commands. Whether you APPROVE or REJECT the overall plan, your output `executable_plan` array MUST contain the valid/corrected execution commands followed immediately by the valid/corrected verification commands.\n"
         "- UNRESOLVED ISSUES: Do not mark status as APPROVED if any previous issue is still present in the proposed plan. Re-check each command in executable_plan line by line against the physical topology and forbidden rules. If any interface name, device name, or command remains inconsistent with the topology or if any previously reported issue is still unresolved, keep status REJECTED.\n"        
@@ -147,10 +142,30 @@ FORBIDDEN_RULES = [
     "Do not allow shutting down the management interfaces.",
     "Do not change or delete any password.",
     "Do not modify or delete any user.",
-    "Do not allow the use of the 'sonic-cli' command, as it is not supported in these containers. Use native Linux or 'vtysh' commands instead.",
     "Do not use 'docker exec' or any host-level container management commands. All commands must be directly executable inside the target device's shell."
 
 ]
+
+# keys are tuples: can be inserted only one kind ("sonic-vs",) or more kinds ("linux", "host")
+DEVICE_KIND_RULES = {
+    ("sonic-vs",): {
+        "planning": (
+            "- 'sonic-vs' CONFIGURATION SPLIT (CRITICAL): In this specific environment, configuring devices explicitly marked as this kind in the <topology> requires a strict split in command usage:\n"
+            "  1. INTERFACE IP & STATE: You MUST use ONLY native Linux bash commands (`ip addr add...`, `ip link set... up`) directly on the `ethX` interfaces for IP assignment and link state. NEVER use `vtysh` or `config` commands to assign IP addresses or bring up interfaces.\n"
+            "  2. ROUTING: You MUST use `vtysh` EXCLUSIVELY for routing protocols (e.g., BGP, OSPF). When writing vtysh commands, do not configure interfaces inside it.\n"
+            "- NO ALIASING (CRITICAL): Always use the exact Linux interface names from the <topology> (e.g., 'eth1', 'eth2'). NEVER translate them into front-panel names like 'Ethernet0' or 'Ethernet4'."
+        ),
+        "safety": (
+            "- 'sonic-vs' CONFIGURATION CHECK (CRITICAL): Verify how these devices in the <topology> are configured. Interface IP assignment and link state MUST be done using native Linux commands (`ip addr`, `ip link`), while `vtysh` MUST only be used for routing configuration. If the proposed plan assigns IPs inside `vtysh` (e.g., `vtysh -c 'interface eth1' -c 'ip address...'`), or uses 'EthernetX' names, you MUST reject the plan as a critical violation and rewrite the exact corrected Linux commands in your executable_plan.\n"
+            "- FORBIDDEN COMMANDS ('sonic-vs'): Do not allow the use of the 'sonic-cli' command, as it is not supported in these containers. Use native Linux or 'vtysh' commands instead."
+        )
+    },
+    ("linux", "host", "minipc"): {
+        "planning": (
+            "- LINUX NODES CONFIGURATION: For nodes of this kind, use standard Linux commands (e.g., `ip addr`, `ip route`) for all network configurations."
+        )
+    }
+}
 
 
 
