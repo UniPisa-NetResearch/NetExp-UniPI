@@ -4,12 +4,13 @@ import uuid
 import time
 import os
 import subprocess
+import yaml
 from flask import request, jsonify
 from ..app import app
 from .llm_client import chat_with_llm
 from ..utils import get_is_virtual_from_db
 from ..config import REDIS_HOST, REDIS_PORT, REDIS_DB, SAFETY_ITERATIONS, PHASES_ORDER, JSON_RETRIES, MAX_EXECUTION_ITERATIONS, LOCAL_TEST, CONTAINERLAB_HOST, CONTAINERLAB_HOST_USER
-from .agents_util.prompts import AGENT_PROMPTS, FORBIDDEN_RULES
+from .agents_util.prompts import AGENT_PROMPTS, DEVICE_KIND_RULES, FORBIDDEN_RULES
 
 # redis store for conversation history, keyed by username and reservation_id
 redis_client = redis.Redis(
@@ -26,6 +27,38 @@ try:
 except FileNotFoundError:
     testbed_topology = "# Topology file not found"
     print(f"Warning: Could not find {topology_file_path}")
+
+def get_dynamic_device_rules(agent_role: str) -> str:
+    # extracts device kinds dfrom the topologia and retrieve rules for the current agent
+    
+    kinds_in_topo = set()
+    try:
+        # topology parsing
+        topo_dict = yaml.safe_load(testbed_topology) or {}
+        nodes = topo_dict.get("topology", {}).get("nodes", {})
+        
+        # extract unique nodes
+        for node_info in nodes.values():
+            if isinstance(node_info, dict) and "kind" in node_info:
+                kinds_in_topo.add(node_info["kind"])
+    except yaml.YAMLError as e:
+        print(f"Error parsing yaml topology: {e}")
+        return ""
+
+    dynamic_rules = ""
+    
+    for kind_tuple, agent_rules in DEVICE_KIND_RULES.items():
+        # find all kinds of the current tuple
+        present_kinds = [k for k in kind_tuple if k in kinds_in_topo]
+        
+        # if there is at least one kind and there is a rule for the current role
+        if present_kinds and agent_role in agent_rules:
+            # unifies kinds in a string (ex. "linux, host" or "sonic-vs")
+            kinds_str = ", ".join(present_kinds)
+            dynamic_rules += f"--- RULES FOR KIND(S): {kinds_str} ---\n"
+            dynamic_rules += agent_rules[agent_role] + "\n\n"
+            
+    return dynamic_rules.strip()
 
 def run_agent_execution_plan(inventory_path: str, execution_plan: list, reservation_id):
     
@@ -200,6 +233,11 @@ def handle_chat_logic(username, reservation_id, chat_id, agent_role, message, fi
     else:
 
         system_prompt = AGENT_PROMPTS.get(agent_role)
+
+        dynamic_rules = get_dynamic_device_rules(agent_role)
+        if dynamic_rules:
+            system_prompt += f"\n<device_specific_rules>\n{dynamic_rules}\n</device_specific_rules>\n"
+
         system_prompt += f"\n\n<topology>\n```yaml\n{testbed_topology}\n```</topology>\n"
 
         if agent_role == "safety":
@@ -231,7 +269,7 @@ def handle_chat_logic(username, reservation_id, chat_id, agent_role, message, fi
         reasoning_steps = []
         reply = ""
         
-        # extract system prompt (index 0) and last user message
+        # extract system prompt (index 0) from the history and last user message
         system_msg = history[0] 
         latest_user_msg = {"role": "user", "content": user_content} if user_content.strip() else None
 
