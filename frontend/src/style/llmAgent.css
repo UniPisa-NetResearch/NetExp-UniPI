@@ -379,6 +379,9 @@
   border-radius: 8px;
   border: 1px solid #d4e1ff;
 }
+.en-stepper.history-mode {
+  cursor: default;
+}
 .en-step {
   font-size: 14px;
   font-weight: 600;
@@ -390,12 +393,25 @@
   border-radius: 8px;
   padding:8px;
 }
+.en-step.clickable {
+  cursor: pointer;
+}
+.en-stepper.history-mode .en-step {
+  cursor: default;
+}
 .en-step.active {
   color: #0b6efb;
   background-color: #d8e0ee;
 }
 .en-step.completed {
   color: #27ae60;
+}
+.en-step.pipeline-active {
+  color: #d4ac0d;
+  font-weight: 700;
+}
+.sidebar-title {
+  padding-bottom: 15px;
 }
 .sidebar-disabled {
   opacity: 0.6;

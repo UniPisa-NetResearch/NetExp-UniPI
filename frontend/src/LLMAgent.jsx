@@ -12,6 +12,8 @@ const LLMAgent = ({ username, reservation_id}) => {
   const [activeChatId, setActiveChatId] = useState(null);
 
   const [currentPhase, setCurrentPhase] = useState('negotiation');
+  // current phase during an active experiment
+  const [activePipelinePhase, setActivePipelinePhase] = useState('negotiation');
   const [canAdvance, setCanAdvance] = useState(false);
   const [needsClarification, setNeedsClarification] = useState(false);
 
@@ -19,8 +21,12 @@ const LLMAgent = ({ username, reservation_id}) => {
   const [isReadOnly, setIsReadOnly] = useState(false);
   // pipeline phases (each phase corresponds to an agent)
   const [phases, setPhases] = useState([]);
+
+  // visualizing a past phase during an active experiment
+  const isViewingPastPhase = !isReadOnly && currentPhase !== activePipelinePhase;
+
   // input enabled only for negotiation phase and safety phase in case of clarification is needed
-  const isInputDisabled = isReadOnly || canAdvance ||currentPhase === 'planning' || currentPhase === 'execution' || (currentPhase === 'safety' && !needsClarification);
+  const isInputDisabled = isReadOnly || isViewingPastPhase || canAdvance || currentPhase === 'planning' || currentPhase === 'execution' || (currentPhase === 'safety' && !needsClarification);
   
   // determine if the user input is empty (no text and no files)
   const isInputEmpty = inputValue.trim() === "" && selectedFiles.length === 0;
@@ -33,13 +39,15 @@ const LLMAgent = ({ username, reservation_id}) => {
   const previousPhase = hasPreviousPhase ? phases[currentPhaseIndex - 1] : null;
   const nextPhase = hasNextPhase ? phases[currentPhaseIndex + 1] : null;
 
-  const [maxExecutionIterations, setMaxExecutionIterations] = useState(null);
+  // states for the ACTIVE pipeline
+  const activePhaseIndex = phases.indexOf(activePipelinePhase);
+  const hasNextActivePhase = activePhaseIndex !== -1 && activePhaseIndex < phases.length - 1;
+  const nextActivePhase = hasNextActivePhase ? phases[activePhaseIndex + 1] : null;
+
   const [executionStatus, setExecutionStatus] = useState(null);                     // approved or rejected
 
-  const [executionCount, setExecutionCount] = useState(0);                          // count the number of execution iterations, reset at every new chat
-
   // show "Go back to planning" if execution is rejected and iterations are not ended
-  const isExecutionLoopActive = currentPhase === 'execution' && executionStatus === 'REJECTED' && executionCount < maxExecutionIterations;
+  const isExecutionLoopActive = activePipelinePhase === 'execution' && executionStatus === 'REJECTED';
 
   
   const startNewChat = () => {
@@ -50,7 +58,7 @@ const LLMAgent = ({ username, reservation_id}) => {
     setError(null);
     setCanAdvance(false);
     setCurrentPhase('negotiation');
-    setExecutionCount(0);
+    setActivePipelinePhase('negotiation');
     setIsReadOnly(false);
     setExecutionStatus(null);
   };
@@ -71,7 +79,6 @@ const LLMAgent = ({ username, reservation_id}) => {
           
           if (data.phases_order && phases.length === 0) { setPhases(data.phases_order);}
           
-          if (data.max_iterations) { setMaxExecutionIterations(data.max_iterations); }
         }
       } catch (err) {
         console.error("Error fetching sessions:", err);
@@ -81,7 +88,7 @@ const LLMAgent = ({ username, reservation_id}) => {
   }, [username, reservation_id]);
 
   // load the chat history for a specific chat_id and phase
-  const loadHistory = async (chatId, phase) => {
+  const loadHistory = async (chatId, phase, fromSidebar = false) => {
     try {
       const response = await fetch(
         `/api/agent_server/history?username=${encodeURIComponent(username)}&reservation_id=${encodeURIComponent(reservation_id)}&chat_id=${encodeURIComponent(chatId)}&agent_role=${encodeURIComponent(phase)}`
@@ -98,18 +105,14 @@ const LLMAgent = ({ username, reservation_id}) => {
           setActiveChatId(chatId);
           setError(null);
           setCurrentPhase(phase);
-
-          if (phase === 'execution') {
-            // update execution messages count based on number of user messages in the history
-            const userMessageCount = data.messages.filter(msg => msg.role === 'user').length;
-            setExecutionCount(userMessageCount);
-          }
-
-          // if we are loading from the sidebar or going ahead in the history
-          setIsReadOnly(true); 
           
-          // we enable the advancing in the historical case
-          setCanAdvance(true);
+          // advance with buttons in history mode
+          if (fromSidebar) {
+            // if we are loading from the sidebar or going ahead in the history
+            setIsReadOnly(true); 
+            // we enable the advancing in the historical case
+            setCanAdvance(true);
+          }
         }
       }
     } catch (err) {
@@ -240,7 +243,7 @@ const LLMAgent = ({ username, reservation_id}) => {
   // move the current conversation to the next agent phase, in read-only mode, this only loads stored history from Redis
   const handleAdvance = async (overrideNextPhase = null) => {
     // overrideNextPhase has value when the current phase is execution and a new planning is needed
-    const actualNextPhase = overrideNextPhase || nextPhase;
+    const actualNextPhase = overrideNextPhase || (isReadOnly ? nextPhase : nextActivePhase);
     
     // advance only if a next phase exists
     if (actualNextPhase) {
@@ -248,20 +251,16 @@ const LLMAgent = ({ username, reservation_id}) => {
       if (isReadOnly) {
 
         // load only history of next phase on redis in history mode
-        loadHistory(activeChatId, actualNextPhase);
+        loadHistory(activeChatId, actualNextPhase, true);
 
       } else {
 
         // switch the UI immediately to the next phase and show a loading state
         setCurrentPhase(actualNextPhase);
+        setActivePipelinePhase(actualNextPhase);
         setCanAdvance(false);
         setMessages([]); // clean chat for new view
         setIsSending(true);
-        
-        // increment execution counter
-        if (actualNextPhase === 'execution') {
-          setExecutionCount(prev => prev + 1);
-        }
 
         try {
           // ask the backend to forward the validated context to the next agent
@@ -321,13 +320,24 @@ const LLMAgent = ({ username, reservation_id}) => {
   // go to the previous phase in history navigation
   const handleGoBackHistory = async () => {
     if (!isReadOnly || !activeChatId || !hasPreviousPhase) return;
-    loadHistory(activeChatId, previousPhase);
+    loadHistory(activeChatId, previousPhase, true);
   };
 
   // terminate experiment and return to negotiation phase
   const handleCancelPipeline = () => {
     if (isSending) return;
     startNewChat();
+  };
+
+  const handleStepperClick = (clickedPhase) => {
+    // click is ignored if there is not an active chat, if the system is sending a request to the LLM, or if the user click the voice of the menu of the current phase
+    if (!activeChatId || currentPhase === clickedPhase || isSending) return;
+
+    // in History Mode the menu is not active
+    if (isReadOnly) return;
+    
+    // load history for the clicked phase (it automatically set isReadOnly = true)
+    loadHistory(activeChatId, clickedPhase, false);
   };
 
   // send a user message and optional files to the current agent
@@ -503,12 +513,26 @@ const LLMAgent = ({ username, reservation_id}) => {
   return (
     <div className="experiment-negotiation-container">
 
-      <div className="en-stepper">
-        {phases.map((phase, idx) => (
-          <div key={phase} className={`en-step ${currentPhase === phase ? 'active' : ''} ${phases.indexOf(currentPhase) > idx ? 'completed' : ''}`}>
-            {phase.toUpperCase()}
-          </div>
-        ))}
+      <div className={`en-stepper ${isReadOnly ? 'history-mode' : ''}`}>
+        {phases.map((phase, idx) => {
+          // true if the current step is active
+          const isActive = currentPhase === phase;
+
+          // if history mode, completed steps are computed respect to currentPhase. While if active, completed steps are computed respect to activePipelinePhase
+          const isCompleted = isReadOnly ? phases.indexOf(currentPhase) > idx : phases.indexOf(activePipelinePhase) > idx;
+          // yellow shown only in active mode
+          const isPipelineActive = !isReadOnly && phase === activePipelinePhase && currentPhase !== activePipelinePhase;
+
+          // cickable if: active experiment, not loading, not the visualized current phase
+          const isClickable = !isReadOnly && !isSending && currentPhase !== phase;
+
+          return (
+            <div key={phase} className={`en-step ${isActive ? 'active' : ''} ${isCompleted ? 'completed' : ''} ${isPipelineActive ? 'pipeline-active' : ''} ${isClickable ? 'clickable' : ''}`}
+              onClick={() => handleStepperClick(phase)}>
+              {phase.toUpperCase()}
+            </div>
+          );
+        })}
       </div>
 
       <div className="experiment-negotiation-header">
@@ -518,36 +542,38 @@ const LLMAgent = ({ username, reservation_id}) => {
       </div>
       {/* Agent response area */}
       <div className="experiment-negotiation-main">
-        <div className={`experiment-negotiation-sidebar ${currentPhase !== 'negotiation' ? 'sidebar-disabled' : ''}`}>
-          <button className="en-new-chat-btn" onClick={startNewChat} disabled={currentPhase !== 'negotiation'}>
+        <div className={"experiment-negotiation-sidebar"}>
+          <button className="en-new-chat-btn" onClick={startNewChat}>
             New Chat
           </button>
-          <h3>Recent Chats</h3>
-          {savedChats.length === 0 ? (
-            <p className="en-sidebar-empty">No previous conversations.</p>
-          ) : (
-            <ul className="en-chat-list">
-              {savedChats.map((chatId, index) => (
-                <li key={chatId} className="en-chat-item-container">
-                  <button
-                    className={`en-chat-list-btn ${activeChatId === chatId ? "active" : ""}`}
-                    onClick={() => loadHistory(chatId, 'negotiation')}
-                    disabled={currentPhase !== 'negotiation'}
-                  >
-                    Conversation {savedChats.length - index}
-                  </button>
-                  <button
-                    className="en-delete-chat-btn"
-                    onClick={(e) => handleDeleteChat(chatId, e)}
-                    disabled={currentPhase !== 'negotiation'}
-                    title="Delete Chat"
-                  >
-                    ×
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
+          <div className={currentPhase !== 'negotiation' ? 'sidebar-disabled' : ''}>
+            <h3 className="sidebar-title">Recent Chats</h3>
+            {savedChats.length === 0 ? (
+              <p className="en-sidebar-empty">No previous conversations.</p>
+            ) : (
+              <ul className="en-chat-list">
+                {savedChats.map((chatId, index) => (
+                  <li key={chatId} className="en-chat-item-container">
+                    <button
+                      className={`en-chat-list-btn ${activeChatId === chatId ? "active" : ""}`}
+                      onClick={() => loadHistory(chatId, 'negotiation', true)}
+                      disabled={currentPhase !== 'negotiation'}
+                    >
+                      Conversation {savedChats.length - index}
+                    </button>
+                    <button
+                      className="en-delete-chat-btn"
+                      onClick={(e) => handleDeleteChat(chatId, e)}
+                      disabled={currentPhase !== 'negotiation'}
+                      title="Delete Chat"
+                    >
+                      ×
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </div>
 
         <div className="experiment-negotiation-chat">
@@ -643,12 +669,12 @@ const LLMAgent = ({ username, reservation_id}) => {
                   onClick={handleCancelPipeline}
                   disabled={isSending}
                 >
-                  Back to NEGOTIATION
+                  End Experiment Session
                 </button>
 
-                {isExecutionLoopActive ? (
+                {isExecutionLoopActive && currentPhase === 'execution' ? (
                   <button
-                      className={`en-transition-btn en-primary-transition-btn ${isSending ? "en-transition-btn-disabled" : ""}`}
+                      className={`en-transition-btn en-primary-transition-btn ${(isSending) ? "en-transition-btn-disabled" : ""}`}
                       onClick={() => handleAdvance('planning')}
                       disabled={isSending}
                   >
@@ -656,9 +682,9 @@ const LLMAgent = ({ username, reservation_id}) => {
                   </button>
                 ) : (
                   <button
-                    className={`en-transition-btn en-primary-transition-btn ${(!canAdvance || isSending) ? "en-transition-btn-disabled" : ""}`}
+                    className={`en-transition-btn en-primary-transition-btn ${(!canAdvance || isSending || isViewingPastPhase) ? "en-transition-btn-disabled" : ""}`}
                     onClick={() => handleAdvance ()}
-                    disabled={!canAdvance || isSending}
+                    disabled={!canAdvance || isSending || isViewingPastPhase}
                   >
                     {hasNextPhase ? `Proceed to ${nextPhase.toUpperCase()}` : "Finish & Return to Start"}
                   </button>

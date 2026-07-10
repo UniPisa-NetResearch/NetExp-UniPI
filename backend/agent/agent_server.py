@@ -9,7 +9,7 @@ from flask import request, jsonify
 from ..app import app
 from .llm_client import chat_with_llm
 from ..utils import get_is_virtual_from_db
-from ..config import REDIS_HOST, REDIS_PORT, REDIS_DB, SAFETY_ITERATIONS, PHASES_ORDER, JSON_RETRIES, MAX_EXECUTION_ITERATIONS, LOCAL_TEST, CONTAINERLAB_HOST, CONTAINERLAB_HOST_USER
+from ..config import REDIS_HOST, REDIS_PORT, REDIS_DB, SAFETY_ITERATIONS, PHASES_ORDER, JSON_RETRIES, LOCAL_TEST, CONTAINERLAB_HOST, CONTAINERLAB_HOST_USER
 from .agents_util.prompts import AGENT_PROMPTS, DEVICE_KIND_RULES, FORBIDDEN_RULES
 
 # redis store for conversation history, keyed by username and reservation_id
@@ -498,7 +498,7 @@ def get_sessions():
     # order chat_ids in descendent order
     chat_ids.sort(reverse=True)
     
-    return jsonify({"chat_ids": chat_ids, "phases_order": PHASES_ORDER, "max_iterations": MAX_EXECUTION_ITERATIONS})
+    return jsonify({"chat_ids": chat_ids, "phases_order": PHASES_ORDER})
 
 @app.route("/api/agent_server/history", methods=["GET"])
 def get_history():
