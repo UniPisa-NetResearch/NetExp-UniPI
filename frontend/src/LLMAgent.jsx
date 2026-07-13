@@ -14,6 +14,10 @@ const LLMAgent = ({ username, reservation_id}) => {
   const [currentPhase, setCurrentPhase] = useState('negotiation');
   // current phase during an active experiment
   const [activePipelinePhase, setActivePipelinePhase] = useState('negotiation');
+
+  const [negotiationQuestions, setNegotiationQuestions] = useState([]);
+  const [negotiationAnswers, setNegotiationAnswers] = useState({});
+
   const [canAdvance, setCanAdvance] = useState(false);
   const [needsClarification, setNeedsClarification] = useState(false);
 
@@ -30,7 +34,11 @@ const LLMAgent = ({ username, reservation_id}) => {
   
   // determine if the user input is empty (no text and no files)
   const isInputEmpty = inputValue.trim() === "" && selectedFiles.length === 0;
-  const isButtonDisabled = isSending || isInputEmpty || isInputDisabled;
+
+  // check if there are questions and if the user has written every answer
+  const hasUnansweredQuestions = negotiationQuestions.length > 0 && !negotiationQuestions.every((_, i) => (negotiationAnswers[i] || "").trim() !== "");
+
+  const isButtonDisabled = isSending ||  isInputDisabled || (negotiationQuestions.length > 0 ? hasUnansweredQuestions : isInputEmpty);
 
   // phases states to use navigation buttons
   const currentPhaseIndex = phases.indexOf(currentPhase);
@@ -55,6 +63,8 @@ const LLMAgent = ({ username, reservation_id}) => {
     setMessages([]);
     setInputValue("");
     setSelectedFiles([]);
+    setNegotiationQuestions([]);
+    setNegotiationAnswers({});
     setError(null);
     setCanAdvance(false);
     setCurrentPhase('negotiation');
@@ -154,6 +164,43 @@ const LLMAgent = ({ username, reservation_id}) => {
     }
   };
 
+  const handleDownloadChat = async (chatId, e) => {
+    if (e) e.stopPropagation(); // avoid opening the chat by clicking the button
+    try {
+      const url = chatId
+        ? `/api/agent_server/download?username=${encodeURIComponent(username)}&reservation_id=${encodeURIComponent(reservation_id)}&chat_id=${encodeURIComponent(chatId)}`
+        : `/api/agent_server/download?username=${encodeURIComponent(username)}&reservation_id=${encodeURIComponent(reservation_id)}`;
+
+      const response = await fetch(url);
+
+      if (response.ok) {
+        // create a temporary link for the download
+        const blob = await response.blob();
+
+        const disposition = response.headers.get("Content-Disposition");
+        let filename = "download.zip";
+        if (disposition) {
+          const match = disposition.match(/filename="?([^"]+)"?/);
+          if (match) filename = match[1];
+        }
+
+        const downloadUrl = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = downloadUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        
+        a.remove();
+        window.URL.revokeObjectURL(downloadUrl);
+      } else {
+        console.error("Failed to download chat");
+      }
+    } catch (err) {
+      console.error("Error downloading chat:", err);
+    }
+  };
+
   const handleInputChange = (e) => {
     setInputValue(e.target.value);
   };
@@ -208,7 +255,26 @@ const LLMAgent = ({ username, reservation_id}) => {
       // negotiation and planning can advance only after an approved status
       if (phase === 'negotiation' || phase === 'planning') {
 
-        if (status.includes("APPROVED")) setCanAdvance(true);
+        if (status.includes("APPROVED")) { 
+          
+          setCanAdvance(true);
+          // hide the form if the status is approved
+          setNegotiationQuestions([]);
+
+        } else if (phase === 'negotiation') {
+          // extract clarifying questions
+          const questions = parsed.clarifying_questions;
+          if (Array.isArray(questions) && questions.length > 0 && String(questions[0]).toLowerCase() !== "none") {
+            setNegotiationQuestions(questions);
+            
+            const initialAnswers = {};
+            questions.forEach((_, i) => { initialAnswers[i] = ""; });
+            setNegotiationAnswers(initialAnswers);
+
+          } else {
+            setNegotiationQuestions([]); // no questions, show the chat
+          }
+        }
 
       // safety may either approve the plan or require more user input  
       } else if (phase === 'safety') {
@@ -260,6 +326,8 @@ const LLMAgent = ({ username, reservation_id}) => {
         setActivePipelinePhase(actualNextPhase);
         setCanAdvance(false);
         setMessages([]); // clean chat for new view
+        setNegotiationQuestions([]);
+        setNegotiationAnswers({});
         setIsSending(true);
 
         try {
@@ -345,7 +413,13 @@ const LLMAgent = ({ username, reservation_id}) => {
     if(e) e.preventDefault();
     setError(null);
 
-    const textToSend = inputValue.trim();
+    let textToSend = inputValue.trim();
+
+    // if there are questions, create formatted text and ignore the inputValue
+    if (currentPhase === 'negotiation' && negotiationQuestions.length > 0) {
+      textToSend = negotiationQuestions.map((q, i) => `${i + 1}. ${q}\nAnswer: ${negotiationAnswers[i]}`).join('\n\n');
+    }
+
     const filesToSend = selectedFiles;
 
     if (!textToSend && filesToSend.length === 0) return;
@@ -397,6 +471,8 @@ const LLMAgent = ({ username, reservation_id}) => {
 
       setInputValue("");
       setSelectedFiles([]);
+      setNegotiationQuestions([]);
+      setNegotiationAnswers({});
 
       // analyze response to unlock next phase
       const finalReply = (data.reasoning_steps && data.reasoning_steps.length > 0) ? data.reasoning_steps[data.reasoning_steps.length - 1].content : data.reply;
@@ -543,9 +619,22 @@ const LLMAgent = ({ username, reservation_id}) => {
       {/* Agent response area */}
       <div className="experiment-negotiation-main">
         <div className={"experiment-negotiation-sidebar"}>
-          <button className="en-new-chat-btn" onClick={startNewChat}>
-            New Chat
-          </button>
+          <button className="en-new-chat-btn" onClick={startNewChat}>New Chat</button>
+
+          {savedChats.length > 0 && (
+            <div className="en-add-files-row">
+              <span className="en-download-label">Download all conversations</span>
+              <button
+                className="en-download-chat-btn"
+                onClick={(e) => handleDownloadChat(null, e)}
+                title="Download All Chats"
+                disabled={currentPhase!=="negotiation"}
+              >
+                <img src="downloadButton.png" alt="Download" className="en-download-icon-img" />
+              </button>
+            </div>
+          )}
+
           <div className={currentPhase !== 'negotiation' ? 'sidebar-disabled' : ''}>
             <h3 className="sidebar-title">Recent Chats</h3>
             {savedChats.length === 0 ? (
@@ -554,6 +643,9 @@ const LLMAgent = ({ username, reservation_id}) => {
               <ul className="en-chat-list">
                 {savedChats.map((chatId, index) => (
                   <li key={chatId} className="en-chat-item-container">
+                    <button className="en-download-chat-btn" onClick={(e) => handleDownloadChat(chatId, e)} title="Download Chat Logs">
+                      <img src="/downloadButton.png" alt="Download" className="en-download-icon-img" />
+                    </button>
                     <button
                       className={`en-chat-list-btn ${activeChatId === chatId ? "active" : ""}`}
                       onClick={() => loadHistory(chatId, 'negotiation', true)}
@@ -599,7 +691,7 @@ const LLMAgent = ({ username, reservation_id}) => {
                 >
                 +
                 </button>
-                <span>Add files</span> 
+                <span className="en-file-label">Add files</span> 
               </div>
               {selectedFiles.length > 0 && (
                   <div className="en-file-list">
@@ -621,14 +713,32 @@ const LLMAgent = ({ username, reservation_id}) => {
             </div>
 
             <div className="en-input-row">
-              <textarea
-                className="en-textarea"
-                value={inputValue}
-                onChange={handleInputChange}
-                placeholder={currentPhase === "negotiation" ? "Describe the experiment you want to run..." : "Describe the topology and insert all requested information..."}
-                rows={3}
-                disabled={isInputDisabled}
-              />
+              {currentPhase === 'negotiation' && negotiationQuestions.length > 0 && !isReadOnly && currentPhase === activePipelinePhase ? (
+                <div className="en-questions-form">
+                  {negotiationQuestions.map((q, i) => (
+                    <div key={i} className="en-question-item">
+                      <label className="en-question-label">{i + 1}. {q}</label>
+                      <textarea 
+                        className="en-question-input"
+                        value={negotiationAnswers[i] || ""} 
+                        onChange={(e) => setNegotiationAnswers({...negotiationAnswers, [i]: e.target.value})}
+                        placeholder="Type your answer here..."
+                        rows={1}
+                        disabled={isSending}
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <textarea
+                  className="en-textarea"
+                  value={inputValue}
+                  onChange={handleInputChange}
+                  placeholder={currentPhase === "negotiation" ? "Describe the experiment you want to run..." : "Describe the topology and insert all requested information..."}
+                  rows={3}
+                  disabled={isInputDisabled}
+                />
+              )}
               <button
                 type="submit"
                 className={`en-send-button ${isButtonDisabled ? "en-send-button-disabled" : ""}`}
