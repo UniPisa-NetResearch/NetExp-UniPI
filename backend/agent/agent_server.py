@@ -7,12 +7,14 @@ import subprocess
 import yaml
 import io
 import zipfile
+import re
 from flask import request, jsonify, send_file
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from ..app import app
 from .llm_client import chat_with_llm
 from ..utils import get_is_virtual_from_db
 from ..config import REDIS_HOST, REDIS_PORT, REDIS_DB, SAFETY_ITERATIONS, PHASES_ORDER, JSON_RETRIES, LOCAL_TEST, CONTAINERLAB_HOST, CONTAINERLAB_HOST_USER
-from .agents_util.prompts import AGENT_PROMPTS, DEVICE_KIND_RULES, FORBIDDEN_RULES
+from .agents_util.prompts import AGENT_PROMPTS, DEVICE_KIND_RULES, FORBIDDEN_RULES, READ_INTENTS
 
 # redis store for conversation history, keyed by username and reservation_id
 redis_client = redis.Redis(
@@ -31,7 +33,7 @@ except FileNotFoundError:
     print(f"Warning: Could not find {topology_file_path}")
 
 def get_dynamic_device_rules(agent_role: str) -> str:
-    # extracts device kinds dfrom the topologia and retrieve rules for the current agent
+    # extracts device kinds from the topology and retrieve rules for the current agent
     
     kinds_in_topo = set()
     try:
@@ -62,14 +64,13 @@ def get_dynamic_device_rules(agent_role: str) -> str:
             
     return dynamic_rules.strip()
 
-def run_agent_execution_plan(inventory_path: str, execution_plan: list, reservation_id):
-    
+
+def setup_ansible_env(reservation_id):
     if LOCAL_TEST:
         base_cmd = ["wsl","ansible"]
     else:
         base_cmd = ["ansible"]
-    
-    report_lines = []
+
     extra_vars = {}
 
     # if virtual deployment, we add proxy command to ansible ssh connection
@@ -79,6 +80,89 @@ def run_agent_execution_plan(inventory_path: str, execution_plan: list, reservat
         proxy_cmd = f"-o StrictHostKeyChecking=no -o ProxyCommand=\"ssh -W %h:%p -o StrictHostKeyChecking=no {CONTAINERLAB_HOST_USER}@{CONTAINERLAB_HOST}\""
         extra_vars['ansible_ssh_common_args'] = proxy_cmd
 
+    return base_cmd, extra_vars
+
+def execute_single_ansible_command(device, command, inventory_path, base_cmd, extra_vars, timeout=60):
+    # create ansible command to execute the command on the device using the provided inventory
+    cmd = base_cmd + [device, "-i", inventory_path, "-m", "shell", "-a", command]
+    
+    # add extra vars if present
+    if extra_vars:
+        cmd += ["--extra-vars", json.dumps(extra_vars)]
+
+    try:
+        # execution with 1 minute timeout
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        
+        raw_out = proc.stdout.strip()
+        error_out = proc.stderr.strip()
+
+        print(f"[DEBUG] Device: {device} | Command: {command}")
+        print(f"[DEBUG] Return code: {proc.returncode}")
+        print(f"[DEBUG] STDOUT:\n{raw_out}")
+
+        if error_out:
+            print(f"[DEBUG] STDERR:\n{error_out}")
+        print("-" * 60)
+
+        # check if the command was executed successfully based on ansible output or return code
+        is_ansible_success = "CHANGED" in raw_out or "SUCCESS" in raw_out or proc.returncode == 0
+        
+        # ansible output cleaning
+        if ">>" in raw_out:
+            clean_out = raw_out.split(">>", 1)[1].strip()
+        else:
+            clean_out = raw_out
+        
+        # remove standard ansible string in case of non-zero return code
+        clean_out = clean_out.replace("non-zero return code", "").strip()
+
+        final_message = ""
+
+        if is_ansible_success:
+            # always caprure errors and warnings, even if the command was successful
+            if error_out:
+                final_message = f"[WARNING: Ansible reported CHANGED/SUCCESS but generated stderr]:\n{error_out}"
+                
+                if clean_out:
+                    final_message = f"[SUCCESS]:\n{clean_out}"
+            
+            else:
+                if not clean_out:
+                    # Ansible reported CHANGED without any output, so the command has been executed succesfully
+                    final_message = "[SUCCESS: Command applied successfully (Ansible reported CHANGED)]"
+                else:
+                    final_message = f"[SUCCESS]:\n{clean_out}"
+
+        else:
+            final_message = f"[FAILED: Return code {proc.returncode}]"
+
+            if "UNREACHABLE" in raw_out:
+                final_message = "[FAILED: Device UNREACHABLE (SSH/Network issue)]"
+            elif "FAILED" in raw_out:
+                final_message = f"[FAILED: Ansible reported rc={proc.returncode}]"
+
+            if error_out:
+                final_message += f"\n[STDERR]:\n{error_out}"
+            if clean_out:
+                final_message += f"\n[STDOUT]:\n{clean_out}"
+            
+            if not error_out and not clean_out:
+                final_message += "\n[No output or error message returned]"
+        
+        return f"{device}: {command} |\n{final_message}\n"
+    
+    except subprocess.TimeoutExpired:
+        return f"{device}: {command} |\n[EXECUTION ERROR: Timeout expired ({timeout}s)]\n"
+    except Exception as e:
+        return f"{device}: {command} |\n[SYSTEM ERROR]: {str(e)}\n"
+
+def run_agent_execution_plan(inventory_path: str, execution_plan: list, reservation_id):
+    
+    base_cmd, extra_vars = setup_ansible_env(reservation_id)
+    
+    report_lines = []
+    
     for step in execution_plan:
         if ":" not in step:
             continue
@@ -87,80 +171,71 @@ def run_agent_execution_plan(inventory_path: str, execution_plan: list, reservat
         device = device.strip()
         command = command.strip()
 
-        # create ansible command to execute the command on the device using the provided inventory
-        cmd = base_cmd + [device, "-i", inventory_path, "-m", "shell", "-a", command]
+        report = execute_single_ansible_command(device=device, command=command, inventory_path=inventory_path, base_cmd=base_cmd, extra_vars=extra_vars, timeout=60)
         
-        # add extra vars if present
-        if extra_vars:
-            cmd += ["--extra-vars", json.dumps(extra_vars)]
+        report_lines.append(report)
 
-        try:
-            # execution with 1 minute timeout
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    return "\n-------------------------\n".join(report_lines)
+
+
+def get_device_command(intent: str, device_kind: str) -> str:
+    # read command to execute on the device from intent and device kind
+    intent_map = READ_INTENTS.get(intent)
+    if not intent_map:
+        return None
+    for kind_tuple, command in intent_map.items():
+        # if device_kind is "linux (ubuntu)", match with "linux")
+        if any(k in device_kind.lower() for k in kind_tuple):
+            return command
+    return None
+
+def run_device_commands(inventory_path: str, read_ops: list, reservation_id: str):
+    
+    base_cmd, extra_vars = setup_ansible_env(reservation_id)
+
+    topo_dict = yaml.safe_load(testbed_topology) or {}
+    nodes = topo_dict.get("topology", {}).get("nodes", {})
+
+    # group commands per device to serialize
+    tasks_by_device = {}
+    for op in read_ops:
+        if ":" not in op:
+            continue
+        
+        device, intent = op.split(":", 1)
+        device = device.strip()
+        intent = intent.strip()
+
+        tasks_by_device.setdefault(device, []).append(intent)
+
+    report_lines = []
+
+    # function run by every thread
+    def execute_for_device(device, intents):
+        # get device kind from topology
+        node_info = nodes.get(device, {})
+        kind = node_info.get("kind", "")
+        
+        dev_report = []
+        for intent in intents:
+            # get command to run for every device kind and intent
+            cmd_str = get_device_command(intent, kind)
+            if not cmd_str:
+                dev_report.append(f"{device} [{intent}]: [ERROR] Intent '{intent}' not mapped for kind '{kind}'")
+                continue
+
+            report = execute_single_ansible_command(device=device, command=cmd_str, inventory_path=inventory_path, base_cmd=base_cmd, extra_vars=extra_vars, timeout=30)
+            dev_report.append(report)
             
-            raw_out = proc.stdout.strip()
-            error_out = proc.stderr.strip()
+        return "\n-------------------------\n".join(dev_report) if dev_report else ""
 
-            print(f"[DEBUG] Device: {device} | Command: {command}")
-            print(f"[DEBUG] Return code: {proc.returncode}")
-            print(f"[DEBUG] STDOUT:\n{raw_out}")
-
-            if error_out:
-                print(f"[DEBUG] STDERR:\n{error_out}")
-            print("-" * 60)
-
-            # check if the command was executed successfully based on ansible output or return code
-            is_ansible_success = "CHANGED" in raw_out or "SUCCESS" in raw_out or proc.returncode == 0
-            
-            # ansible output cleaning
-            if ">>" in raw_out:
-                clean_out = raw_out.split(">>", 1)[1].strip()
-            else:
-                clean_out = raw_out
-            
-            # remove standard ansible string in case of non-zero return code
-            clean_out = clean_out.replace("non-zero return code", "").strip()
-
-            final_message = ""
-
-            if is_ansible_success:
-                # always caprure errors and warnings, even if the command was successful
-                if error_out:
-                    final_message = f"[WARNING: Ansible reported CHANGED/SUCCESS but generated stderr]:\n{error_out}"
-                    
-                    if clean_out:
-                        final_message = f"[SUCCESS]:\n{clean_out}"
-                
-                else:
-                    if not clean_out:
-                        # Ansible reported CHANGED without any output, so the command has been executed succesfully
-                        final_message = "[SUCCESS: Command applied successfully (Ansible reported CHANGED)]"
-                    else:
-                        final_message = f"[SUCCESS]:\n{clean_out}"
-
-            else:
-                final_message = f"[FAILED: Return code {proc.returncode}]"
-
-                if "UNREACHABLE" in raw_out:
-                    final_message = "[FAILED: Device UNREACHABLE (SSH/Network issue)]"
-                elif "FAILED" in raw_out:
-                    final_message = f"[FAILED: Ansible reported rc={proc.returncode}]"
-
-                if error_out:
-                    final_message += f"\n[STDERR]:\n{error_out}"
-                if clean_out:
-                    final_message += f"\n[STDOUT]:\n{clean_out}"
-                
-                if not error_out and not clean_out:
-                    final_message += "\n[No output or error message returned]"
-                    
-                
-            report_lines.append(f"{device}: {command} |\n{final_message}\n")
-
-        except subprocess.TimeoutExpired:
-            report_lines.append(f"{device}: {command} |\n[EXECUTION ERROR: Timeout expired (60s)]\n")
-        except Exception as e:
-            report_lines.append(f"{device}: {command} |\n[SYSTEM ERROR]: {str(e)}\n")
+    # parralel execution between different devices
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [executor.submit(execute_for_device, dev, intents) for dev, intents in tasks_by_device.items()]
+        for future in as_completed(futures):
+            res = future.result()
+            if res:
+                report_lines.append(res)
 
     return "\n-------------------------\n".join(report_lines)
 
@@ -186,8 +261,11 @@ def validate_json_format(reply_text, agent_role):
                 return False, "verification must be a JSON array"
               
         if agent_role == "safety":
-            if not all(k in data for k in ["status", "issues", "topology_mapping_check", "executable_plan", "clarifying_questions"]):
-                return False, "Missing keys. Required: status, issues, topology_mapping_check, executable_plan, clarifying_questions"
+            if not all(k in data for k in ["status", "issues", "topology_mapping_check", "executable_plan", "clarifying_questions", "read_operations"]):
+                return False, "Missing keys. Required: status, issues, topology_mapping_check, executable_plan, clarifying_questions, read_operations"
+            
+            if not isinstance(data.get("read_operations"), list):
+                return False, "read_operations must be a JSON array"
             
             if not isinstance(data.get("issues"), list):
                 return False, "issues must be a JSON array"
@@ -225,7 +303,144 @@ def get_validated_llm_reply(history, agent_role):
 
     return False, None, None
     
-def handle_chat_logic(username, reservation_id, chat_id, agent_role, message, files=None):
+def handle_safety_loop(history, system_msg, latest_user_msg, reservation_id, agent_role, is_manual_chat=False):
+    reasoning_steps = []
+    reply = {}
+
+    if is_manual_chat:
+        # retrieve first mesage in history for the context when every iteration is rejected and user send a manual message ---
+        real_context = ""
+        for msg in history:
+            content = msg.get("content", "")
+            if msg.get("role") == "user" and "<experiment_context>" in content and "<device_report>\nnull\n</device_report>" not in content:
+                real_context = content
+                break
+                    
+        # remove original <execution_plan> and <verification_commands> of the first context
+        if real_context:
+            real_context = re.sub(r'<execution_plan>.*?</execution_plan>', '', real_context, flags=re.DOTALL)
+            real_context = re.sub(r'<verification_commands>.*?</verification_commands>', '', real_context, flags=re.DOTALL)
+            # remove double spaces that remians after removal
+            real_context = re.sub(r'\n{3,}', '\n\n', real_context).strip()
+        
+        # extract the last failed plan proposed by the agent
+        last_failed_plan = ""
+        for msg in reversed(history):
+            if msg.get("role") == "assistant":
+                try:
+                    parsed = json.loads(msg.get("content", ""))
+                    if "REJECTED" in str(parsed.get("status", "")).upper():
+                        plan_arr = parsed.get("executable_plan", [])
+                        last_failed_plan = "\n".join(plan_arr) if isinstance(plan_arr, list) else str(plan_arr)
+                        break
+                except:
+                    pass
+        
+        # creation of the prompt with the user message and the experiment context
+        manual_text = latest_user_msg["content"] if latest_user_msg else ""
+        
+        combined_content = (f"MANUAL INSTRUCTION FROM USER:\n{manual_text}\n\n" "--- REFERENCE DATA ---\n" f"{real_context}\n\n")
+        
+        if last_failed_plan:
+            combined_content += ("--- IMPORTANT CONTEXT ---\n"
+                "The auto-correction loop is finished. Below is the <last_failed_execution_plan>.\n"
+                "Note that this plan ALREADY INCLUDES both the execution operations and the verification commands.\n"
+                f"<last_failed_execution_plan>\n{last_failed_plan}\n</last_failed_execution_plan>\n"
+            )
+            
+        combined_content += ("\nYou MUST treat <last_failed_execution_plan> as the target plan to be evaluated. "
+            "Please apply the manual instruction to fix this failed plan, ensure there are no redundant commands, "
+            "and generate a completely NEW, corrected JSON response.")
+        
+        # LLM will receive the system prompt and the combined prompt
+        current_turn_safety_history = [system_msg, {"role": "user", "content": combined_content}]
+    
+    else:
+    
+        current_turn_safety_history = [system_msg]
+        if latest_user_msg:
+            current_turn_safety_history.append(latest_user_msg)
+        
+    if not is_manual_chat and latest_user_msg and "<device_report>\nnull\n</device_report>" in latest_user_msg["content"]:
+        is_valid, reply_text, reply = get_validated_llm_reply(current_turn_safety_history, agent_role)
+
+        status = str(reply.get("status", "")).strip().upper() if is_valid and reply else ""
+
+        if "AWAITING_DEVICE_READ" in status:
+            history.append({"role": "assistant", "content": reply_text})
+
+            # show read request in the frontend
+            reasoning_steps.append({"iteration": "Device Read Request", "role": "assistant", "content": reply_text})
+            
+            read_ops = reply.get("read_operations", [])
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            inventory_path = os.path.abspath(os.path.join(base_dir, "..", "controller", "inventories", f"res-{reservation_id}-inventory.ini"))
+                
+            device_report = run_device_commands(inventory_path, read_ops, reservation_id)
+
+            # create new user message with read real data, replace null with real data
+            new_content = latest_user_msg["content"].replace("<device_report>\nnull\n</device_report>", f"<device_report>\n{device_report}\n</device_report>")
+            new_user_msg = {"role": "user", "content": new_content}
+
+            # add new user message to the global history
+            history.append(new_user_msg)
+
+            # show real data on frontend
+            reasoning_steps.append({"iteration": "Device Read Data", "role": "user", "content": f"[System: read data successfully retrieved from devices]\n\n{new_content}"})
+                
+            # clean local history, send system message with real data and the latest user message
+            current_turn_safety_history = [system_msg, new_user_msg]
+           
+    # autocorrection loop for Safety Check (max N iterations)
+    for iteration in range(SAFETY_ITERATIONS):
+        len_before = len(current_turn_safety_history)
+        valid_output, reply_text, reply = get_validated_llm_reply(current_turn_safety_history, agent_role)
+
+        # synchronize failed validation tries in the main history
+        for msg in current_turn_safety_history[len_before:]:
+            history.append(msg)
+
+        if not valid_output:
+            return {"error": "LLM failed to produce valid JSON after retries"}, 500
+
+        reasoning_steps.append({"iteration": iteration + 1, "role": "assistant", "content": reply_text})
+        history.append({"role": "assistant", "content": reply_text})
+
+        # add LLM response in local memory of the loop
+        current_turn_safety_history.append({"role": "assistant", "content": reply_text})
+        
+        status = str(reply.get("status", "")).upper()
+        questions = reply.get("clarifying_questions", [])
+        issues_found = reply.get("issues", [])
+        issues_text = "\n".join([f"- {issue}" for issue in issues_found])
+
+        is_approved = "APPROVED" in status
+        is_awaiting_info = "AWAITING INFORMATION" in status
+
+        has_questions = isinstance(questions, list) and len(questions) > 0
+    
+        # exit the loop if approved or has questions for the user
+        if is_approved or is_awaiting_info or has_questions or iteration == SAFETY_ITERATIONS - 1:
+            break 
+        
+        # if rejected, we instruct the LLM for the next iteration
+        correction_prompt = (f"In your previous response, you identified the following issues:\n{issues_text}\n\n"
+            "Please review the NEW `executable_plan` you just generated."
+            "If your newly generated plan successfully fixes all the issues, is safe, matches the topology, and has NO redundant commands, "
+            "you MUST now output 'status': 'APPROVED' and provide the final clean plan. "
+            "If your newly generated plan still contains errors, output 'status': 'REJECTED', list the remaining issues, and fix the plan again."
+        )
+
+        reasoning_steps.append({"iteration": iteration + 1, "role": "user", "content": correction_prompt})
+        
+        # insert correction in the two arrays
+        history.append({"role": "user", "content": correction_prompt})
+        current_turn_safety_history.append({"role": "user", "content": correction_prompt})    
+
+    return {"reply": reply, "reasoning_steps": reasoning_steps}, 200
+
+
+def handle_chat_logic(username, reservation_id, chat_id, agent_role, message, files=None, is_manual_chat=False):
     # if there is no chat_id, it means the user is starting a new chat. We generate one.
     if not chat_id:
         chat_id = f"{int(time.time())}_{uuid.uuid4().hex[:8]}"          # added timestamp to guarantee chronological order
@@ -281,49 +496,13 @@ def handle_chat_logic(username, reservation_id, chat_id, agent_role, message, fi
 
         if agent_role == "safety":
 
-            # create isolate array for current turn
-            current_turn_safety_history = [system_msg]
-            if latest_user_msg:
-                current_turn_safety_history.append(latest_user_msg)
-
-            # autocorrection loop for Safety Check (max N iterations)
-            for iteration in range(SAFETY_ITERATIONS):
-                len_before = len(current_turn_safety_history)
-                valid_output, reply_text, reply = get_validated_llm_reply(current_turn_safety_history, agent_role)
-
-                # synchronize failed validation tries in the main history
-                for msg in current_turn_safety_history[len_before:]:
-                    history.append(msg)
-
-                if not valid_output:
-                    return {"error": "LLM failed to produce valid JSON after retries"}, 500
-
-                reasoning_steps.append({"iteration": iteration + 1, "content": reply_text})
-                history.append({"role": "assistant", "content": reply_text})
-                
-                status = str(reply.get("status", "")).upper()
-                questions = reply.get("clarifying_questions", [])
-                issues_found = reply.get("issues", [])
-                issues_text = "\n".join([f"- {issue}" for issue in issues_found])
-
-                is_approved = "APPROVED" in status
-                is_awaiting_info = "AWAITING INFORMATION" in status
-
-                has_questions = isinstance(questions, list) and len(questions) > 0
+            result, status_code = handle_safety_loop(history, system_msg, latest_user_msg, reservation_id, agent_role, is_manual_chat)
+            if status_code != 200:
+                return result, status_code
             
-                # exit the loop if approved or has questions for the user
-                if is_approved or is_awaiting_info or has_questions:
-                    break 
-               
-                # if rejected, we instruct the LLM for the next iteration
-                correction_prompt = (f"Your previous plan was REJECTED for the following reasons:\n{issues_text}\n\n"
-                    "Please generate a completely new response. STRICTLY verify that every interface "
-                    "and device name exists in the physical topology YAML. Fix all the issues mentioned above."
-                )
-                
-                # insert correction in the two arrays
-                history.append({"role": "user", "content": correction_prompt})
-                current_turn_safety_history.append({"role": "user", "content": correction_prompt})
+            # redis save data automatically
+            reply = result["reply"]
+            reasoning_steps = result["reasoning_steps"]
 
         else:
 
@@ -365,12 +544,13 @@ def chat():
     reservation_id = request.form.get("reservation_id", "")
     agent_role = request.form.get("agent_role", "")
     chat_id = request.form.get("chat_id", "")
+    is_manual_chat = request.form.get("is_manual_chat", "false").lower() == "true"
     files = request.files.getlist("files")
 
     if not username or not reservation_id:
         return jsonify({"error": "Missing username or reservation_id"}), 400
 
-    result, status_code = handle_chat_logic(username, reservation_id, chat_id, agent_role, message, files)
+    result, status_code = handle_chat_logic(username, reservation_id, chat_id, agent_role, message, files, is_manual_chat)
     return jsonify(result), status_code
 
     
@@ -436,7 +616,7 @@ def advance_agent():
         plan = format_as_string(parsed.get("execution_plan", ""))
         verification = format_as_string(parsed.get("verification", []))
         
-        context_payload = f"<experiment_context>\n{experiment_context}\n</experiment_context>\n\n<exit_conditions>\n{exit_conditions}\n</exit_conditions>\n\n<execution_plan>\n{plan}\n</execution_plan>\n\n<verification_commands>\n{verification}\n</verification_commands>"
+        context_payload = f"<experiment_context>\n{experiment_context}\n</experiment_context>\n\n<exit_conditions>\n{exit_conditions}\n</exit_conditions>\n\n<execution_plan>\n{plan}\n</execution_plan>\n\n<verification_commands>\n{verification}\n</verification_commands>\n\n<device_report>\nnull\n</device_report>"
     
     elif current_role == "safety":
         plan = parsed.get("executable_plan", "[]")
