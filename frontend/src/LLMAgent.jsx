@@ -357,7 +357,7 @@ const LLMAgent = ({ username, reservation_id}) => {
             // safety may return multiple correction iterations; render each one separately
             if (data.reasoning_steps && data.reasoning_steps.length > 0) {
 
-              data.reasoning_steps.forEach((step) => {appendMessage("assistant", `[Iteration ${step.iteration}]\n${step.content}`);});
+              data.reasoning_steps.forEach((step) => {appendMessage(step.role || "assistant", `[Iteration ${step.iteration}]\n${step.content}`);});
 
             } else if (data.reply) {
               // other phases return a single final reply
@@ -436,6 +436,8 @@ const LLMAgent = ({ username, reservation_id}) => {
       if (username) formData.append("username", username);
       if (reservation_id) formData.append("reservation_id", reservation_id);
       if (activeChatId) formData.append("chat_id", activeChatId);
+      // manual message, written by the user
+      formData.append("is_manual_chat", "true");
 
       filesToSend.forEach((file) => formData.append("files", file));
 
@@ -455,7 +457,7 @@ const LLMAgent = ({ username, reservation_id}) => {
       if (currentPhase === 'safety' && data.reasoning_steps) {
 
          data.reasoning_steps.forEach((step, index) => {
-            appendMessage("assistant", `[Iteration ${step.iteration}]\n${step.content}`);
+            appendMessage(step.role || "assistant", `[Iteration ${step.iteration}]\n${step.content}`);
          });
 
       } else if (data.reply) {
