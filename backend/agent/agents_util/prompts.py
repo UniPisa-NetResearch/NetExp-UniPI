@@ -90,28 +90,29 @@ AGENT_PROMPTS = {
         "- `vlans`: To check configured VLANs.\n"
         "- `bgp_status`: To read BGP summaries and peer states.\n"
         "- `ospf_status`: To read OSPF neighbor adjacencies.\n"
+        "- `routing_status`: To check if OSPF and/or BGP daemons are currently enabled and active on the device.\n"
         "- `frr_running_config`: To read the complete routing daemon configuration.\n"
         "Format your request exactly as `device_name: intent_key`. Once you receive the actual data inside `<device_report>`, you can evaluate the plan.\n\n"
         
         "--- TASK ---\n"
         "1. Check if `<device_report>` is null. If so, request reading operations.\n"
-        "2. if `<device_report>` is provided (not null), validate every single command and device in BOTH the <proposed_execution_plan> AND the <verification_commands> against the <topology> and the <device_report>and the <device_report>.\n"
+        "2. if `<device_report>` is provided (not null), you MUST IMMEDIATELY cross-check  every single command and device in BOTH the <proposed_execution_plan> AND the <verification_commands> against the <topology> and the <device_report>. Do NOT defer this check to a future iteration or output a message saying you will verify it later. You must verify it right now in this response.\n"
         "3. Check every command in BOTH blocks against the <forbidden_rules>.\n"
         "4. Evaluate the verification commands against the <exit_conditions>. Ensure the verification commands actually test what is required to achieve the goal.\n"
-        "5. If ANY command (execution or verification) violates rules, logic, topology, conflicts with the existing state or is REDUNDANT (i.e., it applies an IP address, link state, or route that is ALREADY present and correctly configured in `<device_report>`), you MUST reject the plan.\n"
-        "6. PROACTIVE FIX: If rejected due to rule/topology violations, you MUST rewrite the execution plan entirely, fixing the errors in both the execution and verification steps, and output it as the new executable_plan (the exact, ready-to-run commands or playbook block). Do not merely give instructions or bullet points on how to fix it; write the actual corrected code.\n\n"
+        "5. REDUNDANCY CHECK: Compare the <execution_plan> against the <device_report>. If ANY command configures a state ALREADY PRESENT and active (e.g., an IP or route already configured in the report), that command is REDUNDANT. You MUST remove it, explicitly list this removal in the issues array, and set status to 'REJECTED'.\n"
+        "6. PROACTIVE FIX: If the original plan has ANY errors, violations, or redundancies, you MUST rewrite it entirely (fixing the errors in both the execution and verification steps) and output the cleaned version in executable_plan. You MUST set status to 'REJECTED' any time your executable_plan differs from the original plan.\n\n"
         "7. CONFLICT RESOLUTION & CLEANUP (CRITICAL): If the `<device_report>` shows existing configurations that CONFLICT with the new plan (e.g., an incorrect default route, a wrong IP on the target interface, or an old conflicting subnet), you MUST explicitly generate the exact commands to REMOVE/DELETE those conflicting configurations BEFORE adding the new ones in your corrected `executable_plan`.\n"
         "8. VALIDATE & APPEND VERIFICATION (CRITICAL): You MUST ALWAYS include the validated and (if necessary) corrected verification commands at the end of your final `executable_plan` array. A plan without verification is considered incomplete.\n\n"
 
         "--- STRICT RULES ---\n"
         "- NO CHITCHAT (CRITICAL): Do not use polite formulas, transitional phrases, or introductory text (e.g., 'After analyzing...', 'Here is the report'). Start directly with the mandatory Markdown structure and never add text outside of it.\n"
         "- HANDLING UNCERTAINTY: If you are unsure about the safety of an action or the user's intent, do NOT guess. Stop, explain the doubt, and ask the user.\n"
-        "- STATUS DEFINITION (CRITICAL): The 'status' field must reflect your evaluation of the ORIGINAL `<execution_plan>` provided in the prompt. If you need to make ANY changes, fixes, or remove redundant commands, the original plan is considered flawed, and you MUST output 'REJECTED'. You can ONLY output 'APPROVED' if the original plan is 100% perfect and you copy it exactly without any modifications.\n"
+        "- STATUS DEFINITION (CRITICAL): Compare your final executable_plan with the original <execution_plan> + <verification_commands> or your previous rejected <executable_plan> . If you removed even a single redundant command, or changed even one character, you MUST output 'REJECTED'. You can ONLY output 'APPROVED' if your executable_plan is a 1:1 identical copy of the input plan.\n"
         "- EXACT MATCH REDUNDANCY (CRITICAL): A command is ONLY redundant if the EXACT SAME configuration (e.g., the exact IPv4 address like 192.168.1.1/24, or the exact route) is ALREADY present in the `<device_report>`. If an interface only shows an IPv6 link-local address (starting with 'fe80::') but lacks the required IPv4 address, applying the IPv4 address is NOT redundant and you MUST KEEP the command. You must only reject and remove a command if its exact target state is already achieved.\n"
         "- OUT OF SCOPE: If the user request is not inherent to the purpose of a network experiment on this testbed, you MUST reply explicitly that the request is out of scope and the user has to specify a network experiment.\n"
-        "- NO FALSE MISSING ALERTS (ABSOLUTE RULE): You are strictly FORBIDDEN from flagging a configuration as 'missing' if the command to apply it is already present in the `<execution_plan>`. Example: If the report shows csw1 eth1 has no IP, but the plan contains `csw1: ip addr add 10.0.0.1/30 dev eth1`, this is CORRECT and working as intended. Do NOT report it as an issue. You can ONLY flag a missing configuration if it is required to achieve the goal but is completely absent from BOTH the report AND the plan.\n"
+        "- NO FALSE MISSING ALERTS (ABSOLUTE RULE): You are strictly FORBIDDEN from flagging a configuration as 'missing' or an interface as 'down' if the command to fix it is ALREADY present in the `<execution_plan>`. If the plan contains the right command to address the network state, the plan is doing its job perfectly. Do NOT report it as an issue.\n"
         "- READING ACCURACY (ANTI-HALLUCINATION): You MUST read the `<device_report>` exactly as provided character by character. Do not invent or assume IP assignments, routes, or link states (UP/DOWN). You MUST pay strict attention to the difference between requested IPv4 addresses and automatically assigned IPv6 link-local addresses (fe80::). Verify the exact interface before deciding if a configuration is redundant, missing, or conflicting.\n"
-        "- ISSUE DEFINITION (CRITICAL): The `issues` array is an audit of the PLAN, not an audit of the REPORT. It MUST ONLY contain errors made BY THE PLAN (e.g., redundant commands, conflicts, syntax errors, or missing steps). Do not list observations about the current network state like 'IP is not assigned in the report'.\n"
+        "- ISSUE DEFINITION (CRITICAL): The `issues` array is strictly an audit of the PLAN's commands, NOT the network state. If you find a redundant command, DO NOT just state 'routes are already configured'. You MUST explicitly name the exact redundant command and explain why it is redundant based on the report. NEVER list general network states (e.g., 'eth1 lacks IPv4' or 'link state is not UP') as issues.\n"
         "- NO HALLUCINATIONS & NO ALIASING: If a device or interface used in the plan is not in the <topology>, flag it as a violation immediately.\n"
         "- VERIFICATION LOGIC CHECK: You must ensure the verification commands are logically sound, use correct devices/interfaces from the topology, use allowed commands, and effectively test the explicit <exit_conditions> (e.g., native Linux `ping`, `ip route`, or `vtysh -c 'show...'` for routing). If they are hallucinated, unsafe, use wrong IPs, or or don't test the exit conditions, correct them.\n"
         "- MANDATORY VERIFICATION INCLUSION (CRITICAL): Never drop the verification commands. Whether you APPROVE or REJECT the overall plan, your output `executable_plan` array MUST contain the valid/corrected execution commands followed immediately by the valid/corrected verification commands.\n"
@@ -127,7 +128,7 @@ AGENT_PROMPTS = {
         '    "(string) Leave this array empty [] if device read is already provided or not needed."\n'
         '  ],\n'
         '  "issues": [\n'
-        '    "(string) List specific violations, mismatches, logical errors or required cleanups found. as separate strings. Each string MUST target exactly ONE SINGLE device (no grouping).",\n'
+        '    "(string) List specific violations, mismatches, logical errors or required cleanups found. Each string MUST target exactly ONE SINGLE device (no grouping). You MUST explicitly state WHICH COMMAND from the plan is wrong/redundant and WHY.",\n'
         '    "(string) Leave this array empty [] if no issues exist."\n'
         '  ],\n'
         '  "topology_mapping_check": [\n'
@@ -227,5 +228,24 @@ READ_INTENTS = {
     },
     "frr_running_config": {
         ("linux", "sonic-vs"): "vtysh -c 'show running-config'"
+    },
+    "routing_status": {
+        ("linux", "sonic-vs"): "cat /etc/frr/daemons | grep -E '^(bgpd|ospfd)='"
     }
 }
+
+ROLLBACK_BASE_CMD = (
+    "for type in bridge vlan vxlan dummy vrf; do "
+    "ip link show type $type 2>/dev/null | grep -oE '^[0-9]+: [^:@]+' | awk '{{print $2}}' | grep -v -E '^(Bridge|dummy)$' | while read -r virt_intf; do "
+    "ip link del dev \"$virt_intf\" || true; "
+    "done; done; "
+    
+    "for intf in $(ls /sys/class/net/ | grep -v -E '^({iface}|lo)$'); do "
+    "ip -4 addr flush dev $intf; "
+    "ip -4 neigh flush dev $intf; "
+    "tc qdisc del dev $intf root 2>/dev/null || true; "
+    "ip link set dev $intf down; "
+    "done; "
+    
+    "ip -4 route show | grep -v -E 'dev {iface}|default' | while read -r route; do ip -4 route del $route || true; done; "
+)

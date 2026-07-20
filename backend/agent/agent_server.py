@@ -14,7 +14,7 @@ from ..app import app
 from .llm_client import chat_with_llm
 from ..utils import get_is_virtual_from_db
 from ..config import REDIS_HOST, REDIS_PORT, REDIS_DB, SAFETY_ITERATIONS, PHASES_ORDER, JSON_RETRIES, LOCAL_TEST, CONTAINERLAB_HOST, CONTAINERLAB_HOST_USER
-from .agents_util.prompts import AGENT_PROMPTS, DEVICE_KIND_RULES, FORBIDDEN_RULES, READ_INTENTS
+from .agents_util.prompts import AGENT_PROMPTS, DEVICE_KIND_RULES, FORBIDDEN_RULES, READ_INTENTS, ROLLBACK_BASE_CMD
 
 # redis store for conversation history, keyed by username and reservation_id
 redis_client = redis.Redis(
@@ -782,6 +782,75 @@ def download_chat():
     download_name = f"chat_{chat_id}.zip" if chat_id else f"all_chats_{reservation_id}.zip"
 
     return send_file(memory_file, mimetype="application/zip", as_attachment=True, download_name=download_name)
+
+@app.route("/api/agent_server/experimentRollback", methods=["POST"])
+def rollback_experiment():
+    data = request.get_json()
+    username = data.get("username", "")
+    reservation_id = data.get("reservation_id", "")
+    chat_id = data.get("chat_id", "")
+
+    if not reservation_id or not username or not chat_id:
+        return jsonify({"error": "Missing parameters"}), 400
+
+    # verify on redis if there was an execution
+    exec_key = f"agent_history:execution:{username}:{reservation_id}:{chat_id}"
+    exec_history = redis_client.get(exec_key)
+    if not exec_history:
+        # if an experiment was never executed, cancel the rollback
+        print("No execution history found, rollback is skipped")
+        return jsonify({"status": "SKIPPED", "message": "No execution phase found, skip rollback."}), 200
+
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    inventory_path = os.path.abspath(os.path.join(base_dir, "..", "controller", "inventories", f"res-{reservation_id}-inventory.ini"))
+    snapshot_dir = os.path.abspath(os.path.join(base_dir, "..", "controller", "snapshots", f"res_{reservation_id}_snapshots", "snapshot0"))
+
+    # read inventory
+    devices = {}
+    try:
+        with open(inventory_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('[') or line.startswith('#'): continue
+                parts = line.split()
+                dev_name = parts[0]
+                role = "host"
+                res_iface = "eth0"
+                for p in parts[1:]:
+                    if p.startswith("role="): role = p.split("=")[1]
+                    if p.startswith("res_iface="): res_iface = p.split("=")[1]
+                devices[dev_name] = {'role': role, 'iface': res_iface}
+    except Exception as e:
+        return jsonify({"error": f"Error reading inventory: {str(e)}"}), 500
+
+    base_cmd, extra_vars = setup_ansible_env(reservation_id)
+
+    def execute_rollback_for_device(device, info):
+        # format base string from agents_util
+        cmd_str = ROLLBACK_BASE_CMD.format(iface=info['iface'])
+
+        # reload FRR node of type host ignored
+        if info['role'] != "host":
+            frr_file_path = os.path.join(snapshot_dir, f"{device}_frr.conf")
+            try:
+                with open(frr_file_path, 'r') as frr_file:
+                    frr_content = frr_file.read()
+                # escaping of ' for bash
+                safe_content = frr_content.replace("'", "'\\''")
+                cmd_str += f"printf '%s\\n' '{safe_content}' > /etc/frr/frr.conf; service frr restart || true;"
+            except FileNotFoundError:
+                cmd_str += "> /etc/frr/frr.conf; service frr restart || systemctl restart frr || true;"
+
+        return execute_single_ansible_command(device, cmd_str, inventory_path, base_cmd, extra_vars, timeout=60)
+    
+    # parallel execution with Worker
+    report_lines = []
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [executor.submit(execute_rollback_for_device, dev, info) for dev, info in devices.items()]
+        for future in as_completed(futures):
+            report_lines.append(future.result())
+
+    return jsonify({"status": "SUCCESS", "report": "\n".join(report_lines)}), 200
 
 if __name__ == "__main__":
     app.run(debug=True, host='0.0.0.0', port=5006, use_reloader=False)
