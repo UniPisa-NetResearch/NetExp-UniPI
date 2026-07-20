@@ -62,7 +62,7 @@ topology:
         - "usermod -aG sudo admin"
         - "bash -c 'echo \"admin ALL=(ALL) NOPASSWD: ALL\" > /etc/sudoers.d/admin'"
         - "chmod 440 /etc/sudoers.d/admin"
-        - "bash -c \"sed -i 's/bgpd=no/bgpd=yes/' /etc/frr/daemons && service frr restart && sleep 5\""
+        - "bash -c \"sed -i 's/bgpd=no/bgpd=yes/' /etc/frr/daemons && sed -i 's/ospfd=no/ospfd=yes/' /etc/frr/daemons && service frr restart && sleep 5\""
         - "bash -c 'vtysh -c \"write memory\" || true'"
     
     sw6:
@@ -77,7 +77,7 @@ topology:
         - "usermod -aG sudo admin"
         - "bash -c 'echo \"admin ALL=(ALL) NOPASSWD: ALL\" > /etc/sudoers.d/admin'"
         - "chmod 440 /etc/sudoers.d/admin"
-        - "bash -c \"sed -i 's/bgpd=no/bgpd=yes/' /etc/frr/daemons && service frr restart && sleep 5\""
+        - "bash -c \"sed -i 's/bgpd=no/bgpd=yes/' /etc/frr/daemons && sed -i 's/ospfd=no/ospfd=yes/' /etc/frr/daemons && service frr restart && sleep 5\""
         - "bash -c 'vtysh -c \"write memory\" || true'"
     
     sw1:
@@ -92,7 +92,7 @@ topology:
         - "usermod -aG sudo admin"
         - "bash -c 'echo \"admin ALL=(ALL) NOPASSWD: ALL\" > /etc/sudoers.d/admin'"
         - "chmod 440 /etc/sudoers.d/admin"
-        - "bash -c \"sed -i 's/bgpd=no/bgpd=yes/' /etc/frr/daemons && service frr restart && sleep 5\""
+        - "bash -c \"sed -i 's/bgpd=no/bgpd=yes/' /etc/frr/daemons && sed -i 's/ospfd=no/ospfd=yes/' /etc/frr/daemons && service frr restart && sleep 5\""
         - "bash -c 'vtysh -c \"write memory\" || true'"
     
     sw2:
@@ -107,7 +107,7 @@ topology:
         - "usermod -aG sudo admin"
         - "bash -c 'echo \"admin ALL=(ALL) NOPASSWD: ALL\" > /etc/sudoers.d/admin'"
         - "chmod 440 /etc/sudoers.d/admin"
-        - "bash -c \"sed -i 's/bgpd=no/bgpd=yes/' /etc/frr/daemons && service frr restart && sleep 5\""
+        - "bash -c \"sed -i 's/bgpd=no/bgpd=yes/' /etc/frr/daemons && sed -i 's/ospfd=no/ospfd=yes/' /etc/frr/daemons && service frr restart && sleep 5\""
         - "bash -c 'vtysh -c \"write memory\" || true'"
     
     sw3:
@@ -122,7 +122,7 @@ topology:
         - "usermod -aG sudo admin"
         - "bash -c 'echo \"admin ALL=(ALL) NOPASSWD: ALL\" > /etc/sudoers.d/admin'"
         - "chmod 440 /etc/sudoers.d/admin"
-        - "bash -c \"sed -i 's/bgpd=no/bgpd=yes/' /etc/frr/daemons && service frr restart && sleep 5\""
+        - "bash -c \"sed -i 's/bgpd=no/bgpd=yes/' /etc/frr/daemons && sed -i 's/ospfd=no/ospfd=yes/' /etc/frr/daemons && service frr restart && sleep 5\""
         - "bash -c 'vtysh -c \"write memory\" || true'"
     
     sw4:
@@ -137,7 +137,7 @@ topology:
         - "usermod -aG sudo admin"
         - "bash -c 'echo \"admin ALL=(ALL) NOPASSWD: ALL\" > /etc/sudoers.d/admin'"
         - "chmod 440 /etc/sudoers.d/admin"
-        - "bash -c \"sed -i 's/bgpd=no/bgpd=yes/' /etc/frr/daemons && service frr restart && sleep 5\""
+        - "bash -c \"sed -i 's/bgpd=no/bgpd=yes/' /etc/frr/daemons && sed -i 's/ospfd=no/ospfd=yes/' /etc/frr/daemons && service frr restart && sleep 5\""
         - "bash -c 'vtysh -c \"write memory\" || true'"
 
   links:

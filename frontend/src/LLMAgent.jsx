@@ -30,7 +30,7 @@ const LLMAgent = ({ username, reservation_id}) => {
   const isViewingPastPhase = !isReadOnly && currentPhase !== activePipelinePhase;
 
   // input enabled only for negotiation phase and safety phase in case of clarification is needed
-  const isInputDisabled = isReadOnly || isViewingPastPhase || canAdvance || currentPhase === 'planning' || currentPhase === 'execution' || (currentPhase === 'safety' && !needsClarification);
+  const isInputDisabled = isSending || isReadOnly || isViewingPastPhase || canAdvance || currentPhase === 'planning' || currentPhase === 'execution' || (currentPhase === 'safety' && !needsClarification);
   
   // determine if the user input is empty (no text and no files)
   const isInputEmpty = inputValue.trim() === "" && selectedFiles.length === 0;
@@ -54,11 +54,45 @@ const LLMAgent = ({ username, reservation_id}) => {
 
   const [executionStatus, setExecutionStatus] = useState(null);                     // approved or rejected
 
+  const [isRollingBack, setIsRollingBack] = useState(false);
+
   // show "Go back to planning" if execution is rejected and iterations are not ended
   const isExecutionLoopActive = activePipelinePhase === 'execution' && executionStatus === 'REJECTED';
 
-  
-  const startNewChat = () => {
+  const executeRollback = async () => {
+    if (!activeChatId) return;                                  // if there are no active chat, rollback is unnecessary
+    
+    setIsSending(true);                                         // lock UI during rollback
+    try {
+      const response = await fetch("/api/agent_server/experimentRollback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: username, reservation_id: reservation_id, chat_id: activeChatId}),
+      });
+
+      if (!response.ok) {
+        console.error("Error during testbed rollback");
+      }
+
+    } catch (err) {
+      console.error("Network error duringrollback:", err);
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  const startNewChat = async () => {
+
+    // rollback performed only if there is an active chat and we are not in history mode
+    if (activeChatId && !isReadOnly) {
+
+      setIsRollingBack(true);
+        
+      await executeRollback();
+
+      setIsRollingBack(false);
+    }
+
     setActiveChatId(null);
     setMessages([]);
     setInputValue("");
@@ -72,6 +106,7 @@ const LLMAgent = ({ username, reservation_id}) => {
     setIsReadOnly(false);
     setExecutionStatus(null);
   };
+
   // reset all fields when a new chat is started (either from the button or after the execution phase)
   useEffect(() =>{ startNewChat(); }, []);
 
@@ -132,8 +167,6 @@ const LLMAgent = ({ username, reservation_id}) => {
 
   const handleDeleteChat = async (chatId, e) => {
     if(e) e.stopPropagation(); // avoid chat loading after button click
-    
-    if (currentPhase !== 'negotiation') return;
 
     try {
       const response = await fetch("/api/agent_server/history", {
@@ -391,7 +424,7 @@ const LLMAgent = ({ username, reservation_id}) => {
     loadHistory(activeChatId, previousPhase, true);
   };
 
-  // terminate experiment and return to negotiation phase
+  // terminate experiment and return to negotiation phase (click End Experiment session)
   const handleCancelPipeline = () => {
     if (isSending) return;
     startNewChat();
@@ -630,14 +663,14 @@ const LLMAgent = ({ username, reservation_id}) => {
                 className="en-download-chat-btn"
                 onClick={(e) => handleDownloadChat(null, e)}
                 title="Download All Chats"
-                disabled={currentPhase!=="negotiation"}
+                disabled={activeChatId !== null}
               >
                 <img src="downloadButton.png" alt="Download" className="en-download-icon-img" />
               </button>
             </div>
           )}
 
-          <div className={currentPhase !== 'negotiation' ? 'sidebar-disabled' : ''}>
+          <div className={activeChatId !== null ? 'sidebar-disabled' : ''}>
             <h3 className="sidebar-title">Recent Chats</h3>
             {savedChats.length === 0 ? (
               <p className="en-sidebar-empty">No previous conversations.</p>
@@ -651,14 +684,14 @@ const LLMAgent = ({ username, reservation_id}) => {
                     <button
                       className={`en-chat-list-btn ${activeChatId === chatId ? "active" : ""}`}
                       onClick={() => loadHistory(chatId, 'negotiation', true)}
-                      disabled={currentPhase !== 'negotiation'}
+                      disabled={activeChatId !== null}
                     >
                       Conversation {savedChats.length - index}
                     </button>
                     <button
                       className="en-delete-chat-btn"
                       onClick={(e) => handleDeleteChat(chatId, e)}
-                      disabled={currentPhase !== 'negotiation'}
+                      disabled={activeChatId !== null}
                       title="Delete Chat"
                     >
                       ×
@@ -672,12 +705,21 @@ const LLMAgent = ({ username, reservation_id}) => {
 
         <div className="experiment-negotiation-chat">
           <div className="en-chat-window">
-            {messages.map((msg) => renderMessage(msg))}
-            {isSending && (
-               <div className="en-message-bubble en-message-assistant">
-                 <div className="en-message-role">LLM Agent</div>
-                 <div className="en-message-content">Computing response, please wait...</div>
-               </div>
+            {isRollingBack ? (
+              <div className="en-message-bubble en-message-assistant">
+                <div className="en-message-role">System</div>
+                <div className="en-message-content">**[System]** Rollback execution on the testbed. Please wait...</div>
+              </div>
+            ) : (
+              <>
+                {messages.map((msg) => renderMessage(msg))}
+                {isSending && (
+                  <div className="en-message-bubble en-message-assistant">
+                    <div className="en-message-role">LLM Agent</div>
+                    <div className="en-message-content">Computing response, please wait...</div>
+                  </div>
+                )}
+              </>
             )}
           </div>
 
