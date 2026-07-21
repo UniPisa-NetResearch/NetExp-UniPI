@@ -67,6 +67,12 @@ Considering the following deployment:
    ```bash
    sudo apt install python3-rq
    ```
+9. Install `ollama` if is required for LLM agent, sign in and install a cloud model:
+   ```bash
+   curl -fsSL https://ollama.com/install.sh | sh
+   ollama signin
+   ollama pull glm-5.1:cloud
+   ```
 
 #### Transfer Required Files
 1. Send the `docker-compose.yml` file to **NetExp2**:
@@ -227,7 +233,7 @@ Start all services:
 To stop the system, execute these commands on **NetExp1**:
    ```bash
    cd NetExp-UniPI/
-   while read -r pid; do kill -- "-$pid"; done < pids.txt
+   ./kill.sh
    ```
 
 To start the system as an alternative way, create 9 terminals connected to **NetExp1**.

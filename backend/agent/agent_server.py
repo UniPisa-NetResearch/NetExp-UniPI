@@ -240,6 +240,16 @@ def run_device_commands(inventory_path: str, read_ops: list, reservation_id: str
     return "\n-------------------------\n".join(report_lines)
 
 def validate_json_format(reply_text, agent_role):
+    # remove characters added by some models
+    reply_text = reply_text.strip()
+    if reply_text.startswith("```json"):
+        reply_text = reply_text[7:]
+    elif reply_text.startswith("```"):
+        reply_text = reply_text[3:]
+    if reply_text.endswith("```"):
+        reply_text = reply_text[:-3]
+    reply_text = reply_text.strip()
+
     # verify the agent's output is a valid json
     try:
         data = json.loads(reply_text)
@@ -294,7 +304,10 @@ def get_validated_llm_reply(history, agent_role):
 
         is_valid, validation_result = validate_json_format(reply_text, agent_role)
         if is_valid:
-            return True, reply_text, validation_result
+            # validation_result is the cleaned python dictionary, we cnvert into a JSON string without `` characters
+            clean_reply_text = json.dumps(validation_result)
+
+            return True, clean_reply_text, validation_result
 
         history.append({"role": "assistant", "content": reply_text})
         correction_prompt = f"Your previous response failed validation: {validation_result}. Please generate a new complete response in valid JSON following the mandatory structure."
