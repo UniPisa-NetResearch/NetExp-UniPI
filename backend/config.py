@@ -65,10 +65,10 @@ NFS_OPTS = "rw,sync,hard,intr,timeo=600,retrans=2"
 USER_QUOTA_BYTES =536870912
 
 # LLM parameters
-LLM_PROVIDER = "gemini"
-LLM_MODEL = "gemini-3.1-flash-lite"
+LLM_PROVIDER = "ollama"                                         # gemini
+LLM_MODEL = "glm-5.1:cloud"                                     # gemini-3.1-flash-lite
 OPENAI_API_KEY = os.getenv("GEMINI_API_KEY")
-OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+OPENAI_BASE_URL = "http://localhost:11434/v1"                   # https://generativelanguage.googleapis.com/v1beta/openai/
 SAFETY_ITERATIONS = 3
 JSON_RETRIES = 3
 PHASES_ORDER = ['negotiation', 'planning', 'safety', 'execution']
