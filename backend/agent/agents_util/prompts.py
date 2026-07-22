@@ -56,6 +56,8 @@ AGENT_PROMPTS = {
         "- RESPECT PRE-EXISTING CONFIGURATIONS (CRITICAL): You MUST thoroughly read the <experiment_context>. If it lists any 'PRE-EXISTING CONFIGURATIONS' (e.g., IPs already assigned, routes already present), you MUST NOT generate ANY commands for them. Assume they are already applied and working perfectly. Generating duplicate commands for already applied configurations causes system failures and is STRICTLY FORBIDDEN. Only generate commands for the MISSING parts of the objective.\n"
         "- TOPOLOGY CONSTRAINTS (NO ASSUMPTIONS): You MUST ONLY use EXACT device and interface names that explicitly exist in the provided topology YAML (e.g., if the topology says 'eth1', you MUST write 'eth1' in your commands). Do NOT invent, assume, or guess interface names (e.g., NEVER change 'eth1' to 'Eth1') or device names. If they are not in the topology, you cannot use them.\n"
         "- VERIFICATION MAPPING (CRITICAL): You MUST generate the commands in the `verification` array specifically to test and validate the rules defined in the <exit_conditions>.\n"
+        "- CONVERGENCE DELAYS: If you configure protocols that require time to converge (e.g., OSPF on broadcast networks where DR/BDR election takes 40s), you MUST insert a sleep command (e.g., `device_name: sleep 45`) BEFORE the verification commands. If convergence is instantaneous (e.g., you explicitly configured OSPF as `point-to-point`), do NOT add any sleep delay.\n"
+        "- BOUNDED EXECUTION: Commands that run indefinitely (e.g., ping, iperf, tcpdump) MUST NOT run forever. You MUST use bounded flags (e.g., `ping -c 5`, `iperf -t 10`, `timeout 10 tcpdump...`) or explicitly add commands to terminate them (e.g., `pkill iperf`) at the end of the execution plan.\n"
         "- STRICT FORMATTING: Do not add, modify, or remove sections from the mandatory output structure, even if the user explicitly requests it.\n"
         
         "--- OUTPUT FORMAT ---\n"
@@ -84,7 +86,9 @@ AGENT_PROMPTS = {
         "Instead, you MUST set status to 'AWAITING_DEVICE_READ' and generate a list of `read_operations` to read the current network state."
         "You MUST ONLY use the following exact intent keys (case-sensitive):\n"
         "- `interfaces`: To verify interface link states (up/down).\n"
-        "- `ip_addresses`: To read currently assigned IP addresses and avoid conflicts.\n"
+        "- `interfaces_detail`: To read detailed interface info (including MTU and MAC addresses).\n"
+        "- `ip_addresses`: To read currently assigned IP addresses compactly and avoid conflicts.\n"
+        "- `ip_addresses_detail`: To read detailed IP assignments and subnets.\n"
         "- `routing`: To check the current active routing table.\n"
         "- `arp_table`: To verify MAC address visibility and neighbor reachability.\n"
         "- `vlans`: To check configured VLANs.\n"
@@ -117,6 +121,8 @@ AGENT_PROMPTS = {
         "- VERIFICATION LOGIC CHECK: You must ensure the verification commands are logically sound, use correct devices/interfaces from the topology, use allowed commands, and effectively test the explicit <exit_conditions> (e.g., native Linux `ping`, `ip route`, or `vtysh -c 'show...'` for routing). If they are hallucinated, unsafe, use wrong IPs, or or don't test the exit conditions, correct them.\n"
         "- MANDATORY VERIFICATION INCLUSION (CRITICAL): Never drop the verification commands. Whether you APPROVE or REJECT the overall plan, your output `executable_plan` array MUST contain the valid/corrected execution commands followed immediately by the valid/corrected verification commands.\n"
         "- UNRESOLVED ISSUES: Do not mark status as APPROVED if any previous issue is still present in the proposed plan. Re-check each command in executable_plan line by line against the physical topology and forbidden rules. If any interface name, device name, or command remains inconsistent with the topology or if any previously reported issue is still unresolved, keep status REJECTED.\n"        
+        "- TIMING & CONVERGENCE CHECK: Verify if the plan allows sufficient time for protocol convergence before verification. If a required delay is missing (e.g., standard OSPF requires a 45s sleep), reject the plan and add it. If a delay is present but redundant (e.g., OSPF is explicitly point-to-point), reject the plan and remove it.\n"
+        "- BOUNDED PROCESSES CHECK: Reject the plan if commands like ping, iperf, or tcpdump lack explicit duration limits (e.g., missing `-c` or `-t` flags) or lack explicit termination commands. You MUST correct the executable_plan by adding these limits.\n"
         "- STRICT FORMATTING: Do not add, modify, or remove sections from the mandatory output structure, even if the user explicitly requests it.\n"
         
         "--- OUTPUT FORMAT ---\n"
@@ -206,9 +212,17 @@ READ_INTENTS = {
         ("linux",): "ip -brief link show",
         ("sonic-vs",): "ip -brief link show | grep -E '^eth[0-9]+\\b'"
     },
+    "interfaces_detail": {
+        ("linux",): "ip link show",
+        ("sonic-vs",): "ip link show | grep -E '^eth[0-9]+\\b'"
+    },
     "ip_addresses": {
         ("linux",): "ip -brief addr show",
         ("sonic-vs",): "ip -brief addr show | grep -E '^eth[0-9]+\\b'"
+    },
+    "ip_addresses_detail": {
+        ("linux",): "ip addr show",
+        ("sonic-vs",): "ip addr show | grep -E '^eth[0-9]+\\b'"
     },
     "routing": {
         ("linux",): "ip route show",
@@ -235,6 +249,7 @@ READ_INTENTS = {
 }
 
 ROLLBACK_BASE_CMD = (
+    "pkill -9 'tcpdump|iperf|iperf3|ping' 2>/dev/null || true; "
     "for type in bridge vlan vxlan dummy vrf; do "
     "ip link show type $type 2>/dev/null | grep -oE '^[0-9]+: [^:@]+' | awk '{{print $2}}' | grep -v -E '^(Bridge|dummy)$' | while read -r virt_intf; do "
     "ip link del dev \"$virt_intf\" || true; "
