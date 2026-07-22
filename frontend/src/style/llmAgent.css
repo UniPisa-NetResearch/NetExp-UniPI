@@ -606,7 +606,7 @@
 }
 .en-backend-message-list-element {
   font-family: monospace;
-  margin: 0;
+  margin-left: 5px;
   white-space: pre-wrap;
 }
 @media (max-width: 900px) {
