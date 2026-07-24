@@ -299,8 +299,10 @@ def validate_json_format(reply_text, agent_role):
         return False, "The output is not a valid JSON object."
     
 def get_validated_llm_reply(history, agent_role):
+    local_history = history.copy()
+
     for _ in range(JSON_RETRIES):
-        reply_text = chat_with_llm(history)
+        reply_text = chat_with_llm(local_history)
 
         is_valid, validation_result = validate_json_format(reply_text, agent_role)
         if is_valid:
@@ -309,10 +311,12 @@ def get_validated_llm_reply(history, agent_role):
 
             return True, clean_reply_text, validation_result
 
-        history.append({"role": "assistant", "content": reply_text})
-        correction_prompt = f"Your previous response failed validation: {validation_result}. Please generate a new complete response in valid JSON following the mandatory structure."
+        print(f"\n[DEBUG SERVER] Validation failed! Retrying... Reason: {validation_result}")
+
+        local_history.append({"role": "assistant", "content": reply_text})
+        correction_prompt = f"Your previous response failed validation: {validation_result}. You MUST NOT return an empty response. Please generate a new complete response in valid JSON following the mandatory structure."
         
-        history.append({"role": "user", "content": correction_prompt})
+        local_history.append({"role": "user", "content": correction_prompt})
 
     return False, None, None
     
@@ -442,6 +446,7 @@ def handle_safety_loop(history, system_msg, latest_user_msg, reservation_id, age
             "If your newly generated plan successfully fixes all the issues, is safe, matches the topology, and has NO redundant commands, "
             "you MUST now output 'status': 'APPROVED' and provide the final clean plan. "
             "If your newly generated plan still contains errors, output 'status': 'REJECTED', list the remaining issues, and fix the plan again."
+            "You MUST respond EXCLUSIVELY with a valid JSON object. Do not output empty text."
         )
 
         reasoning_steps.append({"iteration": iteration + 1, "role": "user", "content": correction_prompt})
@@ -672,7 +677,7 @@ def advance_agent():
         else:
             old_plan = "No previous plan found."
 
-        context_payload = f"Please analyze the errors below and generate a NEW corrected execution plan.\n\n<experiment_context>\n{experiment_context}\n</experiment_context>\n\n<failed_execution_plan>\n{old_plan}\n</failed_execution_plan>\n\n<execution_report>\n{execution_report}\n</execution_report>"
+        context_payload = f"Please analyze the errors below and generate a NEW corrected execution plan. You MUST respond in a valid JSON object.\n\n<experiment_context>\n{experiment_context}\n</experiment_context>\n\n<failed_execution_plan>\n{old_plan}\n</failed_execution_plan>\n\n<execution_report>\n{execution_report}\n</execution_report>"
         
     result, status_code = handle_chat_logic(username, reservation_id, chat_id, next_role, context_payload, files=None)
     

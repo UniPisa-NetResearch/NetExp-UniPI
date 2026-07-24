@@ -66,7 +66,7 @@ USER_QUOTA_BYTES =536870912
 
 # LLM parameters
 LLM_PROVIDER = "ollama"                                         # gemini
-LLM_MODEL = "glm-5.1:cloud"                                     # gemini-3.1-flash-lite
+LLM_MODEL = "qwen3.5:397b-cloud"                                # gemini-3.1-flash-lite  - glm-5.1:cloud - deepseek-v4-flash:cloud
 OPENAI_API_KEY = os.getenv("GEMINI_API_KEY")
 OPENAI_BASE_URL = "http://localhost:11434/v1"                   # https://generativelanguage.googleapis.com/v1beta/openai/
 SAFETY_ITERATIONS = 3
