@@ -1,4 +1,5 @@
 import json
+import time
 from openai import OpenAI
 from ..config import OPENAI_API_KEY, OPENAI_BASE_URL, LLM_MODEL
 
@@ -11,9 +12,15 @@ client = OpenAI(
 def chat_with_llm(messages: list) -> str:
 
     print("\n" + "="*70)
-    print(f"[DEBUG LLM] LLM CALL - PAYLOAD SENT:")
+    print(f"[DEBUG LLM] LLM CALL TO MODEL: {LLM_MODEL}")
+
+    payload_length = sum(len(str(m.get("content", ""))) for m in messages)
+    
+    print(f"[DEBUG LLM] PAYLOAD SIZE: ~{payload_length} characters")
     print(json.dumps(messages, indent=2)) 
     print("="*70 + "\n")
+
+    start_time = time.time()
 
     response = client.chat.completions.create(
         model=LLM_MODEL,
@@ -21,4 +28,9 @@ def chat_with_llm(messages: list) -> str:
         temperature=0.2,
         response_format={"type": "json_object"}
     )
+
+    elapsed_time = time.time() - start_time
+
+    print(f"\n[DEBUG LLM] --- RESPONSE RECEIVED IN {elapsed_time:.2f} SECONDS ---")
+
     return response.choices[0].message.content

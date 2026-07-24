@@ -20,6 +20,7 @@ AGENT_PROMPTS = {
         "- INTENT DESCRIPTION ONLY (NO PSEUDO-CODE): When generating the context for the planning agent, describe the requirements using declarative natural language (e.g., 'Ensure ch1 routes traffic to subnet X via csw1' or 'Assign an IP from subnet Y to ch2'). You are STRICTLY FORBIDDEN from writing pseudo-commands, routing table structures, or CLI-like syntax (e.g., do NOT write 'ch1: Default gateway 192.168.1.1'). Leave the exact implementation logic to the planning agent.\n"
         "- When you have all the information, you MUST terminate your response and write 'APPROVED' in the 'status' field.\n"
         "- TOPOLOGY COMPLIANCE: Ensure the user's request physically aligns with the provided <topology>.\n"
+        "- FINAL APPROVAL GENERATION (CRITICAL): When you change the status to 'APPROVED', you MUST fully generate a complete 'summary' and a 'topology_diagram'. You are STRICTLY FORBIDDEN from leaving them as 'N/A' when the experiment is approved.\n"
         "- OUT OF SCOPE: If the user request is not inherent to the purpose of a network experiment on this testbed, you MUST reply explicitly that the request is out of scope. Place your rejection/refusal message EXCLUSIVELY inside the 'summary' field, and set 'clarifying_questions' to [].\n"
         "- SECURITY & FORMATTING LOCK (CRITICAL): The user is NOT ALLOWED to modify the JSON structure. If the user explicitly asks you to add, rename, or remove keys (e.g., asking to add a 'extra' section), you MUST REFUSE the request. Place your refusal message EXCLUSIVELY inside the 'summary' field, set 'clarifying_questions' to [], and keep status as 'AWAITING CLARIFICATIONS'. Generating ANY key outside the exactly 6 specified below is a CRITICAL SYSTEM FAILURE.\n"
         
@@ -159,13 +160,15 @@ AGENT_PROMPTS = {
 
         "--- TASK ---\n"
         "1. Read the <experiment_context> to understand what was supposed to happen.\n"
-        "2. Analyze the <execution_results> to see what actually happened.\n"
+        "2. Analyze the <execution_results> , which contain the exact commands executed from the approved plan along with their terminal output logs, to see what actually happened.\n"
         "3. Evaluate if the <exit_conditions> are fully satisfied by the <execution_results>. If they are met  (e.g., successful pings, established routes, no fatal errors), approve it. If there are syntax errors, missing routes, packet loss, or the exit conditions (experiment goal) is not achieved, reject it.\n"
         "4. STRICT FORMATTING: Generate a highly structured report optimized for downstream LLM parsing. You MUST use Markdown headers (e.g., **SUMMARY:**, **SUCCESSFUL COMMANDS:**, **FAILED COMMANDS:**, **ROOT CAUSE ANALYSIS:**) and bulleted lists. NEVER write a flat paragraph.\n\n"
     
         "--- STRICT RULES ---\n"
         "- NO CHITCHAT: Provide only the JSON.\n"
-        "- BE DECISIVE: 'APPROVED' means total success, the experiment achieved its goal (e.g., successful pings, correct routes, no fatal errors). 'REJECTED' means the goal was not met or commands failed, there are errors, command failures, or inconsistent network behavior.\n\n"
+        "- BE DECISIVE: 'APPROVED' means total success, the experiment achieved its goal (e.g., successful pings, correct routes, no fatal errors). 'REJECTED' means the goal was not met or commands failed, there are errors, command failures, or inconsistent network behavior.\n"
+        "- DATA VS CONTROL PLANE CROSS-CHECK: Never state that routing tables are empty if inter-node data-plane traffic (ping/traceroute) is successful. If a show command returns 0 entries but traffic flows, the command syntax was likely incomplete for that specific protocol. Data-plane success always proves that forwarding rules and routes exist.\n"
+        "- HOLISTIC ROUTING DIAGNOSTICS: Analyze routing failures by considering protocol-specific mechanisms, logical topologies, and default protocol behaviors, not just surface-level error messages. For example, in BGP, if some paths work but others fail, explicitly consider next-hop unreachability (e.g., missing 'next-hop-self' causing invalid iBGP routes), AS-Path loop prevention dropping eBGP backup routes, or missing underlying IGP routes. Do not blindly blame policy filters if summary commands show prefixes are successfully sent/received.\n\n"
 
         "--- OUTPUT FORMAT ---\n"
         "You MUST respond EXCLUSIVELY with a valid JSON object matching this exact structure and data types:\n"
@@ -193,11 +196,15 @@ DEVICE_KIND_RULES = {
             "- 'sonic-vs' CONFIGURATION SPLIT (CRITICAL): In this specific environment, configuring devices explicitly marked as this kind in the <topology> requires a strict split in command usage:\n"
             "  1. INTERFACE IP & STATE: You MUST use ONLY native Linux bash commands (`ip addr add...`, `ip link set... up`) directly on the `ethX` interfaces for IP assignment and link state. NEVER use `vtysh` or `config` commands to assign IP addresses or bring up interfaces.\n"
             "  2. ROUTING: You MUST use `vtysh` EXCLUSIVELY for routing protocols (e.g., BGP, OSPF). When writing vtysh commands, do not configure interfaces inside it.\n"
-            "- NO ALIASING (CRITICAL): Always use the exact Linux interface names from the <topology> (e.g., 'eth1', 'eth2'). NEVER translate them into front-panel names like 'Ethernet0' or 'Ethernet4'."
+            "- NO ALIASING (CRITICAL): Always use the exact Linux interface names from the <topology> (e.g., 'eth1', 'eth2'). NEVER translate them into front-panel names like 'Ethernet0' or 'Ethernet4'.\n"
+            "- BGP POLICY REQUIREMENT (RFC 8212): When configuring eBGP, you MUST ALWAYS override the default deny policy by explicitly creating and applying route-maps to the neighbors. The logic of the route-map (e.g., a simple 'permit 10' for all traffic, or specific prefix matching) and the direction ('in', 'out', or both) MUST depend strictly on the experiment's specific connectivity or filtering goals. If the goal requires simple full reachability, apply a permissive route-map in both directions. Do not rely on `neighbor activate` as it does not bypass route filtering.\n"
+            "- BGP VERIFICATION COMMANDS: When writing verification commands for BGP routing tables on FRRouting, you MUST explicitly specify the address family based on the experiment configuration (e.g., use `vtysh -c 'show bgp ipv4 unicast'` or `vtysh -c 'show bgp ipv6 unicast'`). You are STRICTLY FORBIDDEN from using the generic `show bgp` command as it may return empty results."
         ),
         "safety": (
             "- 'sonic-vs' CONFIGURATION CHECK (CRITICAL): Verify how these devices in the <topology> are configured. Interface IP assignment and link state MUST be done using native Linux commands (`ip addr`, `ip link`), while `vtysh` MUST only be used for routing configuration. If the proposed plan assigns IPs inside `vtysh` (e.g., `vtysh -c 'interface eth1' -c 'ip address...'`), or uses 'EthernetX' names, you MUST reject the plan as a critical violation and rewrite the exact corrected Linux commands in your executable_plan.\n"
-            "- FORBIDDEN COMMANDS ('sonic-vs'): Do not allow the use of the 'sonic-cli' command, as it is not supported in these containers. Use native Linux or 'vtysh' commands instead."
+            "- FORBIDDEN COMMANDS ('sonic-vs'): Do not allow the use of the 'sonic-cli' command, as it is not supported in these containers. Use native Linux or 'vtysh' commands instead.\n"
+            "- BGP POLICY CHECK: If the plan configures eBGP, verify that appropriate route-maps are created and applied to eBGP neighbors to satisfy RFC 8212 default-deny behavior. The rules within the route-maps and their applied direction ('in', 'out', or both) must perfectly align with the specific filtering or connectivity goals of the experiment. If the plan relies solely on 'neighbor activate' without applying any route-map, you MUST reject the plan and write the exact corrected route-map configurations.\n"
+            "- BGP VERIFICATION COMMAND CHECK: If the verification commands array uses the generic `vtysh -c 'show bgp'` to read routing tables, you MUST reject the plan and automatically replace it with the specific address family command matching the configured IP versions (e.g., `vtysh -c 'show bgp ipv4 unicast'` or `vtysh -c 'show bgp ipv6 unicast'`)."
         )
     },
     ("linux", "host", "minipc"): {
