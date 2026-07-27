@@ -8,6 +8,7 @@ const navItems = [
     { name: 'Reservation', path: '/reservation' },
     { name: 'Configuration', path: '/configuration' },
     { name: 'LLM Agent', path: '/llmAgent' },
+    { name: 'Troubleshooter', path: '/troubleshooter' },
     { name: 'Experiment', path: '/experiment' },
     { name: 'Evaluation', path: '/evaluation' },
 ];
@@ -24,14 +25,6 @@ const NavbarLayout = ({ children, onLogout, showLogoutButton = true, isReservati
     const location = useLocation();
     const navigate = useNavigate();
     const [isAgentMenuOpen, setIsAgentMenuOpen] = useState(false);
-
-    // dynamic text of agent menu based on the pae of user
-    let agentMenuLabel = "LLM Agent";
-    if (location.pathname === "/negotiation") {
-        agentMenuLabel = "Negotiation";
-    } else if (location.pathname === "/safetyCheck") {
-        agentMenuLabel = "Safety Check";
-    }
 
     const handleLogout = () => {
         onLogout();
@@ -85,14 +78,14 @@ const NavbarLayout = ({ children, onLogout, showLogoutButton = true, isReservati
 
     const handleNavClick = async (e, item) => {
         // block navigation to configuration if there is no active reservation/token
-        if ((item.path === '/configuration' || item.path=== '/llmAgent' || item.path === '/experiment' || item.path === '/evaluation') && !isReservationActive) {
+        if ((item.path === '/configuration' || item.path=== '/llmAgent' || item.path === '/troubleshooter' || item.path === '/experiment' || item.path === '/evaluation') && !isReservationActive) {
             e.preventDefault();
             // give feedback and remain on current page
             alert('⚠️ Access denied: you do not have an active reservation.');
             return;
         }
 
-        if ((item.path === '/configuration' || item.path=== '/llmAgent' || item.path === '/experiment') && !isAccessGranted) {
+        if ((item.path === '/configuration' || item.path=== '/llmAgent' || item.path === '/troubleshooter' || item.path === '/experiment') && !isAccessGranted) {
             e.preventDefault();
             // give feedback and remain on current page
             alert('⏳ Account creation in progress on devices. Please wait before accessing this page.');
