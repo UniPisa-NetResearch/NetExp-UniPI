@@ -14,7 +14,7 @@ from ..app import app
 from .llm_client import chat_with_llm
 from ..utils import get_is_virtual_from_db
 from ..config import REDIS_HOST, REDIS_PORT, REDIS_DB, SAFETY_ITERATIONS, PHASES_ORDER, JSON_RETRIES, LOCAL_TEST, CONTAINERLAB_HOST, CONTAINERLAB_HOST_USER
-from .agents_util.prompts import AGENT_PROMPTS, DEVICE_KIND_RULES, FORBIDDEN_RULES, READ_INTENTS, ROLLBACK_BASE_CMD
+from .agents_util.prompts import AGENT_PROMPTS, DEVICE_KIND_RULES, FORBIDDEN_RULES, READ_INTENTS, ROLLBACK_BASE_CMD, TROUBLESHOOTER_PROMPTS, ALLOWED_DIAGNOSTIC_COMMANDS
 
 # redis store for conversation history, keyed by username and reservation_id
 redis_client = redis.Redis(
@@ -31,6 +31,13 @@ try:
 except FileNotFoundError:
     testbed_topology = "# Topology file not found"
     print(f"Warning: Could not find {topology_file_path}")
+
+# check if generated commands on 
+def is_command_whitelisted(command: str) -> bool:
+    for pattern in ALLOWED_DIAGNOSTIC_COMMANDS:
+        if re.match(pattern, command.strip()):
+            return True
+    return False
 
 def get_dynamic_device_rules(agent_role: str) -> str:
     # extracts device kinds from the topology and retrieve rules for the current agent
@@ -189,7 +196,10 @@ def get_device_command(intent: str, device_kind: str) -> str:
             return command
     return None
 
-def run_device_commands(inventory_path: str, read_ops: list, reservation_id: str):
+def run_parallel_commands(inventory_path: str, ops_list: list, reservation_id: str, is_intent=False):
+
+    if not ops_list:
+        return "No commands to run"
     
     base_cmd, extra_vars = setup_ansible_env(reservation_id)
 
@@ -198,7 +208,7 @@ def run_device_commands(inventory_path: str, read_ops: list, reservation_id: str
 
     # group commands per device to serialize
     tasks_by_device = {}
-    for op in read_ops:
+    for op in ops_list:
         if ":" not in op:
             continue
         
@@ -213,16 +223,17 @@ def run_device_commands(inventory_path: str, read_ops: list, reservation_id: str
     # function run by every thread
     def execute_for_device(device, intents):
         # get device kind from topology
-        node_info = nodes.get(device, {})
-        kind = node_info.get("kind", "")
+        kind = nodes.get(device, {}).get("kind", "") if is_intent else None
         
         dev_report = []
         for intent in intents:
-            # get command to run for every device kind and intent
-            cmd_str = get_device_command(intent, kind)
-            if not cmd_str:
-                dev_report.append(f"{device} [{intent}]: [ERROR] Intent '{intent}' not mapped for kind '{kind}'")
-                continue
+            cmd_str = intent
+            # get command to run for every device kind and intent, in safety execution
+            if is_intent:
+                cmd_str = get_device_command(intent, kind)
+                if not cmd_str:
+                    dev_report.append(f"{device} [{intent}]: [ERROR] Intent '{intent}' not mapped for kind '{kind}'")
+                    continue
 
             report = execute_single_ansible_command(device=device, command=cmd_str, inventory_path=inventory_path, base_cmd=base_cmd, extra_vars=extra_vars, timeout=30)
             dev_report.append(report)
@@ -241,13 +252,26 @@ def run_device_commands(inventory_path: str, read_ops: list, reservation_id: str
 
 def validate_json_format(reply_text, agent_role):
     # remove characters added by some models
+    if reply_text is None:
+        return False, "LLM reply is None before JSON parsing."
+
+    if not isinstance(reply_text, str):
+        return False, f"LLM reply is not a string before JSON parsing. Type={type(reply_text).__name__}"
+
+    if not reply_text.strip():
+        return False, "LLM reply is an empty or blank string before JSON parsing."
+    
     reply_text = reply_text.strip()
+
     if reply_text.startswith("```json"):
         reply_text = reply_text[7:]
+
     elif reply_text.startswith("```"):
         reply_text = reply_text[3:]
+
     if reply_text.endswith("```"):
         reply_text = reply_text[:-3]
+
     reply_text = reply_text.strip()
 
     # verify the agent's output is a valid json
@@ -292,33 +316,79 @@ def validate_json_format(reply_text, agent_role):
         if agent_role == "execution":
             if not all(k in data for k in ["status", "report"]):
                 return False, "Missing keys. Required: status, report"
+
+        # troubleshooter validator
+        if agent_role == "diagnostic_intent":
+            if not all(k in data for k in ["status", "response", "context"]):
+                return False, "Missing keys. Required: status, response, context"
+                
+        if agent_role == "diagnostic_planner":
+            if not all(k in data for k in ["diagnostic_commands", "commands_to_approve"]):
+                return False, "Missing keys. Required: diagnostic_commands, commands_to_approve"
+            if not isinstance(data.get("diagnostic_commands"), list) or not isinstance(data.get("commands_to_approve"), list):
+                return False, "diagnostic_commands and commands_to_approve must be a JSON array"
+                
+        if agent_role == "diagnostic_reporter":
+            if not all(k in data for k in ["response"]):
+                return False, "Missing keys. Required: response"
             
         return True, data
     
-    except json.JSONDecodeError:
-        return False, "The output is not a valid JSON object."
+    except json.JSONDecodeError as e:
+        return False, f"The output is not a valid JSON object. JSONDecodeError: {str(e)}"
     
 def get_validated_llm_reply(history, agent_role):
     local_history = history.copy()
+    last_failure_reason = None
 
-    for _ in range(JSON_RETRIES):
-        reply_text = chat_with_llm(local_history)
+    for attempt in range(1, JSON_RETRIES + 1):
+
+        payload_length = sum(len(str(m.get("content", ""))) for m in local_history)
+        print(f"\n[DEBUG SERVER] get_validated_llm_reply | agent={agent_role} | attempt={attempt}/{JSON_RETRIES}")
+        print(f"[DEBUG SERVER] history_messages={len(local_history)} | payload_chars~={payload_length}")
+
+        try:
+
+            reply_text = chat_with_llm(local_history)
+
+        except Exception as e:
+            last_failure_reason = f"LLM call exception: {str(e)}"
+            print(f"[DEBUG SERVER] LLM CALL FAILED | attempt={attempt} | reason={last_failure_reason}")
+
+            correction_prompt = (
+                f"Your previous response failed because of a system/runtime issue: {last_failure_reason}. "
+                f"You MUST NOT return an empty response. "
+                f"Please generate a new complete response in valid JSON following the mandatory structure."
+            )
+
+            local_history.append({"role": "assistant", "content": f"[SYSTEM DIAGNOSTIC] {last_failure_reason}"})
+            local_history.append({"role": "user", "content": correction_prompt})
+            continue
+
+        print(f"[DEBUG SERVER] RAW REPLY TYPE: {type(reply_text).__name__}")
+        print(f"[DEBUG SERVER] RAW REPLY LENGTH: {len(reply_text) if isinstance(reply_text, str) else 'N/A'}")
 
         is_valid, validation_result = validate_json_format(reply_text, agent_role)
         if is_valid:
             # validation_result is the cleaned python dictionary, we cnvert into a JSON string without `` characters
             clean_reply_text = json.dumps(validation_result)
+            print(f"[DEBUG SERVER] VALID JSON RECEIVED | attempt={attempt}")
 
             return True, clean_reply_text, validation_result
 
-        print(f"\n[DEBUG SERVER] Validation failed! Retrying... Reason: {validation_result}")
+        last_failure_reason = validation_result
 
-        local_history.append({"role": "assistant", "content": reply_text})
-        correction_prompt = f"Your previous response failed validation: {validation_result}. You MUST NOT return an empty response. Please generate a new complete response in valid JSON following the mandatory structure."
+        print(f"\n[DEBUG SERVER] VALIDATION FAILED | attempt={attempt} | reason={validation_result}")
+
+        local_history.append({"role": "assistant", "content": reply_text if isinstance(reply_text, str) else str(reply_text)})
+        
+        correction_prompt = f"Your previous response failed validation: {validation_result}. Return ONLY one valid JSON object. Do not include markdown fences. Do not include explanations before or after the JSON. You MUST NOT return an empty response. Please generate a new complete response in valid JSON following the mandatory structure."
         
         local_history.append({"role": "user", "content": correction_prompt})
 
-    return False, None, None
+    print(f"[DEBUG SERVER] ALL RETRIES EXHAUSTED | last_failure_reason={last_failure_reason}")
+
+    return False, None, {"error_type": "llm_validation_failure", "reason": last_failure_reason}
     
 def handle_safety_loop(history, system_msg, latest_user_msg, reservation_id, agent_role, is_manual_chat=False):
     reasoning_steps = []
@@ -379,6 +449,9 @@ def handle_safety_loop(history, system_msg, latest_user_msg, reservation_id, age
             current_turn_safety_history.append(latest_user_msg)
         
     if not is_manual_chat and latest_user_msg and "<device_report>\nnull\n</device_report>" in latest_user_msg["content"]:
+        payload_length = sum(len(str(m.get("content", ""))) for m in current_turn_safety_history)
+        print(f"[DEBUG SAFETY] messages={len(current_turn_safety_history)} | payload_chars~={payload_length}")
+
         is_valid, reply_text, reply = get_validated_llm_reply(current_turn_safety_history, agent_role)
 
         status = str(reply.get("status", "")).strip().upper() if is_valid and reply else ""
@@ -393,7 +466,10 @@ def handle_safety_loop(history, system_msg, latest_user_msg, reservation_id, age
             base_dir = os.path.dirname(os.path.abspath(__file__))
             inventory_path = os.path.abspath(os.path.join(base_dir, "..", "controller", "inventories", f"res-{reservation_id}-inventory.ini"))
                 
-            device_report = run_device_commands(inventory_path, read_ops, reservation_id)
+            device_report = run_parallel_commands(inventory_path, read_ops, reservation_id, is_intent=True)
+
+            print(f"[DEBUG SAFETY] read_operations_count={len(read_ops)}")
+            print(f"[DEBUG SAFETY] device_report_chars={len(device_report)}")
 
             # create new user message with read real data, replace null with real data
             new_content = latest_user_msg["content"].replace("<device_report>\nnull\n</device_report>", f"<device_report>\n{device_report}\n</device_report>")
@@ -418,7 +494,8 @@ def handle_safety_loop(history, system_msg, latest_user_msg, reservation_id, age
             history.append(msg)
 
         if not valid_output:
-            return {"error": "LLM failed to produce valid JSON after retries"}, 500
+            print(f"[DEBUG SERVER] FINAL FAILURE DETAILS (safety): {reply}")
+            return {"error": "LLM failed to produce valid JSON after retries", "details": reply}, 500
 
         reasoning_steps.append({"iteration": iteration + 1, "role": "assistant", "content": reply_text})
         history.append({"role": "assistant", "content": reply_text})
@@ -477,7 +554,7 @@ def handle_chat_logic(username, reservation_id, chat_id, agent_role, message, fi
         if dynamic_rules:
             system_prompt += f"\n<device_specific_rules>\n{dynamic_rules}\n</device_specific_rules>\n"
 
-        system_prompt += f"\n\n<topology>\n```yaml\n{testbed_topology}\n```</topology>\n"
+        system_prompt += f"\n\n<topology>\n```yaml\n{testbed_topology}\n```\n</topology>\n"
 
         if agent_role == "safety":
             rules_formatted = "\n".join([f"- {rule}" for rule in FORBIDDEN_RULES])
@@ -542,7 +619,8 @@ def handle_chat_logic(username, reservation_id, chat_id, agent_role, message, fi
                     history.append(msg)
             
             if not valid_output:
-                return {"error": "LLM failed to produce valid JSON after retries"}, 500
+                print(f"[DEBUG SERVER] FINAL FAILURE DETAILS (safety): {reply}")
+                return {"error": "LLM failed to produce valid JSON after retries", "details": reply}, 500
            
             # add response to history and save it back to Redis
             history.append({"role": "assistant", "content": reply})    
@@ -755,6 +833,7 @@ def download_chat():
     username = request.args.get("username", "")
     reservation_id = request.args.get("reservation_id", "")
     chat_id = request.args.get("chat_id", "")
+    agent_role = request.args.get("agent_role", "")
 
     if not username or not reservation_id:
         return jsonify({"error": "Missing parameters"}), 400
@@ -774,7 +853,10 @@ def download_chat():
             chat_ids = sorted(set(key.split(":")[-1] for key in keys), reverse=True)
 
         for cid in chat_ids:
-            for role in PHASES_ORDER:
+
+            roles_to_download = [agent_role] if agent_role else PHASES_ORDER
+
+            for role in roles_to_download:
                 session_key = f"agent_history:{role}:{username}:{reservation_id}:{cid}"
                 history_str = redis_client.get(session_key)
                 
@@ -797,8 +879,14 @@ def download_chat():
 
     # pointer to the file start
     memory_file.seek(0)
-    download_name = f"chat_{chat_id}.zip" if chat_id else f"all_chats_{reservation_id}.zip"
 
+    if chat_id:
+        download_name = f"chat_{chat_id}.zip"  
+    elif agent_role:
+        download_name = f"all_troubleshooter_chats_{reservation_id}.zip" 
+    else:
+        download_name = f"all_chats_{reservation_id}.zip"
+    
     return send_file(memory_file, mimetype="application/zip", as_attachment=True, download_name=download_name)
 
 @app.route("/api/agent_server/experimentRollback", methods=["POST"])
@@ -869,6 +957,176 @@ def rollback_experiment():
             report_lines.append(future.result())
 
     return jsonify({"status": "SUCCESS", "report": "\n".join(report_lines)}), 200
+
+@app.route("/api/agent_server/troubleshooter/chat", methods=["POST"])
+def troubleshooter_chat():
+    username = request.form.get("username", "")
+    reservation_id = request.form.get("reservation_id", "")
+    chat_id = request.form.get("chat_id", "")
+    message = request.form.get("message", "")
+    
+    if not chat_id:
+        chat_id = f"{int(time.time())}_{uuid.uuid4().hex[:8]}"
+
+    session_key = f"agent_history:troubleshooter_chat:{username}:{reservation_id}:{chat_id}"
+    history_str = redis_client.get(session_key)
+    
+    if history_str:
+        history = json.loads(history_str)
+    else:
+        system_prompt = TROUBLESHOOTER_PROMPTS["diagnostic_intent"]
+        system_prompt += f"\n\n<topology>\n```yaml\n{testbed_topology}\n```\n</topology>\n"
+        history = [{"role": "system", "content": system_prompt}]
+
+
+    history.append({"role": "user", "content": message})
+    
+    # Intent agent
+    is_valid, _, intent_json = get_validated_llm_reply(history, "diagnostic_intent")
+    if not is_valid:
+        return jsonify({"error": "Failed intent evaluation"}), 500
+
+    print("\n" + "="*50)
+    print(f"[TROUBLESHOOTER - INTENT AGENT] Result:")
+    print(json.dumps(intent_json, indent=2))
+    print("="*50 + "\n")
+
+    status = intent_json.get("status", "").upper()
+    response_msg = intent_json.get("response", "")
+    context = intent_json.get("context", "")
+
+    if status == "REJECTED":
+        # if questions, save the chat and reply to user
+        history.append({"role": "assistant", "content": response_msg})
+        redis_client.set(session_key, json.dumps(history), ex=432000)
+        return jsonify({"reply": response_msg, "chat_id": chat_id, "requires_approval": False}), 200
+
+    # if status approved, save only user message, do not save intent agent response
+    redis_client.set(session_key, json.dumps(history), ex=432000)
+
+    planner_sys_prompt = TROUBLESHOOTER_PROMPTS["diagnostic_planner"]
+
+    dynamic_rules = get_dynamic_device_rules("diagnostic_planner")
+
+    if dynamic_rules:
+        planner_sys_prompt += f"\n<device_specific_rules>\n{dynamic_rules}\n</device_specific_rules>\n"
+
+    planner_sys_prompt += f"\n\n<topology>\n```yaml\n{testbed_topology}\n```\n</topology>\n"
+
+    # Planner agent
+    planner_history = [
+        {"role": "system", "content": planner_sys_prompt},
+        {"role": "user", "content": f"<context>\n{context}\n</context>"}
+    ]
+    is_valid, _, planner_json = get_validated_llm_reply(planner_history, "diagnostic_planner")
+    if not is_valid:
+        return jsonify({"error": "Failed planner evaluation"}), 500
+
+    print("\n" + "="*50)
+    print(f"[TROUBLESHOOTER - PLANNER AGENT] Result:")
+    print(json.dumps(planner_json, indent=2))
+    print("="*50 + "\n")
+
+    diag_cmds = planner_json.get("diagnostic_commands", [])
+    approve_cmds = planner_json.get("commands_to_approve", [])
+
+    # check whitelist
+    safe_cmds = []
+    pending_cmds = approve_cmds.copy()
+
+    for cmd_str in diag_cmds:
+        if ":" in cmd_str:
+            dev, cmd = cmd_str.split(":", 1)
+            if is_command_whitelisted(cmd):
+                safe_cmds.append(cmd_str)
+            else:
+                pending_cmds.append(cmd_str)
+
+    if pending_cmds:
+        # ask approval to the frontend
+        # return context and chat_id so that the fontend resend this data
+        return jsonify({"chat_id": chat_id, "requires_approval": True, "commands": pending_cmds, "safe_commands": safe_cmds, "context": context }), 200
+
+    # if nothing to approve, execute
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    inventory_path = os.path.abspath(os.path.join(base_dir, "..", "controller", "inventories", f"res-{reservation_id}-inventory.ini"))
+    
+    execution_report = run_parallel_commands(inventory_path, safe_cmds, reservation_id, is_intent=False)
+
+    reporter_sys_prompt = TROUBLESHOOTER_PROMPTS["diagnostic_reporter"]
+    reporter_sys_prompt += f"\n\n<topology>\n```yaml\n{testbed_topology}\n```\n</topology>\n"
+    
+    # Reporter agent
+    reporter_history = [
+        {"role": "system", "content": reporter_sys_prompt},
+        {"role": "user", "content": f"<context>\n{context}\n</context>\n<execution_report>\n{execution_report}\n</execution_report>"}
+    ]
+    
+    is_valid, _, reporter_json = get_validated_llm_reply(reporter_history, "diagnostic_reporter")
+    if not is_valid:
+            return jsonify({"error": "Failed reporter evaluation"}), 500
+
+    print("\n" + "="*50)
+    print(f"[TROUBLESHOOTER - REPORTER AGENT] Result:")
+    print(json.dumps(reporter_json, indent=2))
+    print("="*50 + "\n")
+
+    final_response = reporter_json.get("response", "Error during report generation")
+
+    # save only final message in the chat visible by user
+    history.append({"role": "assistant", "content": final_response})
+    redis_client.set(session_key, json.dumps(history), ex=432000)
+
+    return jsonify({"reply": final_response, "chat_id": chat_id, "requires_approval": False}), 200
+
+
+@app.route("/api/agent_server/troubleshooter/execute_approved", methods=["POST"])
+def execute_approved_troubleshooter():
+    data = request.get_json()
+    approved_commands = data.get("approved_commands", [])
+    context = data.get("context", "")
+    username = data.get("username", "")
+    reservation_id = data.get("reservation_id", "")
+    chat_id = data.get("chat_id", "")
+
+    if not approved_commands:
+        execution_report = "[SYSTEM LOG]: The user rejected all proposed commands, and there were no whitelisted commands available. No read operations were performed on the devices. Inform the user that you cannot complete the analysis without executing the commands, and ask them to try again or rephrase their request."
+    else:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        inventory_path = os.path.abspath(os.path.join(base_dir, "..", "controller", "inventories", f"res-{reservation_id}-inventory.ini"))
+        
+        # run commands (whitelist + approval)
+        execution_report = run_parallel_commands(inventory_path, approved_commands, reservation_id, is_intent=False)
+
+    reporter_sys_prompt = TROUBLESHOOTER_PROMPTS["diagnostic_reporter"]
+    reporter_sys_prompt += f"\n\n<topology>\n```yaml\n{testbed_topology}\n```\n</topology>\n"
+
+    # Reporter agent
+    reporter_history = [
+        {"role": "system", "content": reporter_sys_prompt},
+        {"role": "user", "content": f"<context>\n{context}\n</context>\n<execution_report>\n{execution_report}\n</execution_report>"}
+    ]
+
+    is_valid, _, reporter_json = get_validated_llm_reply(reporter_history, "diagnostic_reporter")
+    if not is_valid:
+                return jsonify({"error": "Failed reporter evaluation"}), 500
+
+    print("\n" + "="*50)
+    print(f"[TROUBLESHOOTER - REPORTER AGENT] Result:")
+    print(json.dumps(reporter_json, indent=2))
+    print("="*50 + "\n")
+
+    final_response = reporter_json.get("response", "Error during report generation")
+
+    # update history
+    session_key = f"agent_history:troubleshooter_chat:{username}:{reservation_id}:{chat_id}"
+    history_str = redis_client.get(session_key)
+    history = json.loads(history_str) if history_str else []
+    
+    history.append({"role": "assistant", "content": final_response})
+    redis_client.set(session_key, json.dumps(history), ex=432000)
+
+    return jsonify({"reply": final_response}), 200
 
 if __name__ == "__main__":
     app.run(debug=True, host='0.0.0.0', port=5006, use_reloader=False)

@@ -609,6 +609,117 @@
   margin-left: 5px;
   white-space: pre-wrap;
 }
+.en-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(11, 46, 107, 0.6);
+  z-index: 9999;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+.en-modal-content {
+  background-color: #ffffff;
+  padding: 24px;
+  border-radius: 8px;
+  max-width: 600px;
+  width: 90%;
+  border: 1px solid #d4e1ff;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+.en-modal-header h3 {
+  margin-top: 0;
+  color: #0b2e6b;
+}
+.en-modal-header p {
+  color: #32508a;
+  font-size: 14px;
+}
+.en-command-approval-list {
+  list-style: none;
+  padding: 0;
+  margin: 20px 0;
+  max-height: 300px;
+  overflow-y: auto;
+}
+.en-command-approval-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+  padding: 12px;
+  background-color: #f6f8fc;
+  border: 1px solid #d4e1ff;
+  border-radius: 6px;
+}
+.en-command-text {
+  font-family: monospace;
+  color: #0b2e6b;
+  font-size: 14px;
+  word-break: break-all;
+  margin-right: 15px;
+}
+.en-command-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+/* Modal Buttons */
+.en-btn-accept, .en-btn-reject, .en-btn-cancel, .en-btn-confirm {
+  border: none;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: all 0.2s;
+  font-size: 13px;
+}
+/* Default state */
+.en-btn-accept, .en-btn-reject {
+  background-color: #e4edff;
+  color: #0b2e6b;
+  border: 1px solid #d4e1ff;
+}
+/* Active states */
+.en-btn-accept.active {
+  background-color: #27ae60;
+  color: #ffffff;
+  border-color: #27ae60;
+}
+.en-btn-reject.active {
+  background-color: #ed2929;
+  color: #ffffff;
+  border-color: #ed2929;
+}
+.en-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 20px;
+}
+.en-btn-cancel {
+  background-color: transparent;
+  color: #32508a;
+  border: 1px solid #d4e1ff;
+}
+.en-btn-cancel:hover {
+  background-color: #f6f8fc;
+}
+.en-btn-confirm {
+  background-color: #0b6efb;
+  color: #ffffff;
+}
+.en-btn-confirm:hover {
+  background-color: #084dc2;
+}
+.en-modal-all-button{
+  display: flex;
+   gap: 10px; 
+   margin-top: 10px;
+}
 @media (max-width: 900px) {
   .experiment-negotiation-main {
     flex-direction: column;
