@@ -2,7 +2,7 @@ import json
 import time
 import traceback
 from openai import OpenAI, APITimeoutError, APIConnectionError, APIStatusError
-from ..config import OPENAI_API_KEY, OPENAI_BASE_URL, LLM_MODEL, LLM_TIMEOUT_SECONDS
+from ..config import OPENAI_API_KEY, OPENAI_BASE_URL, LLM_MODEL, LLM_TIMEOUT_SECONDS, LLM_MAX_OUTPUT_TOKENS
 
 client = OpenAI(
     api_key=OPENAI_API_KEY,
@@ -31,7 +31,8 @@ def chat_with_llm(messages: list) -> str:
             messages=messages,
             temperature=0.2,
             response_format={"type": "json_object"},
-            timeout=LLM_TIMEOUT_SECONDS
+            timeout=LLM_TIMEOUT_SECONDS,
+            max_tokens=LLM_MAX_OUTPUT_TOKENS
         )
 
         elapsed_time = time.time() - start_time

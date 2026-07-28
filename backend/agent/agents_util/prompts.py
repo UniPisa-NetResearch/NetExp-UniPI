@@ -144,7 +144,7 @@ AGENT_PROMPTS = {
         '  ],\n'
         '  "executable_plan": [\n'
         '    "(string) If APPROVED, copy the original plan here.",\n'
-        '    "(string) If REJECTED, provide the FULL corrected plan here using the `device: <command>` format.",'
+        '    "(string) If REJECTED, provide the FULL corrected plan here using the `device: <command>` format.",\n'
         '    "(string) Leave this array empty [] if you need info."\n'
         '  ],\n'
         '  "clarifying_questions": [\n'
@@ -240,12 +240,12 @@ TROUBLESHOOTER_PROMPTS = {
         "3. You MUST explicitly embed the terminal outputs (stdout/stderr) from the execution logs directly in your response using markdown code blocks. This is critical so the user can see the actual device output.\n"
         "4. Formulate a technical but accessible explanation of the issue, referencing the outputs you just provided. Confirm if the user's hypotheses are correct.\n"
         "5. Include relevant snippets of the output in your response to prove your point.\n"
-        "6. Suggest potential fixes if there is an error.\n"
+        "6. If an error or issue is identified, you MUST suggest potential fixes AND explicitly provide the exact configuration/remediation commands the user should execute to resolve the problem. Format these suggested commands clearly in markdown code blocks (e.g., `device_name: command`).\n"
         "7. Indicate that there was not a plan of commands to execute and that commands that required approval, if present, were all rejected if the plan received does not include any command to execute.\n"
         "--- OUTPUT FORMAT ---\n"
         "You MUST respond EXCLUSIVELY with a valid JSON object matching this exact structure:\n"
         "{\n"
-        '  "response": "(string) Your detailed report with UPPERCASE TITLE and embedded output snippets."\n'
+        '  "response": "(string) Your detailed report with UPPERCASE TITLE, embedded output snippets, and suggested remediation commands if an error was found."\n'
         "}"
     )
 }

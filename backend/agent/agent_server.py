@@ -293,7 +293,7 @@ def validate_json_format(reply_text, agent_role):
             
             if not isinstance(data.get("verification"), list):
                 return False, "verification must be a JSON array"
-              
+                 
         if agent_role == "safety":
             if not all(k in data for k in ["status", "issues", "topology_mapping_check", "executable_plan", "clarifying_questions", "read_operations"]):
                 return False, "Missing keys. Required: status, issues, topology_mapping_check, executable_plan, clarifying_questions, read_operations"
@@ -389,7 +389,8 @@ def get_validated_llm_reply(history, agent_role):
     print(f"[DEBUG SERVER] ALL RETRIES EXHAUSTED | last_failure_reason={last_failure_reason}")
 
     return False, None, {"error_type": "llm_validation_failure", "reason": last_failure_reason}
-    
+
+
 def handle_safety_loop(history, system_msg, latest_user_msg, reservation_id, agent_role, is_manual_chat=False):
     reasoning_steps = []
     reply = {}
@@ -407,7 +408,7 @@ def handle_safety_loop(history, system_msg, latest_user_msg, reservation_id, age
         if real_context:
             real_context = re.sub(r'<execution_plan>.*?</execution_plan>', '', real_context, flags=re.DOTALL)
             real_context = re.sub(r'<verification_commands>.*?</verification_commands>', '', real_context, flags=re.DOTALL)
-            # remove double spaces that remians after removal
+            # remove double spaces that remains after removal
             real_context = re.sub(r'\n{3,}', '\n\n', real_context).strip()
         
         # extract the last failed plan proposed by the agent
@@ -547,7 +548,8 @@ def handle_chat_logic(username, reservation_id, chat_id, agent_role, message, fi
     if history_str:
         history = json.loads(history_str)
     else:
-
+        #prompt_key = "safety_compliance" if agent_role == "safety" else agent_role
+        #system_prompt = AGENT_PROMPTS.get(prompt_key)
         system_prompt = AGENT_PROMPTS.get(agent_role)
 
         dynamic_rules = get_dynamic_device_rules(agent_role)
