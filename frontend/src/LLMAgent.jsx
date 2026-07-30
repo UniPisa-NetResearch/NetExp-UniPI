@@ -1,15 +1,10 @@
 import React, { useState, useEffect } from "react";
 import "./style/llmAgent.css";
+import { ChatSidebar, FileUploader, ChatHeader } from "./LLMAgents/SharedChatComponents";
+import { useAgentChat, sendChatRequest } from "./LLMAgents/useAgentChat";
 
 const LLMAgent = ({ username, reservation_id}) => {
-  const [messages, setMessages] = useState([]);
-  const [inputValue, setInputValue] = useState("");
-  const [selectedFiles, setSelectedFiles] = useState([]);
-  const [isSending, setIsSending] = useState(false);
-  const [error, setError] = useState(null);
-  // State to hold saved chat sessions
-  const [savedChats, setSavedChats] = useState([]);
-  const [activeChatId, setActiveChatId] = useState(null);
+  const chat = useAgentChat(username, reservation_id, "negotiation");
 
   const [currentPhase, setCurrentPhase] = useState('negotiation');
   // current phase during an active experiment
@@ -30,15 +25,15 @@ const LLMAgent = ({ username, reservation_id}) => {
   const isViewingPastPhase = !isReadOnly && currentPhase !== activePipelinePhase;
 
   // input enabled only for negotiation phase and safety phase in case of clarification is needed
-  const isInputDisabled = isSending || isReadOnly || isViewingPastPhase || canAdvance || currentPhase === 'planning' || currentPhase === 'execution' || (currentPhase === 'safety' && !needsClarification);
+  const isInputDisabled = chat.isSending || isReadOnly || isViewingPastPhase || canAdvance || currentPhase === 'planning' || currentPhase === 'execution' || (currentPhase === 'safety' && !needsClarification);
   
   // determine if the user input is empty (no text and no files)
-  const isInputEmpty = inputValue.trim() === "" && selectedFiles.length === 0;
+  const isInputEmpty = chat.inputValue.trim() === "" && chat.selectedFiles.length === 0;
 
   // check if there are questions and if the user has written every answer
   const hasUnansweredQuestions = negotiationQuestions.length > 0 && !negotiationQuestions.every((_, i) => (negotiationAnswers[i] || "").trim() !== "");
 
-  const isButtonDisabled = isSending ||  isInputDisabled || (negotiationQuestions.length > 0 ? hasUnansweredQuestions : isInputEmpty);
+  const isButtonDisabled = chat.isSending ||  isInputDisabled || (negotiationQuestions.length > 0 ? hasUnansweredQuestions : isInputEmpty);
 
   // phases states to use navigation buttons
   const currentPhaseIndex = phases.indexOf(currentPhase);
@@ -51,23 +46,26 @@ const LLMAgent = ({ username, reservation_id}) => {
   const activePhaseIndex = phases.indexOf(activePipelinePhase);
   const hasNextActivePhase = activePhaseIndex !== -1 && activePhaseIndex < phases.length - 1;
   const nextActivePhase = hasNextActivePhase ? phases[activePhaseIndex + 1] : null;
-
-  const [executionStatus, setExecutionStatus] = useState(null);                     // approved or rejected
-
+  // approved or rejected
+  const [executionStatus, setExecutionStatus] = useState(null);                     
+  // rollback states
   const [isRollingBack, setIsRollingBack] = useState(false);
+  const [showRollbackModal, setShowRollbackModal] = useState(false);
+  // serial or parallel
+  const [executionMode, setExecutionMode] = useState("serial");
 
   // show "Go back to planning" if execution is rejected and iterations are not ended
   const isExecutionLoopActive = activePipelinePhase === 'execution' && executionStatus === 'REJECTED';
 
   const executeRollback = async () => {
-    if (!activeChatId) return;                                  // if there are no active chat, rollback is unnecessary
+    if (!chat.activeChatId) return;                                  // if there are no active chat, rollback is unnecessary
     
-    setIsSending(true);                                         // lock UI during rollback
+    chat.setIsSending(true);                                         // lock UI during rollback
     try {
       const response = await fetch("/api/agent_server/experimentRollback", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: username, reservation_id: reservation_id, chat_id: activeChatId}),
+        body: JSON.stringify({ username: username, reservation_id: reservation_id, chat_id: chat.activeChatId}),
       });
 
       if (!response.ok) {
@@ -77,200 +75,96 @@ const LLMAgent = ({ username, reservation_id}) => {
     } catch (err) {
       console.error("Network error duringrollback:", err);
     } finally {
-      setIsSending(false);
+      chat.setIsSending(false);
     }
   };
 
-  const startNewChat = async () => {
+  const startNewChat = async (skipModal = false) => {
+
+    // reset only if we pass explicitly
+    const forceReset = skipModal === true;
 
     // rollback performed only if there is an active chat and we are not in history mode
-    if (activeChatId && !isReadOnly) {
+    if (!forceReset && chat.activeChatId && !isReadOnly && executionStatus !== null) {
 
-      setIsRollingBack(true);
-        
-      await executeRollback();
+      setShowRollbackModal(true);
+      return;   
+  
+    } 
 
-      setIsRollingBack(false);
-    }
-
-    setActiveChatId(null);
-    setMessages([]);
-    setInputValue("");
-    setSelectedFiles([]);
+    chat.resetBaseChat();
+    setExecutionMode("serial");
     setNegotiationQuestions([]);
     setNegotiationAnswers({});
-    setError(null);
     setCanAdvance(false);
     setCurrentPhase('negotiation');
     setActivePipelinePhase('negotiation');
     setIsReadOnly(false);
     setExecutionStatus(null);
+
+    
+  };
+
+  const handleConfirmRollback = async () => {
+    
+    setShowRollbackModal(false);   
+    setIsRollingBack(true);    
+    await executeRollback();
+    setIsRollingBack(false);
+    await startNewChat(true);
+
+  };
+
+  const handleDeclineRollback = async () => {
+    setShowRollbackModal(false);
+    await startNewChat(true);
   };
 
   // reset all fields when a new chat is started (either from the button or after the execution phase)
   useEffect(() =>{ startNewChat(); }, []);
 
   useEffect(() => {
-    const fetchSessions = async () => {
-      if (!username || !reservation_id) return;
-      try {
-        const response = await fetch(
-          `/api/agent_server/sessions?username=${encodeURIComponent(username)}&reservation_id=${encodeURIComponent(reservation_id)}&agent_role=${encodeURIComponent("negotiation")}`
-        );
-        if (response.ok) {
-          // retrieve the list of chats and the ist of ordered phases from the backend
-          const data = await response.json();
-          setSavedChats(data.chat_ids || []);
-          
-          if (data.phases_order && phases.length === 0) { setPhases(data.phases_order);}
-          
-        }
-      } catch (err) {
-        console.error("Error fetching sessions:", err);
-      }
-    };
-    fetchSessions();
-  }, [username, reservation_id]);
+    chat.fetchSessions("negotiation").then(data => {
+      
+      if (data && data.phases_order && phases.length === 0) { setPhases(data.phases_order);}
+
+    });
+    
+  }, [chat.fetchSessions, phases.length]);
 
   // load the chat history for a specific chat_id and phase
-  const loadHistory = async (chatId, phase, fromSidebar = false) => {
-    try {
-      const response = await fetch(
-        `/api/agent_server/history?username=${encodeURIComponent(username)}&reservation_id=${encodeURIComponent(reservation_id)}&chat_id=${encodeURIComponent(chatId)}&agent_role=${encodeURIComponent(phase)}`
-      );
-      if (response.ok) {
-        const data = await response.json();
-        if (data.messages) {
-          const formattedMessages = data.messages.map((msg, index) => ({
-            id: index + 1,
-            role: msg.role,
-            content: msg.content,
-          }));
-          setMessages(formattedMessages);
-          setActiveChatId(chatId);
-          setError(null);
-          setCurrentPhase(phase);
+  const loadLLMHistory = async (chatId, phase, fromSidebar = false) => {
+    const loadedMessages = await chat.loadHistory(chatId, phase);
+    if (loadedMessages) {
+      setCurrentPhase(phase);
           
-          // advance with buttons in history mode
-          if (fromSidebar) {
-            // if we are loading from the sidebar or going ahead in the history
-            setIsReadOnly(true); 
-            // we enable the advancing in the historical case
-            setCanAdvance(true);
-          }
-        }
+      // advance with buttons in history mode
+      if (fromSidebar) {
+        // if we are loading from the sidebar or going ahead in the history
+        setIsReadOnly(true); 
+        // we enable the advancing in the historical case
+        setCanAdvance(true);
       }
-    } catch (err) {
-      console.error("Error loading history:", err);
     }
   };
 
   const handleDeleteChat = async (chatId, e) => {
     if(e) e.stopPropagation(); // avoid chat loading after button click
 
-    try {
-      const response = await fetch("/api/agent_server/history", {
-        method: "DELETE",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          username: username,
-          reservation_id: reservation_id,
-          chat_id: chatId
-        }),
-      });
-
-      if (response.ok) {
-        // remove the chat from the list
-        setSavedChats((prev) => prev.filter((id) => id !== chatId));
-        
-        // if the removed chat is opened, we reset the interface
-        if (activeChatId === chatId) {
-          startNewChat();
-        }
-      } else {
-        console.error("Failed to delete chat");
-      }
-    } catch (err) {
-      console.error("Error deleting chat:", err);
-    }
+    chat.deleteChat(chatId, (deletedId) => {
+      if (chat.activeChatId === deletedId) startNewChat();
+    });
   };
 
   const handleDownloadChat = async (chatId, e) => {
     if (e) e.stopPropagation(); // avoid opening the chat by clicking the button
-    try {
-      const url = chatId
-        ? `/api/agent_server/download?username=${encodeURIComponent(username)}&reservation_id=${encodeURIComponent(reservation_id)}&chat_id=${encodeURIComponent(chatId)}`
-        : `/api/agent_server/download?username=${encodeURIComponent(username)}&reservation_id=${encodeURIComponent(reservation_id)}`;
 
-      const response = await fetch(url);
-
-      if (response.ok) {
-        // create a temporary link for the download
-        const blob = await response.blob();
-
-        const disposition = response.headers.get("Content-Disposition");
-        let filename = "download.zip";
-        if (disposition) {
-          const match = disposition.match(/filename="?([^"]+)"?/);
-          if (match) filename = match[1];
-        }
-
-        const downloadUrl = window.URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = downloadUrl;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        
-        a.remove();
-        window.URL.revokeObjectURL(downloadUrl);
-      } else {
-        console.error("Failed to download chat");
-      }
-    } catch (err) {
-      console.error("Error downloading chat:", err);
-    }
+    chat.downloadChat(chatId, null);
+    
   };
 
   const handleInputChange = (e) => {
-    setInputValue(e.target.value);
-  };
-
-  const handleFileChange = (e) => {
-    const newFiles = Array.from(e.target.files || []);
-   
-    setSelectedFiles((prev) => {
-      // array with already selected files to avoid duplicates
-      const existingFileNames = prev.map((f) => f.name);
-      
-      // filtering new files, files already selected are not included
-      const uniqueNewFiles = newFiles.filter(
-        (f) => !existingFileNames.includes(f.name)
-      );
-
-      // merge of old and filtered new files
-      return [...prev, ...uniqueNewFiles];
-    });
-
-    // reset input, browser will allow a new selection of a file that was removed
-    e.target.value = null;
-  };
-
-  const handleRemoveFile = (fileName) => {
-    setSelectedFiles((prev) => prev.filter((f) => f.name !== fileName));
-};
-
-  const appendMessage = (role, content) => {
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: prev.length + 1,
-        role,
-        content,
-      },
-    ]);
+    chat.setInputValue(e.target.value);
   };
 
   // parse a JSON string returned by the backend and update UI state, so the user can proceed to the next phase when allowed
@@ -350,7 +244,7 @@ const LLMAgent = ({ username, reservation_id}) => {
       if (isReadOnly) {
 
         // load only history of next phase on redis in history mode
-        loadHistory(activeChatId, actualNextPhase, true);
+        loadLLMHistory(chat.activeChatId, actualNextPhase, true);
 
       } else {
 
@@ -358,24 +252,24 @@ const LLMAgent = ({ username, reservation_id}) => {
         setCurrentPhase(actualNextPhase);
         setActivePipelinePhase(actualNextPhase);
         setCanAdvance(false);
-        setMessages([]); // clean chat for new view
+        chat.setMessages([]); // clean chat for new view
         setNegotiationQuestions([]);
         setNegotiationAnswers({});
-        setIsSending(true);
+        chat.setIsSending(true);
 
         try {
           // ask the backend to forward the validated context to the next agent
           const response = await fetch("/api/agent_server/advance", {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
+            headers: {"Content-Type": "application/json"},
             body: JSON.stringify({
               username: username,
               reservation_id: reservation_id,
-              chat_id: activeChatId,
+              chat_id: chat.activeChatId,
               current_agent: currentPhase,
-              next_agent: actualNextPhase
+              next_agent: actualNextPhase,
+              llm_model: chat.selectedModel,
+              execution_mode: executionMode
             }),
           });
 
@@ -384,17 +278,17 @@ const LLMAgent = ({ username, reservation_id}) => {
           if (response.ok) {
             // show the auto-forwarded context so the user can see what was passed downstream
             if (data.context_sent) {
-              appendMessage("user", `[System: Auto-forwarded context from ${currentPhase}]\n\n${data.context_sent}`);
+              chat.appendMessage("user", `[System: Auto-forwarded context from ${currentPhase}]\n\n${data.context_sent}`);
             }
 
             // safety may return multiple correction iterations; render each one separately
             if (data.reasoning_steps && data.reasoning_steps.length > 0) {
 
-              data.reasoning_steps.forEach((step) => {appendMessage(step.role || "assistant", `[Iteration ${step.iteration}]\n${step.content}`);});
+              data.reasoning_steps.forEach((step) => {chat.appendMessage(step.role || "assistant", `[Iteration ${step.iteration}]\n${step.content}`);});
 
             } else if (data.reply) {
               // other phases return a single final reply
-              appendMessage("assistant", data.reply);
+              chat.appendMessage("assistant", data.reply);
             }
 
             // use the last reasoning step as the authoritative result when present
@@ -404,13 +298,13 @@ const LLMAgent = ({ username, reservation_id}) => {
             
           } else {
             console.error("Error advancing:", data.error);
-            setError(data.error || "Failed to advance to the next agent.");
+            chat.setError(data.error || "Failed to advance to the next agent.");
           }
         } catch (err) {
           console.error("Network error advancing:", err);
-          setError("Network error advancing.");
+          chat.setError("Network error advancing.");
         } finally {
-          setIsSending(false);
+          chat.setIsSending(false);
         }
       }
     } else {
@@ -420,92 +314,73 @@ const LLMAgent = ({ username, reservation_id}) => {
 
   // go to the previous phase in history navigation
   const handleGoBackHistory = async () => {
-    if (!isReadOnly || !activeChatId || !hasPreviousPhase) return;
-    loadHistory(activeChatId, previousPhase, true);
+    if (!isReadOnly || !chat.activeChatId || !hasPreviousPhase) return;
+    loadLLMHistory(chat.activeChatId, previousPhase, true);
   };
 
   // terminate experiment and return to negotiation phase (click End Experiment session)
   const handleCancelPipeline = () => {
-    if (isSending) return;
+    if (chat.isSending) return;
     startNewChat();
   };
 
   const handleStepperClick = (clickedPhase) => {
     // click is ignored if there is not an active chat, if the system is sending a request to the LLM, or if the user click the voice of the menu of the current phase
-    if (!activeChatId || currentPhase === clickedPhase || isSending) return;
+    if (!chat.activeChatId || currentPhase === clickedPhase || chat.isSending) return;
 
     // in History Mode the menu is not active
     if (isReadOnly) return;
     
     // load history for the clicked phase (it automatically set isReadOnly = true)
-    loadHistory(activeChatId, clickedPhase, false);
+    loadLLMHistory(chat.activeChatId, clickedPhase, false);
   };
 
   // send a user message and optional files to the current agent
   const handleSubmit = async (e, autoText = null, autoPhase = null) => {
     if(e) e.preventDefault();
-    setError(null);
+    chat.setError(null);
 
-    let textToSend = inputValue.trim();
+    let textToSend = chat.inputValue.trim();
 
     // if there are questions, create formatted text and ignore the inputValue
     if (currentPhase === 'negotiation' && negotiationQuestions.length > 0) {
       textToSend = negotiationQuestions.map((q, i) => `${i + 1}. ${q}\nAnswer: ${negotiationAnswers[i]}`).join('\n\n');
     }
 
-    const filesToSend = selectedFiles;
+    if (!textToSend && chat.selectedFiles.length === 0) return;
 
-    if (!textToSend && filesToSend.length === 0) return;
-
-    appendMessage("user", textToSend);
+    chat.appendMessage("user", textToSend);
     
-    setIsSending(true);
+    chat.setIsSending(true);
 
     try {
       // build a multipart request because the payload may include uploaded files
-      const formData = new FormData();
-      if (textToSend) formData.append("message", textToSend);
-      formData.append("agent_role", currentPhase);
-      if (username) formData.append("username", username);
-      if (reservation_id) formData.append("reservation_id", reservation_id);
-      if (activeChatId) formData.append("chat_id", activeChatId);
-      // manual message, written by the user
-      formData.append("is_manual_chat", "true");
 
-      filesToSend.forEach((file) => formData.append("files", file));
-
-      const response = await fetch("/api/agent_server/chat", {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || "Error in backend call");
-      }
-
-      const data = await response.json();
+      const data = await sendChatRequest("/api/agent_server/chat", {
+        message: textToSend, username, reservation_id, chat_id: chat.activeChatId,
+        agent_role: currentPhase, is_manual_chat: "true", llm_model: chat.selectedModel
+      }, chat.selectedFiles);
       
       // safety can emit multiple self-correction iterations before producing a final outcome
       if (currentPhase === 'safety' && data.reasoning_steps) {
 
-         data.reasoning_steps.forEach((step, index) => {
-            appendMessage(step.role || "assistant", `[Iteration ${step.iteration}]\n${step.content}`);
+         data.reasoning_steps.forEach((step) => {
+            chat.appendMessage(step.role || "assistant", `[Iteration ${step.iteration}]\n${step.content}`);
          });
 
       } else if (data.reply) {
         // other agents return only one message
-         appendMessage("assistant", data.reply);
+        chat.appendMessage("assistant", data.reply);
       }
 
       // persist the generated chat id so later phases and history use the same session
-      if (data.chat_id && !activeChatId) {
-        setActiveChatId(data.chat_id);
-        if (currentPhase === 'negotiation') setSavedChats((prev) => [data.chat_id, ...prev]);
+      if (data.chat_id && !chat.activeChatId) {
+        chat.setActiveChatId(data.chat_id);
+        if (currentPhase === 'negotiation') chat.setSavedChats((prev) => [data.chat_id, ...prev]);
       }
 
-      setInputValue("");
-      setSelectedFiles([]);
+      chat.setInputValue("");
+      chat.setSelectedFiles([]);
       setNegotiationQuestions([]);
       setNegotiationAnswers({});
 
@@ -516,17 +391,17 @@ const LLMAgent = ({ username, reservation_id}) => {
 
     } catch (err) {
       console.error("Error sending message:", err);
-      setError(err.message || "Unexpected error occurred while sending the message.");
-      appendMessage("assistant", "An error occurred.");
+      chat.setError(err.message || "Unexpected error occurred while sending the message.");
+      chat.appendMessage("assistant", "An error occurred.");
     } finally {
-      setIsSending(false);
+      chat.setIsSending(false);
     }
   };
 
   // render structured JSON responses in a readable key/value layout
   const renderStructuredContent = (parsed) => {
     // list of fields to show without numbers
-    const plainCommandFields = ["execution_plan", "verification", "executable_plan"];
+    const plainCommandFields = ["execution_plan", "verification", "executable_plan", "verification_plan"];
     return (
       <div>
         {Object.entries(parsed).map(([key, value]) => (
@@ -635,7 +510,7 @@ const LLMAgent = ({ username, reservation_id}) => {
           const isPipelineActive = !isReadOnly && phase === activePipelinePhase && currentPhase !== activePipelinePhase;
 
           // cickable if: active experiment, not loading, not the visualized current phase
-          const isClickable = !isReadOnly && !isSending && currentPhase !== phase;
+          const isClickable = !isReadOnly && !chat.isSending && currentPhase !== phase;
 
           return (
             <div key={phase} className={`en-step ${isActive ? 'active' : ''} ${isCompleted ? 'completed' : ''} ${isPipelineActive ? 'pipeline-active' : ''} ${isClickable ? 'clickable' : ''}`}
@@ -646,62 +521,27 @@ const LLMAgent = ({ username, reservation_id}) => {
         })}
       </div>
 
-      <div className="experiment-negotiation-header">
-        <h1>{currentPhase.charAt(0).toUpperCase() + currentPhase.slice(1)} Agent</h1>
-        <p className="en-fixed-message">
-        </p>
-      </div>
+      <ChatHeader 
+        title={`${currentPhase.charAt(0).toUpperCase() + currentPhase.slice(1)} Agent`}
+        availableModels={chat.availableModels}
+        selectedModel={chat.selectedModel}
+        onModelChange={chat.setSelectedModel}
+        isDisabled={chat.isSending || isReadOnly}
+      />
+
       {/* Agent response area */}
       <div className="experiment-negotiation-main">
-        <div className={"experiment-negotiation-sidebar"}>
-          <button className="en-new-chat-btn" onClick={startNewChat}>New Chat</button>
-
-          {savedChats.length > 0 && (
-            <div className="en-add-files-row">
-              <span className="en-download-label">Download all conversations</span>
-              <button
-                className="en-download-chat-btn"
-                onClick={(e) => handleDownloadChat(null, e)}
-                title="Download All Chats"
-                disabled={activeChatId !== null}
-              >
-                <img src="downloadButton.png" alt="Download" className="en-download-icon-img" />
-              </button>
-            </div>
-          )}
-
-          <div className={activeChatId !== null ? 'sidebar-disabled' : ''}>
-            <h3 className="sidebar-title">Recent Chats</h3>
-            {savedChats.length === 0 ? (
-              <p className="en-sidebar-empty">No previous conversations.</p>
-            ) : (
-              <ul className="en-chat-list">
-                {savedChats.map((chatId, index) => (
-                  <li key={chatId} className="en-chat-item-container">
-                    <button className="en-download-chat-btn" onClick={(e) => handleDownloadChat(chatId, e)} title="Download Chat Logs">
-                      <img src="/downloadButton.png" alt="Download" className="en-download-icon-img" />
-                    </button>
-                    <button
-                      className={`en-chat-list-btn ${activeChatId === chatId ? "active" : ""}`}
-                      onClick={() => loadHistory(chatId, 'negotiation', true)}
-                      disabled={activeChatId !== null}
-                    >
-                      Conversation {savedChats.length - index}
-                    </button>
-                    <button
-                      className="en-delete-chat-btn"
-                      onClick={(e) => handleDeleteChat(chatId, e)}
-                      disabled={activeChatId !== null}
-                      title="Delete Chat"
-                    >
-                      ×
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </div>
+        <ChatSidebar
+          savedChats={chat.savedChats}
+          activeChatId={chat.activeChatId}
+          isSending={chat.isSending}
+          disableListActions={chat.activeChatId !== null}
+          onNewChat={startNewChat}
+          onDownloadChat={handleDownloadChat}
+          onLoadHistory={(id) => loadLLMHistory(id, 'negotiation', true)}
+          onDeleteChat={handleDeleteChat}
+          sessionLabel="Conversation"
+        />
 
         <div className="experiment-negotiation-chat">
           <div className="en-chat-window">
@@ -712,8 +552,8 @@ const LLMAgent = ({ username, reservation_id}) => {
               </div>
             ) : (
               <>
-                {messages.map((msg) => renderMessage(msg))}
-                {isSending && (
+                {chat.messages.map((msg) => renderMessage(msg))}
+                {chat.isSending && (
                   <div className="en-message-bubble en-message-assistant">
                     <div className="en-message-role">LLM Agent</div>
                     <div className="en-message-content">Computing response, please wait...</div>
@@ -724,36 +564,28 @@ const LLMAgent = ({ username, reservation_id}) => {
           </div>
 
           <form className="en-input-area" onSubmit={handleSubmit} autoComplete="off">
-            <div className="en-files-row">
-              <div className="en-add-files-row">               
-                <input id="en-file-input" type="file" disabled={isInputDisabled} multiple onChange={handleFileChange} className="en-file-input-hidden"/>
-                <button type="button" className={`en-file-button ${isInputDisabled ? 'en-send-button-disabled' : ''}`} disabled={isInputDisabled}
-                    onClick={() => {
-                        const input = document.getElementById("en-file-input");
-                        if (input) {input.click();}
-                    }}
-                >
-                +
-                </button>
-                <span className="en-file-label">Add files</span> 
-              </div>
-              {selectedFiles.length > 0 && (
-                  <div className="en-file-list">
-                      {selectedFiles.map((f) => (
-                          <span key={f.name} className="en-file-pill">
-                              <span className="en-file-name">{f.name}</span>
-                              <button
-                                  type="button"
-                                  className="en-file-remove"
-                                  onClick={() => handleRemoveFile(f.name)}
-                              >
-                                  ×
-                              </button>
-                          </span>
+            <div className="en-input-actions-wrapper">
+              <FileUploader
+                selectedFiles={chat.selectedFiles}
+                isInputDisabled={isInputDisabled}
+                onFileChange={chat.handleFileChange}
+                onRemoveFile={chat.handleRemoveFile}
+              />
 
-                      ))}
-                  </div>
-              )}
+              <div className="en-execution-toggle-container">
+                  <span className="en-toggle-label">Select execution type: </span>
+                  
+                  <label className="en-switch">
+                    <input
+                      type="checkbox"
+                      checked={executionMode === 'parallel'}
+                      disabled={!(currentPhase === 'safety' && canAdvance) || isReadOnly}
+                      onChange={(e) => setExecutionMode(e.target.checked ? 'parallel' : 'serial')}
+                    />
+                    <span className="en-slider"></span>
+                  </label>
+                  <span className={`en-toggle-status ${executionMode === 'parallel' ? 'parallel' : ''}`}>{executionMode === 'parallel' ? 'Parallel' : 'Serial'}</span>
+              </div>
             </div>
 
             <div className="en-input-row">
@@ -768,7 +600,7 @@ const LLMAgent = ({ username, reservation_id}) => {
                         onChange={(e) => setNegotiationAnswers({...negotiationAnswers, [i]: e.target.value})}
                         placeholder="Type your answer here..."
                         rows={1}
-                        disabled={isSending}
+                        disabled={chat.isSending}
                       />
                     </div>
                   ))}
@@ -776,7 +608,7 @@ const LLMAgent = ({ username, reservation_id}) => {
               ) : (
                 <textarea
                   className="en-textarea"
-                  value={inputValue}
+                  value={chat.inputValue}
                   onChange={handleInputChange}
                   placeholder={currentPhase === "negotiation" ? "Describe the experiment you want to run..." : "Describe the topology and insert all requested information..."}
                   rows={3}
@@ -792,7 +624,7 @@ const LLMAgent = ({ username, reservation_id}) => {
                 <span className="en-send-icon">↑</span>
               </button>
             </div>
-              {error && (<div className="en-error-message">{error}</div>)}
+              {chat.error && (<div className="en-error-message">{chat.error}</div>)}
           </form>
           
           <div className="en-transition-actions">
@@ -800,17 +632,17 @@ const LLMAgent = ({ username, reservation_id}) => {
             {isReadOnly ? (
               <>
                 <button
-                  className={`en-transition-btn en-secondary-transition-btn ${(!hasPreviousPhase || isSending) ? "en-transition-btn-disabled" : ""}`}
+                  className={`en-transition-btn en-secondary-transition-btn ${(!hasPreviousPhase || chat.isSending) ? "en-transition-btn-disabled" : ""}`}
                   onClick={handleGoBackHistory}
-                  disabled={!hasPreviousPhase || isSending}
+                  disabled={!hasPreviousPhase || chat.isSending}
                 >
                   {hasPreviousPhase ? `View ${previousPhase.toUpperCase()} History` : "No Previous History"}
                 </button>
 
                 <button
-                  className={`en-transition-btn en-primary-transition-btn ${(!canAdvance || isSending) ? "en-transition-btn-disabled" : ""}`}
+                  className={`en-transition-btn en-primary-transition-btn ${(!canAdvance || chat.isSending) ? "en-transition-btn-disabled" : ""}`}
                   onClick={() => handleAdvance()}
-                  disabled={!canAdvance || isSending}
+                  disabled={!canAdvance || chat.isSending}
                 >
                   {hasNextPhase ? `View ${nextPhase.toUpperCase()} History` : "Back to NEGOTIATION"}
                 </button>
@@ -819,26 +651,26 @@ const LLMAgent = ({ username, reservation_id}) => {
               <>
                 {/* transition buttons to navigate during experiment*/}
                 <button
-                  className={`en-transition-btn en-secondary-transition-btn ${isSending ? "en-transition-btn-disabled" : ""}`}
+                  className={`en-transition-btn en-secondary-transition-btn ${chat.isSending ? "en-transition-btn-disabled" : ""}`}
                   onClick={handleCancelPipeline}
-                  disabled={isSending}
+                  disabled={chat.isSending}
                 >
                   End Experiment Session
                 </button>
 
                 {isExecutionLoopActive && currentPhase === 'execution' ? (
                   <button
-                      className={`en-transition-btn en-primary-transition-btn ${(isSending) ? "en-transition-btn-disabled" : ""}`}
+                      className={`en-transition-btn en-primary-transition-btn ${(chat.isSending) ? "en-transition-btn-disabled" : ""}`}
                       onClick={() => handleAdvance('planning')}
-                      disabled={isSending}
+                      disabled={chat.isSending}
                   >
                       Go back to PLANNING
                   </button>
                 ) : (
                   <button
-                    className={`en-transition-btn en-primary-transition-btn ${(!canAdvance || isSending || isViewingPastPhase) ? "en-transition-btn-disabled" : ""}`}
+                    className={`en-transition-btn en-primary-transition-btn ${(!canAdvance || chat.isSending || isViewingPastPhase) ? "en-transition-btn-disabled" : ""}`}
                     onClick={() => handleAdvance ()}
-                    disabled={!canAdvance || isSending || isViewingPastPhase}
+                    disabled={!canAdvance || chat.isSending || isViewingPastPhase}
                   >
                     {hasNextPhase ? `Proceed to ${nextPhase.toUpperCase()}` : "Finish & Return to Start"}
                   </button>
@@ -848,6 +680,20 @@ const LLMAgent = ({ username, reservation_id}) => {
           </div>
         </div>
       </div>
+      {showRollbackModal && (
+        <div className="en-modal-overlay">
+          <div className="en-modal-content">
+            <div className="en-modal-header">
+              <h3>Rollback Experiment</h3>
+              <p>An execution phase was detected for this session. Do you want to rollback the configurations applied to the testbed?</p>
+            </div>
+            <div className="en-modal-footer">
+              <button className="en-btn-cancel" onClick={handleDeclineRollback}>No, skip rollback</button>
+              <button className="en-btn-confirm" onClick={handleConfirmRollback}>Yes, run rollback</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

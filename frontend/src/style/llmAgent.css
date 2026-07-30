@@ -17,7 +17,7 @@
 .experiment-negotiation-header {
   display: flex;
   flex-direction: row;
-  align-items: baseline;
+  align-items: center;
   gap: 15px;
 }
 
@@ -719,6 +719,135 @@
   display: flex;
    gap: 10px; 
    margin-top: 10px;
+}
+.en-model-container {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.en-model-label {
+    font-size: 13px;
+    font-weight: 700;
+    color: #32508a; 
+}
+.en-model-select {
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid #d4e1ff;
+    background-color: #ffffff;
+    font-size: 14px;
+    color: #0b2e6b;
+    cursor: pointer;
+    outline: none;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    font-family: inherit;
+    flex-shrink: 0; 
+}
+.en-model-select:focus {
+    border-color: #0b6efb;
+    box-shadow: 0 0 0 2px rgba(11, 110, 251, 0.2);
+}
+.en-model-select:disabled {
+    background-color: #f6f8fc;
+    cursor: not-allowed;
+    color: #7b95cc;
+}
+.en-model-select option {
+    background-color: #ffffff;
+    color: #0b2e6b;
+    padding: 8px;
+}
+.en-model-select option:hover,
+.en-model-select option:focus,
+.en-model-select option:checked {
+    background-color: #e4edff;
+    color: #0b2e6b;
+}
+.en-input-actions-wrapper {
+  position: relative;
+  width: 100%;
+}
+.en-execution-toggle-container {
+  position: absolute;
+  right: 0;
+  top: 0;
+  display: flex;
+  align-items: center;
+  height: 32px; 
+}
+.en-toggle-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: #32508a;
+}
+.en-toggle-status {
+  font-size: 13px;
+  font-weight: 600;
+  min-width: 55px;
+  margin: 10px;
+  color: #32508a;
+  text-align: left;
+}
+
+.en-toggle-status.parallel {
+  color: #0b6efb;
+}
+.en-switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+  flex-shrink: 0;
+  margin-left: 8px;
+}
+.en-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.en-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #d4e1ff;
+  transition: .3s;
+  border-radius: 24px;
+}
+.en-slider:before {
+  position: absolute;
+  content: "";
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: .3s;
+  border-radius: 50%;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+input:checked + .en-slider {
+  background-color: #0b6efb;
+}
+input:checked + .en-slider:before {
+  transform: translateX(20px);
+}
+input:focus + .en-slider {
+  box-shadow: 0 0 0 2px rgba(11, 110, 251, 0.2);
+}
+input:disabled + .en-slider {
+  background-color: #f6f8fc;
+  border: 1px solid #d4e1ff;
+  cursor: not-allowed;
+}
+input:disabled + .en-slider:before {
+  background-color: #cbd5e1;
+  box-shadow: none;
+  bottom: 2px;
+  left: 2px;
 }
 @media (max-width: 900px) {
   .experiment-negotiation-main {

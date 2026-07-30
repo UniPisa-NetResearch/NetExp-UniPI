@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from ..app import app
 from .llm_client import chat_with_llm
 from ..utils import get_is_virtual_from_db
-from ..config import REDIS_HOST, REDIS_PORT, REDIS_DB, SAFETY_ITERATIONS, PHASES_ORDER, JSON_RETRIES, LOCAL_TEST, CONTAINERLAB_HOST, CONTAINERLAB_HOST_USER
+from ..config import REDIS_HOST, REDIS_PORT, REDIS_DB, SAFETY_ITERATIONS, PHASES_ORDER, JSON_RETRIES, LOCAL_TEST, CONTAINERLAB_HOST, CONTAINERLAB_HOST_USER, AVAILABLE_MODELS, LLM_MODEL
 from .agents_util.prompts import AGENT_PROMPTS, DEVICE_KIND_RULES, FORBIDDEN_RULES, READ_INTENTS, ROLLBACK_BASE_CMD, TROUBLESHOOTER_PROMPTS, ALLOWED_DIAGNOSTIC_COMMANDS
 
 # redis store for conversation history, keyed by username and reservation_id
@@ -295,7 +295,7 @@ def validate_json_format(reply_text, agent_role):
                 return False, "verification must be a JSON array"
                  
         if agent_role == "safety":
-            if not all(k in data for k in ["status", "issues", "topology_mapping_check", "executable_plan", "clarifying_questions", "read_operations"]):
+            if not all(k in data for k in ["status", "issues", "topology_mapping_check", "executable_plan", "verification_plan", "clarifying_questions", "read_operations"]):
                 return False, "Missing keys. Required: status, issues, topology_mapping_check, executable_plan, clarifying_questions, read_operations"
             
             if not isinstance(data.get("read_operations"), list):
@@ -309,6 +309,9 @@ def validate_json_format(reply_text, agent_role):
             
             if not isinstance(data.get("executable_plan"), list):
                 return False, "executable_plan must be a JSON array"
+
+            if not isinstance(data.get("verification_plan"), list):
+                return False, "verification_plan must be a JSON array"
             
             if not isinstance(data.get("clarifying_questions"), list):
                 return False, "clarifying_questions must be a JSON array"
@@ -337,7 +340,7 @@ def validate_json_format(reply_text, agent_role):
     except json.JSONDecodeError as e:
         return False, f"The output is not a valid JSON object. JSONDecodeError: {str(e)}"
     
-def get_validated_llm_reply(history, agent_role):
+def get_validated_llm_reply(history, agent_role, llm_model):
     local_history = history.copy()
     last_failure_reason = None
 
@@ -349,7 +352,7 @@ def get_validated_llm_reply(history, agent_role):
 
         try:
 
-            reply_text = chat_with_llm(local_history)
+            reply_text = chat_with_llm(local_history, llm_model)
 
         except Exception as e:
             last_failure_reason = f"LLM call exception: {str(e)}"
@@ -391,7 +394,7 @@ def get_validated_llm_reply(history, agent_role):
     return False, None, {"error_type": "llm_validation_failure", "reason": last_failure_reason}
 
 
-def handle_safety_loop(history, system_msg, latest_user_msg, reservation_id, agent_role, is_manual_chat=False):
+def handle_safety_loop(history, system_msg, latest_user_msg, reservation_id, agent_role, llm_model, is_manual_chat=False):
     reasoning_steps = []
     reply = {}
 
@@ -453,7 +456,7 @@ def handle_safety_loop(history, system_msg, latest_user_msg, reservation_id, age
         payload_length = sum(len(str(m.get("content", ""))) for m in current_turn_safety_history)
         print(f"[DEBUG SAFETY] messages={len(current_turn_safety_history)} | payload_chars~={payload_length}")
 
-        is_valid, reply_text, reply = get_validated_llm_reply(current_turn_safety_history, agent_role)
+        is_valid, reply_text, reply = get_validated_llm_reply(current_turn_safety_history, agent_role, llm_model)
 
         status = str(reply.get("status", "")).strip().upper() if is_valid and reply else ""
 
@@ -488,7 +491,7 @@ def handle_safety_loop(history, system_msg, latest_user_msg, reservation_id, age
     # autocorrection loop for Safety Check (max N iterations)
     for iteration in range(SAFETY_ITERATIONS):
         len_before = len(current_turn_safety_history)
-        valid_output, reply_text, reply = get_validated_llm_reply(current_turn_safety_history, agent_role)
+        valid_output, reply_text, reply = get_validated_llm_reply(current_turn_safety_history, agent_role, llm_model)
 
         # synchronize failed validation tries in the main history
         for msg in current_turn_safety_history[len_before:]:
@@ -536,7 +539,7 @@ def handle_safety_loop(history, system_msg, latest_user_msg, reservation_id, age
     return {"reply": reply, "reasoning_steps": reasoning_steps}, 200
 
 
-def handle_chat_logic(username, reservation_id, chat_id, agent_role, message, files=None, is_manual_chat=False):
+def handle_chat_logic(username, reservation_id, chat_id, agent_role, message, llm_model, files=None, is_manual_chat=False):
     # if there is no chat_id, it means the user is starting a new chat. We generate one.
     if not chat_id:
         chat_id = f"{int(time.time())}_{uuid.uuid4().hex[:8]}"          # added timestamp to guarantee chronological order
@@ -593,7 +596,7 @@ def handle_chat_logic(username, reservation_id, chat_id, agent_role, message, fi
 
         if agent_role == "safety":
 
-            result, status_code = handle_safety_loop(history, system_msg, latest_user_msg, reservation_id, agent_role, is_manual_chat)
+            result, status_code = handle_safety_loop(history, system_msg, latest_user_msg, reservation_id, agent_role, llm_model, is_manual_chat)
             if status_code != 200:
                 return result, status_code
             
@@ -613,7 +616,7 @@ def handle_chat_logic(username, reservation_id, chat_id, agent_role, message, fi
 
             len_before = len(llm_history)
 
-            valid_output, reply, _ = get_validated_llm_reply(llm_history, agent_role)
+            valid_output, reply, _ = get_validated_llm_reply(llm_history, agent_role, llm_model)
 
             # update history
             if agent_role in ["planning", "execution"]:
@@ -644,11 +647,12 @@ def chat():
     chat_id = request.form.get("chat_id", "")
     is_manual_chat = request.form.get("is_manual_chat", "false").lower() == "true"
     files = request.files.getlist("files")
+    llm_model = request.form.get("llm_model", LLM_MODEL)
 
     if not username or not reservation_id:
         return jsonify({"error": "Missing username or reservation_id"}), 400
 
-    result, status_code = handle_chat_logic(username, reservation_id, chat_id, agent_role, message, files, is_manual_chat)
+    result, status_code = handle_chat_logic(username, reservation_id, chat_id, agent_role, message, llm_model, files, is_manual_chat)
     return jsonify(result), status_code
 
     
@@ -660,6 +664,8 @@ def advance_agent():
     chat_id = data.get("chat_id", "")
     current_role = data.get("current_agent", "")
     next_role = data.get("next_agent", "")
+    llm_model = data.get("llm_model", LLM_MODEL)
+    execution_mode = data.get("execution_mode", "serial")
 
     if not all([username, reservation_id, chat_id, current_role, next_role]):
         return jsonify({"error": "Missing parameters"}), 400
@@ -718,19 +724,33 @@ def advance_agent():
     
     elif current_role == "safety":
         plan = parsed.get("executable_plan", "[]")
+        v_plan = parsed.get("verification_plan", [])
 
         base_dir = os.path.dirname(os.path.abspath(__file__))
         inventory_path = os.path.abspath(os.path.join(base_dir, "..", "controller", "inventories", f"res-{reservation_id}-inventory.ini"))
-        
-        if isinstance(plan, str):
-            if plan.strip().upper() in ["", "N/A", "NONE", "[]"]:
-                plan = []
-            else:
-                # if the plan is a string, we parse as a list of commands
-                plan = [line.strip() for line in plan.strip().split('\n') if line.strip()]
 
-        if isinstance(plan, list) and len(plan) > 0:
-            execution_report = run_agent_execution_plan(inventory_path, plan, reservation_id)      
+        def parse_plan(plan):
+            if isinstance(plan, str):
+                if plan.strip().upper() in ["", "N/A", "NONE", "[]"]:
+                    return []
+                else:
+                    # if the plan is a string, we parse as a list of commands
+                    return [line.strip() for line in plan.strip().split('\n') if line.strip()]
+            return plan if isinstance(plan, list) else []
+
+        plan = parse_plan(plan)
+        v_plan = parse_plan(v_plan)
+
+        if len(plan) > 0 and len(v_plan) > 0:
+            
+            if execution_mode == "parallel":
+                exec_report = run_parallel_commands(inventory_path, plan, reservation_id, is_intent=False)
+                verif_report = run_parallel_commands(inventory_path, v_plan, reservation_id, is_intent=False)
+                execution_report = f"--- CONFIGURATION REPORT ---\n{exec_report}\n\n--- VERIFICATION REPORT ---\n{verif_report}"
+            else:
+                complete_plan = plan + v_plan
+                execution_report = run_agent_execution_plan(inventory_path, complete_plan, reservation_id)      
+
             context_payload = f"<experiment_context>\n{experiment_context}\n</experiment_context>\n\n<exit_conditions>\n{exit_conditions}\n</exit_conditions>\n\n<execution_results>\n{execution_report}\n</execution_results>\n"
             
         else:    
@@ -759,7 +779,7 @@ def advance_agent():
 
         context_payload = f"Please analyze the errors below and generate a NEW corrected execution plan. You MUST respond in a valid JSON object.\n\n<experiment_context>\n{experiment_context}\n</experiment_context>\n\n<failed_execution_plan>\n{old_plan}\n</failed_execution_plan>\n\n<execution_report>\n{execution_report}\n</execution_report>"
         
-    result, status_code = handle_chat_logic(username, reservation_id, chat_id, next_role, context_payload, files=None)
+    result, status_code = handle_chat_logic(username, reservation_id, chat_id, next_role, context_payload, llm_model, files=None)
     
     if status_code == 200:
         result["context_sent"] = context_payload
@@ -786,7 +806,7 @@ def get_sessions():
     # order chat_ids in descendent order
     chat_ids.sort(reverse=True)
     
-    return jsonify({"chat_ids": chat_ids, "phases_order": PHASES_ORDER})
+    return jsonify({"chat_ids": chat_ids, "phases_order": PHASES_ORDER, "available_models": AVAILABLE_MODELS, "default_model": LLM_MODEL})
 
 @app.route("/api/agent_server/history", methods=["GET"])
 def get_history():
@@ -966,6 +986,7 @@ def troubleshooter_chat():
     reservation_id = request.form.get("reservation_id", "")
     chat_id = request.form.get("chat_id", "")
     message = request.form.get("message", "")
+    llm_model = request.form.get("llm_model", LLM_MODEL)
     
     if not chat_id:
         chat_id = f"{int(time.time())}_{uuid.uuid4().hex[:8]}"
@@ -984,7 +1005,7 @@ def troubleshooter_chat():
     history.append({"role": "user", "content": message})
     
     # Intent agent
-    is_valid, _, intent_json = get_validated_llm_reply(history, "diagnostic_intent")
+    is_valid, _, intent_json = get_validated_llm_reply(history, "diagnostic_intent", llm_model)
     if not is_valid:
         return jsonify({"error": "Failed intent evaluation"}), 500
 
@@ -1020,7 +1041,7 @@ def troubleshooter_chat():
         {"role": "system", "content": planner_sys_prompt},
         {"role": "user", "content": f"<context>\n{context}\n</context>"}
     ]
-    is_valid, _, planner_json = get_validated_llm_reply(planner_history, "diagnostic_planner")
+    is_valid, _, planner_json = get_validated_llm_reply(planner_history, "diagnostic_planner", llm_model)
     if not is_valid:
         return jsonify({"error": "Failed planner evaluation"}), 500
 
@@ -1064,7 +1085,7 @@ def troubleshooter_chat():
         {"role": "user", "content": f"<context>\n{context}\n</context>\n<execution_report>\n{execution_report}\n</execution_report>"}
     ]
     
-    is_valid, _, reporter_json = get_validated_llm_reply(reporter_history, "diagnostic_reporter")
+    is_valid, _, reporter_json = get_validated_llm_reply(reporter_history, "diagnostic_reporter", llm_model)
     if not is_valid:
             return jsonify({"error": "Failed reporter evaluation"}), 500
 
@@ -1090,6 +1111,7 @@ def execute_approved_troubleshooter():
     username = data.get("username", "")
     reservation_id = data.get("reservation_id", "")
     chat_id = data.get("chat_id", "")
+    llm_model = data.get("llm_model", LLM_MODEL)
 
     if not approved_commands:
         execution_report = "[SYSTEM LOG]: The user rejected all proposed commands, and there were no whitelisted commands available. No read operations were performed on the devices. Inform the user that you cannot complete the analysis without executing the commands, and ask them to try again or rephrase their request."
@@ -1109,7 +1131,7 @@ def execute_approved_troubleshooter():
         {"role": "user", "content": f"<context>\n{context}\n</context>\n<execution_report>\n{execution_report}\n</execution_report>"}
     ]
 
-    is_valid, _, reporter_json = get_validated_llm_reply(reporter_history, "diagnostic_reporter")
+    is_valid, _, reporter_json = get_validated_llm_reply(reporter_history, "diagnostic_reporter", llm_model)
     if not is_valid:
                 return jsonify({"error": "Failed reporter evaluation"}), 500
 

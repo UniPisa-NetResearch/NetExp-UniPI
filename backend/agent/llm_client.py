@@ -2,18 +2,24 @@ import json
 import time
 import traceback
 from openai import OpenAI, APITimeoutError, APIConnectionError, APIStatusError
-from ..config import OPENAI_API_KEY, OPENAI_BASE_URL, LLM_MODEL, LLM_TIMEOUT_SECONDS, LLM_MAX_OUTPUT_TOKENS
+from ..config import OPENAI_API_KEY, LLM_TIMEOUT_SECONDS, LLM_MAX_OUTPUT_TOKENS, AVAILABLE_BASE_URLS
 
-client = OpenAI(
-    api_key=OPENAI_API_KEY,
-    base_url=OPENAI_BASE_URL,
-    max_retries=0               # to avoid wasting requests with automatic retries when the server is not reachable
-)
 
-def chat_with_llm(messages: list) -> str:
+def chat_with_llm(messages: list, model_name: str) -> str:
+
+    if "gemini" in model_name.lower():
+        dynamic_base_url = AVAILABLE_BASE_URLS[0]
+    else:
+         dynamic_base_url = AVAILABLE_BASE_URLS[1]
+
+    client = OpenAI(
+        api_key=OPENAI_API_KEY,
+        base_url=dynamic_base_url,
+        max_retries=0               # to avoid wasting requests with automatic retries when the server is not reachable
+    )
 
     print("\n" + "="*70)
-    print(f"[DEBUG LLM] LLM CALL TO MODEL: {LLM_MODEL}")
+    print(f"[DEBUG LLM] LLM CALL TO MODEL: {model_name}")
 
     payload_length = sum(len(str(m.get("content", ""))) for m in messages)
     
@@ -27,7 +33,7 @@ def chat_with_llm(messages: list) -> str:
     try:
 
         response = client.chat.completions.create(
-            model=LLM_MODEL,
+            model=model_name,
             messages=messages,
             temperature=0.2,
             response_format={"type": "json_object"},
