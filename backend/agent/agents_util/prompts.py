@@ -107,7 +107,7 @@ AGENT_PROMPTS = {
         "5. REDUNDANCY CHECK: Compare the <execution_plan> against the <device_report>. If ANY command configures a state ALREADY PRESENT and active (e.g., an IP or route already configured in the report), that command is REDUNDANT. You MUST remove it, explicitly list this removal in the issues array, and set status to 'REJECTED'.\n"
         "6. PROACTIVE FIX: If the original plan has ANY errors, violations, or redundancies, you MUST rewrite it entirely (fixing the errors in both the execution and verification steps) and output the cleaned version in executable_plan. You MUST set status to 'REJECTED' any time your executable_plan differs from the original plan.\n\n"
         "7. CONFLICT RESOLUTION & CLEANUP (CRITICAL): If the `<device_report>` shows existing configurations that CONFLICT with the new plan (e.g., an incorrect default route, a wrong IP on the target interface, or an old conflicting subnet), you MUST explicitly generate the exact commands to REMOVE/DELETE those conflicting configurations BEFORE adding the new ones in your corrected `executable_plan`.\n"
-        "8. VALIDATE & APPEND VERIFICATION (CRITICAL): You MUST ALWAYS include the validated and (if necessary) corrected verification commands at the end of your final `executable_plan` array. A plan without verification is considered incomplete.\n\n"
+        "8. VALIDATE & SEPARATE VERIFICATION (CRITICAL): You MUST explicitly separate execution commands from verification commands. Place ALL configuration/setup commands in the `executable_plan` array, and ALL testing/verification commands (e.g., ping, ip route show) in the `verification_plan` array. A plan without verification is considered incomplete.\n\n"
 
         "--- STRICT RULES ---\n"
         "- NO CHITCHAT (CRITICAL): Do not use polite formulas, transitional phrases, or introductory text (e.g., 'After analyzing...', 'Here is the report'). Start directly with the mandatory Markdown structure and never add text outside of it.\n"
@@ -120,7 +120,7 @@ AGENT_PROMPTS = {
         "- ISSUE DEFINITION (CRITICAL): The `issues` array is strictly an audit of the PLAN's commands, NOT the network state. If you find a redundant command, DO NOT just state 'routes are already configured'. You MUST explicitly name the exact redundant command and explain why it is redundant based on the report. NEVER list general network states (e.g., 'eth1 lacks IPv4' or 'link state is not UP') as issues.\n"
         "- NO HALLUCINATIONS & NO ALIASING: If a device or interface used in the plan is not in the <topology>, flag it as a violation immediately.\n"
         "- VERIFICATION LOGIC CHECK: You must ensure the verification commands are logically sound, use correct devices/interfaces from the topology, use allowed commands, and effectively test the explicit <exit_conditions> (e.g., native Linux `ping`, `ip route`, or `vtysh -c 'show...'` for routing). If they are hallucinated, unsafe, use wrong IPs, or or don't test the exit conditions, correct them.\n"
-        "- MANDATORY VERIFICATION INCLUSION (CRITICAL): Never drop the verification commands. Whether you APPROVE or REJECT the overall plan, your output `executable_plan` array MUST contain the valid/corrected execution commands followed immediately by the valid/corrected verification commands.\n"
+        "- MANDATORY VERIFICATION SEPARATION (CRITICAL): Never drop the verification commands. Whether you APPROVE or REJECT the overall plan, you MUST output the valid/corrected execution commands EXCLUSIVELY in `executable_plan` and the valid/corrected testing commands EXCLUSIVELY in `verification_plan`.\n"
         "- UNRESOLVED ISSUES: Do not mark status as APPROVED if any previous issue is still present in the proposed plan. Re-check each command in executable_plan line by line against the physical topology and forbidden rules. If any interface name, device name, or command remains inconsistent with the topology or if any previously reported issue is still unresolved, keep status REJECTED.\n"        
         "- TIMING & CONVERGENCE CHECK: Verify if the plan allows sufficient time for protocol convergence before verification. If a required delay is missing (e.g., standard OSPF requires a 45s sleep), reject the plan and add it. If a delay is present but redundant (e.g., OSPF is explicitly point-to-point), reject the plan and remove it.\n"
         "- BOUNDED PROCESSES CHECK: Reject the plan if commands like ping, iperf, or tcpdump lack explicit duration limits (e.g., missing `-c` or `-t` flags) or lack explicit termination commands. You MUST correct the executable_plan by adding these limits.\n"
@@ -145,6 +145,11 @@ AGENT_PROMPTS = {
         '  "executable_plan": [\n'
         '    "(string) If APPROVED, copy the original plan here.",\n'
         '    "(string) If REJECTED, provide the FULL corrected plan here using the `device: <command>` format.",\n'
+        '    "(string) Leave this array empty [] if you need info."\n'
+        '  ],\n'
+        '  "verification_plan": [\n'
+        '    "(string) If APPROVED, copy the original verification commands here.",\n'
+        '    "(string) If REJECTED, provide the FULL corrected verification commands (ping, show, etc.) here.",\n'
         '    "(string) Leave this array empty [] if you need info."\n'
         '  ],\n'
         '  "clarifying_questions": [\n'

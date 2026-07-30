@@ -1,13 +1,11 @@
 import React, { useState, useEffect, useRef } from "react";
 import "./style/llmAgent.css";
 
+import { ChatSidebar, FileUploader, ChatHeader } from "./LLMAgents/SharedChatComponents";
+import { useAgentChat, sendChatRequest } from "./LLMAgents/useAgentChat";
+
 const Troubleshooter = ({ username, reservation_id }) => {
-  const [messages, setMessages] = useState([]);
-  const [inputValue, setInputValue] = useState("");
-  const [isSending, setIsSending] = useState(false);
-  const [error, setError] = useState(null);
-  
-  const [activeChatId, setActiveChatId] = useState(null);
+  const chat = useAgentChat(username, reservation_id, "troubleshooter_chat");
   const chatEndRef = useRef(null);
 
   // modal window states
@@ -16,166 +14,57 @@ const Troubleshooter = ({ username, reservation_id }) => {
   const [safeCommandsBuffer, setSafeCommandsBuffer] = useState([]);
   const [currentContext, setCurrentContext] = useState("");
   const [commandDecisions, setCommandDecisions] = useState({});
-  // chat list
-  const [savedChats, setSavedChats] = useState([]);
-
-  const [selectedFiles, setSelectedFiles] = useState([]);
-
-  const handleFileChange = (e) => {
-    const newFiles = Array.from(e.target.files || []);
-    setSelectedFiles((prev) => {
-      const existingFileNames = prev.map((f) => f.name);
-      const uniqueNewFiles = newFiles.filter((f) => !existingFileNames.includes(f.name));
-      return [...prev, ...uniqueNewFiles];
-    });
-    e.target.value = null;
-  };
-
-  const handleRemoveFile = (fileName) => {
-    setSelectedFiles((prev) => prev.filter((f) => f.name !== fileName));
-  };
-
+  
   // fetch of previous sessions
   useEffect(() => {
-    const fetchSessions = async () => {
-      if (!username || !reservation_id) return;
-      try {
-        const response = await fetch(
-          `/api/agent_server/sessions?username=${encodeURIComponent(username)}&reservation_id=${encodeURIComponent(reservation_id)}&agent_role=troubleshooter_chat`
-        );
-        if (response.ok) {
-          const data = await response.json();
-          setSavedChats(data.chat_ids || []);
-        }
-      } catch (err) {
-        console.error("Error fetching sessions:", err);
-      }
-    };
-    fetchSessions();
-  }, [username, reservation_id]);
 
-  const startNewChat = () => {
-    setActiveChatId(null);
-    setMessages([]);
-    setInputValue("");
-    setSelectedFiles([]);
-    setError(null);
-  };
+    chat.fetchSessions();
 
-  const loadHistory = async (chatId) => {
-    try {
-      const response = await fetch(
-        `/api/agent_server/history?username=${encodeURIComponent(username)}&reservation_id=${encodeURIComponent(reservation_id)}&chat_id=${encodeURIComponent(chatId)}&agent_role=troubleshooter_chat`
-      );
-      if (response.ok) {
-        const data = await response.json();
-        if (data.messages) {
-          const formattedMessages = data.messages.map((msg, index) => ({
-            id: index + 1,
-            role: msg.role,
-            content: msg.content,
-          }));
-          setMessages(formattedMessages);
-          setActiveChatId(chatId);
-          setError(null);
-        }
-      }
-    } catch (err) {
-      console.error("Error loading history:", err);
-    }
-  };
+  }, [chat.fetchSessions]);
 
-  const handleDeleteChat = async (chatId, e) => {
+  const startNewChat = () => chat.resetBaseChat();
+
+  const handleDeleteChat = (chatId, e) => {
+    
     if(e) e.stopPropagation();
-    try {
-      const response = await fetch("/api/agent_server/history", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, reservation_id, chat_id: chatId }),
-      });
-      if (response.ok) {
-        setSavedChats((prev) => prev.filter((id) => id !== chatId));
-        if (activeChatId === chatId) startNewChat();
-      }
-    } catch (err) {
-      console.error("Error deleting chat:", err);
-    }
+
+    chat.deleteChat(chatId, (deletedId) => {
+      if (chat.activeChatId === deletedId) startNewChat();
+    });
+    
   };
 
-  const handleDownloadChat = async (chatId, e) => {
+  const handleDownloadChat = (chatId, e) => {
+    
     if (e) e.stopPropagation();
-    try {
-      const url = chatId
-        ? `/api/agent_server/download?username=${encodeURIComponent(username)}&reservation_id=${encodeURIComponent(reservation_id)}&chat_id=${encodeURIComponent(chatId)}&agent_role=troubleshooter_chat`
-        : `/api/agent_server/download?username=${encodeURIComponent(username)}&reservation_id=${encodeURIComponent(reservation_id)}&agent_role=troubleshooter_chat`;
+    chat.downloadChat(chatId, "troubleshooter_chat");
 
-      const response = await fetch(url);
-      if (response.ok) {
-        const blob = await response.blob();
-        const disposition = response.headers.get("Content-Disposition");
-        let filename = chatId ? `troubleshooter_chat_${chatId}.zip` : `troubleshooter_all_chats.zip`;
-        if (disposition) {
-          const match = disposition.match(/filename="?([^"]+)"?/);
-          if (match) filename = match[1];
-        }
-        const downloadUrl = window.URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = downloadUrl;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        window.URL.revokeObjectURL(downloadUrl);
-      }
-    } catch (err) {
-      console.error("Error downloading chat:", err);
-    }
-  };
-
-  const handleInputChange = (e) => setInputValue(e.target.value);
-
-  const appendMessage = (role, content) => {
-    setMessages((prev) => [...prev, { id: prev.length + 1, role, content }]);
   };
 
   const handleSubmit = async (e) => {
     if (e) e.preventDefault();
 
-    const textToSend = inputValue.trim();
-    if (!textToSend && selectedFiles.length === 0) return;
+    const textToSend = chat.inputValue.trim();
+    if (!textToSend && chat.selectedFiles.length === 0) return;
 
-    setError(null);
-
-    if (textToSend || selectedFiles.length > 0) {
-       appendMessage("user", textToSend || "[Attached file]");
-    }
-
-    setInputValue("");
-    setIsSending(true);
+    chat.setError(null);
+    chat.appendMessage("user", textToSend || "[Attached file]");
+    chat.setInputValue("");
+    chat.setIsSending(true);
 
     try {
-      const formData = new FormData();
-      formData.append("message", textToSend);
-      if (username) formData.append("username", username);
-      if (reservation_id) formData.append("reservation_id", reservation_id);
-      if (activeChatId) formData.append("chat_id", activeChatId);
 
-      selectedFiles.forEach((file) => formData.append("files", file));
+      const data = await sendChatRequest("/api/agent_server/troubleshooter/chat", {
+        message: textToSend, username, reservation_id, chat_id: chat.activeChatId,
+        llm_model: chat.selectedModel
+      }, chat.selectedFiles);
 
-      const response = await fetch("/api/agent_server/troubleshooter/chat", {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!response.ok) throw new Error("Errore chiamata Backend");
-      const data = await response.json();
-
-      if (data.chat_id && !activeChatId) {
-        setActiveChatId(data.chat_id);
-        setSavedChats((prev) => [data.chat_id, ...prev]);
+      if (data.chat_id && !chat.activeChatId) {
+        chat.setActiveChatId(data.chat_id);
+        chat.setSavedChats((prev) => [data.chat_id, ...prev]);
       }
 
-      setSelectedFiles([]);
+      chat.setSelectedFiles([]);
 
       // check if diagnostic_intent requires more information
       if (data.requires_approval) {
@@ -186,12 +75,12 @@ const Troubleshooter = ({ username, reservation_id }) => {
         setCommandDecisions({});
         
       } else {
-        appendMessage("assistant", data.reply);
+        chat.appendMessage("assistant", data.reply);
       }
     } catch (err) {
-      setError(err.message || "Unexpected error");
+      chat.setError(err.message || "Unexpected error");
     } finally {
-      setIsSending(false);
+      chat.setIsSending(false);
     }
   };
 
@@ -212,7 +101,7 @@ const Troubleshooter = ({ username, reservation_id }) => {
 
   const handleSubmitApproval = async () => {
     setIsModalOpen(false);
-    setIsSending(true);
+    chat.setIsSending(true);
 
     const userApprovedCommands = pendingCommands.filter((_, idx) => commandDecisions[idx] === "accepted");
     const finalCommandsToExecute = [...safeCommandsBuffer, ...userApprovedCommands];
@@ -226,19 +115,20 @@ const Troubleshooter = ({ username, reservation_id }) => {
           context: currentContext,
           username: username,
           reservation_id: reservation_id,
-          chat_id: activeChatId
+          chat_id: chat.activeChatId,
+          llm_model: chat.selectedModel
         }),
       });
 
       if (!response.ok) throw new Error("Error during command execution");
       
       const data = await response.json();
-      appendMessage("assistant", data.reply);
+      chat.appendMessage("assistant", data.reply);
       
     } catch (err) {
-      setError("Error during command execution");
+      chat.setError("Error during command execution");
     } finally {
-      setIsSending(false);
+      chat.setIsSending(false);
     }
   };
 
@@ -261,64 +151,31 @@ const Troubleshooter = ({ username, reservation_id }) => {
 
   return (
     <div className="experiment-negotiation-container">
-      <div className="experiment-negotiation-header">
-        <h1>Diagnostic Troubleshooter</h1>
-      </div>
+      <ChatHeader 
+        title="Diagnostic Troubleshooter"
+        availableModels={chat.availableModels}
+        selectedModel={chat.selectedModel}
+        onModelChange={chat.setSelectedModel}
+        isDisabled={chat.isSending}
+      />
 
       <div className="experiment-negotiation-main">
-        <div className="experiment-negotiation-sidebar">
-          <button className="en-new-chat-btn" onClick={startNewChat} disabled={isSending}>New Chat</button>
-          {savedChats.length > 0 && (
-            <div className="en-add-files-row">
-              <span className="en-download-label">Download all sessions</span>
-              <button
-                className="en-download-chat-btn"
-                onClick={(e) => handleDownloadChat(null, e)}
-                title="Download All Chats"
-                disabled={isSending}
-              >
-                <img src="/downloadButton.png" alt="Download" className="en-download-icon-img" />
-              </button>
-            </div>
-          )}
-
-          <div className={isSending ? 'sidebar-disabled' : ''}>
-            <h3 className="sidebar-title">Recent Chats</h3>
-            {savedChats.length === 0 ? (
-              <p className="en-sidebar-empty">No previous conversations.</p>
-            ) : (
-              <ul className="en-chat-list">
-                {savedChats.map((chatId, index) => (
-                  <li key={chatId} className="en-chat-item-container">
-                    <button className="en-download-chat-btn" onClick={(e) => handleDownloadChat(chatId, e)} title="Download Chat Logs" disabled={isSending}>
-                      <img src="/downloadButton.png" alt="Download" className="en-download-icon-img" />
-                    </button>
-                    <button
-                      className={`en-chat-list-btn ${activeChatId === chatId ? "active" : ""}`}
-                      onClick={() => loadHistory(chatId)}
-                      disabled={isSending}
-                    >
-                      Session {savedChats.length - index}
-                    </button>
-                    <button
-                      className="en-delete-chat-btn"
-                      onClick={(e) => handleDeleteChat(chatId, e)}
-                      disabled={isSending}
-                      title="Delete Chat"
-                    >
-                      ×
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </div>
+        <ChatSidebar
+          savedChats={chat.savedChats}
+          activeChatId={chat.activeChatId}
+          isSending={chat.isSending}
+          disableListActions={false}
+          onNewChat={startNewChat}
+          onDownloadChat={handleDownloadChat}
+          onLoadHistory={(id) => chat.loadHistory(id)}
+          onDeleteChat={handleDeleteChat}
+          sessionLabel="Session"
+        />
 
         <div className="experiment-negotiation-chat">
           <div className="en-chat-window">
-            {messages.map(renderMessage)}
-            {isSending && (
+            {chat.messages.map(renderMessage)}
+            {chat.isSending && (
               <div className="en-message-bubble en-message-assistant">
                 <div className="en-message-role">Troubleshooter Agent</div>
                 <div className="en-message-content">Analyzing testbed, please wait...</div>
@@ -328,52 +185,31 @@ const Troubleshooter = ({ username, reservation_id }) => {
           </div>
 
           <form className="en-input-area" onSubmit={handleSubmit} autoComplete="off">
-            <div className="en-files-row">
-              <div className="en-add-files-row">               
-                <input id="en-file-input"  type="file"  disabled={isSending} multiple onChange={handleFileChange} className="en-file-input-hidden"/>
-                <button type="button" className={`en-file-button ${isSending ? 'en-send-button-disabled' : ''}`} disabled={isSending}
-                  onClick={() => {
-                    const input = document.getElementById("en-file-input");
-                    if (input) input.click();
-                  }}
-                >
-                  +
-                </button>
-                <span className="en-file-label">Add files</span> 
-              </div>
-              
-              {selectedFiles.length > 0 && (
-                <div className="en-file-list">
-                  {selectedFiles.map((f) => (
-                    <span key={f.name} className="en-file-pill">
-                      <span className="en-file-name">{f.name}</span>
-                      <button type="button" className="en-file-remove" onClick={() => handleRemoveFile(f.name)}>
-                        ×
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
+            <FileUploader
+              selectedFiles={chat.selectedFiles}
+              isInputDisabled={chat.isSending}
+              onFileChange={chat.handleFileChange}
+              onRemoveFile={chat.handleRemoveFile}
+            />
 
             <div className="en-input-row">
               <textarea
                 className="en-textarea"
-                value={inputValue}
-                onChange={handleInputChange}
+                value={chat.inputValue}
+                onChange={(e) => chat.setInputValue(e.target.value)}
                 placeholder="E.g., Verify if h1 can ping h2 or check BGP on sw1..."
                 rows={3}
-                disabled={isSending}
+                disabled={chat.isSending}
               />
               <button
                 type="submit"
-                className={`en-send-button ${((!inputValue.trim() && selectedFiles.length === 0) || isSending) ? "en-send-button-disabled" : ""}`}
-                disabled={(!inputValue.trim() && selectedFiles.length === 0) || isSending}
+                className={`en-send-button ${((!chat.inputValue.trim() && chat.selectedFiles.length === 0) || chat.isSending) ? "en-send-button-disabled" : ""}`}
+                disabled={(!chat.inputValue.trim() && chat.selectedFiles.length === 0) || chat.isSending}
               >
                 <span className="en-send-icon">↑</span>
               </button>
             </div>
-            {error && <div className="en-error-message">{error}</div>}
+            {chat.error && <div className="en-error-message">{chat.error}</div>}
           </form>
         </div>
       </div>

@@ -281,6 +281,25 @@
             PasswordAuthentication no
       notify: restart sshd
 
+    - name: Get management interface IP
+      ansible.builtin.shell: "ip -4 addr show {{ mgmt_iface }} | grep -w inet | awk '{print $2}' | cut -d/ -f1"
+      register: mgmt_ip_cmd
+      changed_when: false
+
+    - name: Calculate dynamic gateway IP
+      ansible.builtin.set_fact:
+        dynamic_gw: "{{ mgmt_ip_cmd.stdout.strip().split('.')[:3] | join('.') }}.1"
+
+    - name: Check if default route via {{ dynamic_gw }} exists
+      ansible.builtin.shell: "ip route show default | grep '{{ dynamic_gw }}'"
+      register: check_default_route
+      changed_when: false
+      failed_when: false
+
+    - name: Remove default route via {{ dynamic_gw }}
+      ansible.builtin.command: "ip route del default via {{ dynamic_gw }}"
+      when: check_default_route.rc == 0
+
   handlers:
     - name: validate sudoers
       ansible.builtin.command:
