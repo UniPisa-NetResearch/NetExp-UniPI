@@ -235,7 +235,7 @@ def run_parallel_commands(inventory_path: str, ops_list: list, reservation_id: s
                     dev_report.append(f"{device} [{intent}]: [ERROR] Intent '{intent}' not mapped for kind '{kind}'")
                     continue
 
-            report = execute_single_ansible_command(device=device, command=cmd_str, inventory_path=inventory_path, base_cmd=base_cmd, extra_vars=extra_vars, timeout=30)
+            report = execute_single_ansible_command(device=device, command=cmd_str, inventory_path=inventory_path, base_cmd=base_cmd, extra_vars=extra_vars, timeout=60)
             dev_report.append(report)
             
         return "\n-------------------------\n".join(dev_report) if dev_report else ""
@@ -1003,9 +1003,12 @@ def troubleshooter_chat():
 
 
     history.append({"role": "user", "content": message})
+
+    # filter execution_log messages
+    intent_history = [m for m in history if m.get("role") != "execution_log"]
     
     # Intent agent
-    is_valid, _, intent_json = get_validated_llm_reply(history, "diagnostic_intent", llm_model)
+    is_valid, _, intent_json = get_validated_llm_reply(intent_history, "diagnostic_intent", llm_model)
     if not is_valid:
         return jsonify({"error": "Failed intent evaluation"}), 500
 
@@ -1096,11 +1099,12 @@ def troubleshooter_chat():
 
     final_response = reporter_json.get("response", "Error during report generation")
 
-    # save only final message in the chat visible by user
+    # save execution log (hidden from the user) and final message in the chat visible by user
+    history.append({"role": "execution_log", "content": execution_report})
     history.append({"role": "assistant", "content": final_response})
     redis_client.set(session_key, json.dumps(history), ex=432000)
 
-    return jsonify({"reply": final_response, "chat_id": chat_id, "requires_approval": False}), 200
+    return jsonify({"reply": final_response, "chat_id": chat_id, "requires_approval": False, "execution_log": execution_report}), 200
 
 
 @app.route("/api/agent_server/troubleshooter/execute_approved", methods=["POST"])
@@ -1146,11 +1150,12 @@ def execute_approved_troubleshooter():
     session_key = f"agent_history:troubleshooter_chat:{username}:{reservation_id}:{chat_id}"
     history_str = redis_client.get(session_key)
     history = json.loads(history_str) if history_str else []
-    
+
+    history.append({"role": "execution_log", "content": execution_report})
     history.append({"role": "assistant", "content": final_response})
     redis_client.set(session_key, json.dumps(history), ex=432000)
 
-    return jsonify({"reply": final_response}), 200
+    return jsonify({"reply": final_response, "execution_log": execution_report}), 200
 
 if __name__ == "__main__":
     app.run(debug=True, host='0.0.0.0', port=5006, use_reloader=False)

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import ReactMarkdown from "react-markdown";
 import "./style/llmAgent.css";
 
 import { ChatSidebar, FileUploader, ChatHeader } from "./LLMAgents/SharedChatComponents";
@@ -75,6 +76,11 @@ const Troubleshooter = ({ username, reservation_id }) => {
         setCommandDecisions({});
         
       } else {
+        if (data.execution_log) {
+          
+          chat.appendMessage("execution_log", data.execution_log);
+        }
+        
         chat.appendMessage("assistant", data.reply);
       }
     } catch (err) {
@@ -123,6 +129,11 @@ const Troubleshooter = ({ username, reservation_id }) => {
       if (!response.ok) throw new Error("Error during command execution");
       
       const data = await response.json();
+
+      if (data.execution_log) {
+        chat.appendMessage("execution_log", data.execution_log);
+      }
+
       chat.appendMessage("assistant", data.reply);
       
     } catch (err) {
@@ -141,10 +152,56 @@ const Troubleshooter = ({ username, reservation_id }) => {
       displayContent = displayContent.replace(fileRegex, "\n[Attached file: $1]\n");
     }
 
+    if (message.role === "execution_log") {
+      // divide report with a delimiter
+      const reports = (displayContent || "").split('\n-------------------------\n').filter(Boolean);
+      
+      return (
+        <div key={message.id} className="en-message-bubble en-message-assistant en-message-execution-report">
+          <div className="en-message-role">Device Execution Logs</div>
+          <div className="en-message-content">
+            {reports.map((report, idx) => {
+              // separate command from the output
+              const splitIndex = report.indexOf(' |\n');
+              if (splitIndex === -1) {
+                return (
+                  <details key={idx} className="en-execution-log-details">
+                    <summary>
+                      <span className="en-execution-icon">▶</span>
+                    </summary>
+                    <pre>{report}</pre>
+                  </details>
+                );
+              }
+              const cmdPart = report.substring(0, splitIndex);
+              const outputPart = report.substring(splitIndex + 3);
+              
+              return (
+                <details key={idx} className="en-execution-log-details">
+                  <summary><span className="en-execution-icon">▶</span>{cmdPart}</summary>
+                  <pre>{outputPart}</pre>
+                </details>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
+    const useMarkdown = !isUser && typeof displayContent === "string" && displayContent.includes("DIAGNOSTIC REPORT");
+
     return (
       <div key={message.id} className={`en-message-bubble ${isUser ? 'en-message-user' : 'en-message-assistant'}`}>
         <div className="en-message-role">{isUser ? username : "Troubleshooter Agent"}</div>
-        <div className="en-message-content">{displayContent}</div>
+        <div className="en-message-content">
+          {useMarkdown ? (
+              <div className="en-markdown-layout">
+                <ReactMarkdown>{displayContent}</ReactMarkdown>
+              </div>
+          ) : (
+              <span className="en-plain-text">{displayContent}</span>
+          )}
+        </div>
       </div>
     );
   };

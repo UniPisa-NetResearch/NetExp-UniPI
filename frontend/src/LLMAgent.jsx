@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import ReactMarkdown from "react-markdown";
 import "./style/llmAgent.css";
 import { ChatSidebar, FileUploader, ChatHeader } from "./LLMAgents/SharedChatComponents";
 import { useAgentChat, sendChatRequest } from "./LLMAgents/useAgentChat";
@@ -402,6 +403,8 @@ const LLMAgent = ({ username, reservation_id}) => {
   const renderStructuredContent = (parsed) => {
     // list of fields to show without numbers
     const plainCommandFields = ["execution_plan", "verification", "executable_plan", "verification_plan"];
+    // list of fields that use markdown
+    const markdownFields = ["summary", "topology_diagram", "report", "context", "context_for_planning"];
     return (
       <div>
         {Object.entries(parsed).map(([key, value]) => (
@@ -409,13 +412,17 @@ const LLMAgent = ({ username, reservation_id}) => {
             {/* convert keys into readable section labels */}
             <strong className="en-backend-message-header"> {key.replace(/_/g, " ")} </strong>
             {/* add None for empty arrays or a list of items */}
-            {Array.isArray(value) ? (
+            {markdownFields.includes(key) ? (
+               <div className="en-markdown-layout">
+                  <ReactMarkdown>{String(value)}</ReactMarkdown>
+               </div>
+            ) :Array.isArray(value) ? (
               value.length === 0 ? (
                 <p className="en-backend-message-key">None</p>
               ) : plainCommandFields.includes(key) ? (
                 <div className="en-backend-message-list-plain">
                   {value.map((item, i) => (
-                    <div key={i} className="en-backend-message-list-element">{item}</div>
+                    <div key={i} className="en-backend-message-list-element">{typeof item === "string" ? item.trimStart() : item}</div>
                   ))}
                 </div>
               ) : (
@@ -423,13 +430,13 @@ const LLMAgent = ({ username, reservation_id}) => {
                   {value.map((item, i) => (
                     <div key={i} className="en-backend-message-numbered-row">
                       <span className="en-backend-message-number">{i + 1}.</span>
-                      <span className="en-backend-message-list-element">{item}</span>
+                      <span className="en-backend-message-list-element">{typeof item === "string" ? item.trimStart() : item}</span>
                     </div>
                   ))}
                 </div>
               )
             ) : (
-              <p className="en-backend-message-key">{String(value)}</p>
+              <div className="en-backend-message-key">{String(value)}</div>
             )}
           </div>
         ))}
@@ -448,11 +455,33 @@ const LLMAgent = ({ username, reservation_id}) => {
       const fileRegex = /--- Start attached file content: (.*?) ---[\s\S]*?--- End attached file content: \1 ---/g;
       // show the file name in the user message and remove the content for better readability
       displayContent = displayContent.replace(fileRegex, "\n[Attached file: $1]\n");
+
+      // the content between these xml tags is formatted as markdown, other fields as normal text
+      const regex = /(<(?:experiment_context|device_report|execution_results|execution_report)>)([\s\S]*?)(<\/(?:experiment_context|device_report|execution_results|execution_report)>)/g;
+      const parts = displayContent.split(regex);
       
       return (
         <div key={message.id} className="en-message-bubble en-message-user">
           <div className="en-message-role">{username}</div>
-          <div className="en-message-content">{displayContent}</div>
+          <div className="en-message-content">
+            {parts.map((part, index) => {
+              // skip empty strings
+              if (!part) return null;
+              
+              // in a split with 3 groups (<...>), ([\s\S]*?), (<\/ ...>)   
+              // even indexes always correspond to internal content
+              if (index % 4 === 2) {
+                const markdownText = part.replace(/\n/g, '  \n');
+                return (
+                  <div key={index} className="en-markdown-layout"><ReactMarkdown>{markdownText}</ReactMarkdown></div>
+                );
+              }
+            
+              return (
+                <span key={index} className="en-plain-text">{part}</span>
+              );
+            })}
+          </div>
         </div>
       );
     }
@@ -487,9 +516,9 @@ const LLMAgent = ({ username, reservation_id}) => {
           {formattedContent ? (
             formattedContent
             ) : (
-              <span style={{ whiteSpace: "pre-wrap" }}>
-                {typeof displayContent === "string" ? displayContent : JSON.stringify(displayContent, null, 2)}
-              </span>
+              <div className="en-markdown-layout">
+                <ReactMarkdown>{typeof displayContent === "string" ? displayContent : JSON.stringify(displayContent, null, 2)}</ReactMarkdown>
+              </div>
             )}
         </div>
       </div>
