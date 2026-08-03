@@ -15,12 +15,25 @@ const Troubleshooter = ({ username, reservation_id }) => {
   const [safeCommandsBuffer, setSafeCommandsBuffer] = useState([]);
   const [currentContext, setCurrentContext] = useState("");
   const [commandDecisions, setCommandDecisions] = useState({});
-  
+  // execution progress states
+  const [troubleshooterPhases, setTroubleshooterPhases] = useState([]);
+  const [currentProgressPhase, setCurrentProgressPhase] = useState(null);
+
+  const phaseDescriptions = [
+    "Request analysis and problem identification...",
+    "Scheduling diagnostic commands to run...",
+    "Reading network status from devices...",
+    "Preparation and generation of the final report..."
+  ];
+
   // fetch of previous sessions
   useEffect(() => {
 
-    chat.fetchSessions();
-
+    chat.fetchSessions("troubleshooter_chat").then(data => {
+      if(data && data.troubleshooter_phases_order){
+        setTroubleshooterPhases(data.troubleshooter_phases_order);
+      }
+    });
   }, [chat.fetchSessions]);
 
   const startNewChat = () => chat.resetBaseChat();
@@ -42,6 +55,68 @@ const Troubleshooter = ({ username, reservation_id }) => {
 
   };
 
+  const formatPhaseName = (phaseString, index) => {
+    if (!phaseString) return "";
+
+    // use predefined sentences for known phases, otherwise format the string dynamically
+    if (phaseDescriptions[index]) {
+      return phaseDescriptions[index];
+    }
+
+    return phaseString.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+  };
+
+  const runTroubleshooterPipeline = async (initialPayload, initialFiles) => {
+    let payload = { ...initialPayload };
+    let currentFiles = initialFiles;
+    chat.setIsSending(true);
+
+    try {
+      while (payload.current_phase) {
+        setCurrentProgressPhase(payload.current_phase);
+
+        const data = await sendChatRequest("/api/agent_server/troubleshooter/chat", payload, currentFiles);
+        currentFiles = []; // files are sent only in the intent phase
+
+        if (data.chat_id && !payload.chat_id) {
+          payload.chat_id = data.chat_id;
+          chat.setActiveChatId(data.chat_id);
+
+          chat.setSavedChats((prev) => [...new Set([data.chat_id, ...prev])]);
+        }
+
+        if (data.requires_approval) {
+          setPendingCommands(data.commands);
+          setSafeCommandsBuffer(data.safe_commands || []);
+          setCurrentContext(data.context || "");
+          setIsModalOpen(true);
+          setCommandDecisions({});
+          chat.setIsSending(false); 
+          return; 
+        }
+
+        // show agent reply and execution log if are present (last iteration or intent request rejected)
+        if (data.execution_log) chat.appendMessage("execution_log", data.execution_log);
+        if (data.reply) chat.appendMessage("assistant", data.reply);
+
+        // payload for next step
+        if (data.next_phase) {
+          payload.current_phase = data.next_phase;
+          if (data.context) payload.context = data.context;
+          if (data.safe_commands) payload.safe_commands = JSON.stringify(data.safe_commands);
+          if (data.execution_report) payload.execution_report = data.execution_report;
+        } else {
+          payload.current_phase = null; // end of the cycle
+        }
+      }
+    } catch (err) {
+      chat.setError(err.message || "Unexpected error");
+    } finally {
+      chat.setIsSending(false);
+      setCurrentProgressPhase(null);
+    }
+  };
+
   const handleSubmit = async (e) => {
     if (e) e.preventDefault();
 
@@ -51,43 +126,12 @@ const Troubleshooter = ({ username, reservation_id }) => {
     chat.setError(null);
     chat.appendMessage("user", textToSend || "[Attached file]");
     chat.setInputValue("");
-    chat.setIsSending(true);
+    
+    const initialPayload = {message: textToSend, username, reservation_id, chat_id: chat.activeChatId, llm_model: chat.selectedModel, current_phase: "diagnostic_intent"};
 
-    try {
+    await runTroubleshooterPipeline(initialPayload, chat.selectedFiles);
+    chat.setSelectedFiles([]);
 
-      const data = await sendChatRequest("/api/agent_server/troubleshooter/chat", {
-        message: textToSend, username, reservation_id, chat_id: chat.activeChatId,
-        llm_model: chat.selectedModel
-      }, chat.selectedFiles);
-
-      if (data.chat_id && !chat.activeChatId) {
-        chat.setActiveChatId(data.chat_id);
-        chat.setSavedChats((prev) => [data.chat_id, ...prev]);
-      }
-
-      chat.setSelectedFiles([]);
-
-      // check if diagnostic_intent requires more information
-      if (data.requires_approval) {
-        setPendingCommands(data.commands);
-        setSafeCommandsBuffer(data.safe_commands || []);
-        setCurrentContext(data.context || "");
-        setIsModalOpen(true);
-        setCommandDecisions({});
-        
-      } else {
-        if (data.execution_log) {
-          
-          chat.appendMessage("execution_log", data.execution_log);
-        }
-        
-        chat.appendMessage("assistant", data.reply);
-      }
-    } catch (err) {
-      chat.setError(err.message || "Unexpected error");
-    } finally {
-      chat.setIsSending(false);
-    }
   };
 
   const handleApproveAll = () => {
@@ -108,41 +152,25 @@ const Troubleshooter = ({ username, reservation_id }) => {
   const handleSubmitApproval = async () => {
     setIsModalOpen(false);
     chat.setIsSending(true);
+    // restart execution from execution phase with approved commands
+    setCurrentProgressPhase("execution");
 
     const userApprovedCommands = pendingCommands.filter((_, idx) => commandDecisions[idx] === "accepted");
-    const finalCommandsToExecute = [...safeCommandsBuffer, ...userApprovedCommands];
+    
+    const resumePayload = {
+      username, 
+      reservation_id, 
+      chat_id: chat.activeChatId, 
+      llm_model: chat.selectedModel,
+      current_phase: "execution",
+      context: currentContext,
+      safe_commands: JSON.stringify(safeCommandsBuffer),
+      approved_commands: JSON.stringify(userApprovedCommands)
+    };
 
-    try {
-      const response = await fetch("/api/agent_server/troubleshooter/execute_approved", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          approved_commands: finalCommandsToExecute,
-          context: currentContext,
-          username: username,
-          reservation_id: reservation_id,
-          chat_id: chat.activeChatId,
-          llm_model: chat.selectedModel
-        }),
-      });
-
-      if (!response.ok) throw new Error("Error during command execution");
-      
-      const data = await response.json();
-
-      if (data.execution_log) {
-        chat.appendMessage("execution_log", data.execution_log);
-      }
-
-      chat.appendMessage("assistant", data.reply);
-      
-    } catch (err) {
-      chat.setError("Error during command execution");
-    } finally {
-      chat.setIsSending(false);
-    }
+    await runTroubleshooterPipeline(resumePayload, []);
   };
-
+  
   const renderMessage = (message) => {
     const isUser = message.role === "user";
     let displayContent = message.content;
@@ -154,7 +182,7 @@ const Troubleshooter = ({ username, reservation_id }) => {
 
     if (message.role === "execution_log") {
       // divide report with a delimiter
-      const reports = (displayContent || "").split('\n-------------------------\n').filter(Boolean);
+      const reports = displayContent.split(/[\r\n]*-{20,}[\r\n]*/).filter(Boolean);
       
       return (
         <div key={message.id} className="en-message-bubble en-message-assistant en-message-execution-report">
@@ -162,7 +190,7 @@ const Troubleshooter = ({ username, reservation_id }) => {
           <div className="en-message-content">
             {reports.map((report, idx) => {
               // separate command from the output
-              const splitIndex = report.indexOf(' |\n');
+              const splitIndex = report.indexOf(' |');
               if (splitIndex === -1) {
                 return (
                   <details key={idx} className="en-execution-log-details">
@@ -173,8 +201,8 @@ const Troubleshooter = ({ username, reservation_id }) => {
                   </details>
                 );
               }
-              const cmdPart = report.substring(0, splitIndex);
-              const outputPart = report.substring(splitIndex + 3);
+              const cmdPart = report.substring(0, splitIndex).trim();
+              const outputPart = report.substring(splitIndex + 2).trim();
               
               return (
                 <details key={idx} className="en-execution-log-details">
@@ -188,7 +216,7 @@ const Troubleshooter = ({ username, reservation_id }) => {
       );
     }
 
-    const useMarkdown = !isUser && typeof displayContent === "string" && displayContent.includes("DIAGNOSTIC REPORT");
+    const useMarkdown = !isUser && typeof displayContent === "string" && (displayContent.includes("DIAGNOSTIC REPORT") || displayContent.includes("CONFIGURATION REPORT"));
 
     return (
       <div key={message.id} className={`en-message-bubble ${isUser ? 'en-message-user' : 'en-message-assistant'}`}>
@@ -232,10 +260,29 @@ const Troubleshooter = ({ username, reservation_id }) => {
         <div className="experiment-negotiation-chat">
           <div className="en-chat-window">
             {chat.messages.map(renderMessage)}
-            {chat.isSending && (
-              <div className="en-message-bubble en-message-assistant">
+            {chat.isSending && currentProgressPhase && troubleshooterPhases.length > 0 && (
+              <div className="en-message-bubble en-message-assistant en-progress-bubble">
                 <div className="en-message-role">Troubleshooter Agent</div>
-                <div className="en-message-content">Analyzing testbed, please wait...</div>
+                <div className="en-message-content">
+                  <p className="en-progress-title">
+                    Analyzing testbed, please wait...
+                  </p>
+                  <div className="en-troubleshooter-progress">
+                    {troubleshooterPhases.map((phaseKey, idx) => {
+                      const currentIndex = troubleshooterPhases.indexOf(currentProgressPhase);
+                      const isActive = idx === currentIndex;
+                      const isCompleted = idx < currentIndex;
+                      return (
+                        <div key={idx} className={`en-progress-item ${isActive ? 'active' : ''} ${isCompleted ? 'completed' : ''}`}>
+                          <span className="en-progress-icon">
+                            {isCompleted ? '✓' : isActive ? '●' : '○'}
+                          </span>
+                          <span className="en-progress-text">{formatPhaseName(phaseKey, idx)}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
             )}
             <div ref={chatEndRef} />
