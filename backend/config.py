@@ -66,18 +66,13 @@ USER_QUOTA_BYTES =536870912
 
 # LLM parameters
 LLM_MODEL = "deepseek-v4-flash:cloud"                           
-AVAILABLE_MODELS = [
-    "gemini-3.1-flash-lite", 
-    "glm-5.1:cloud", 
-    "deepseek-v4-flash:cloud", 
-    "qwen3.5:397b-cloud", 
-    "deepseek-v4-pro:cloud", 
-    "gemma4:cloud"
-]
+AVAILABLE_MODELS = ["gemini-3.1-flash-lite", "glm-5.1:cloud", "deepseek-v4-flash:cloud", "qwen3.5:397b-cloud", "deepseek-v4-pro:cloud", "gemma4:cloud"]
 OPENAI_API_KEY = os.getenv("GEMINI_API_KEY")        
 AVAILABLE_BASE_URLS = ["https://generativelanguage.googleapis.com/v1beta/openai/", "http://localhost:11434/v1"]
 SAFETY_ITERATIONS = 3
 JSON_RETRIES = 3
 PHASES_ORDER = ['negotiation', 'planning', 'safety', 'execution']
+TROUBLESHOOTER_PHASES_ORDER = ["diagnostic_intent", "diagnostic_planner", "execution", "diagnostic_reporter"]
 LLM_TIMEOUT_SECONDS = 300
-LLM_MAX_OUTPUT_TOKENS = 16384                                   #16384 - 32768  
+LLM_MAX_OUTPUT_TOKENS = 16384                                   #16384 - 32768
+MAX_TROUBLESHOOTER_MESSAGES = 3

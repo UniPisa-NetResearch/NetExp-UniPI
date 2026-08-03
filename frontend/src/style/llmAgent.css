@@ -70,14 +70,17 @@
 .en-message-bubble {
   max-width: 80%;
   margin-bottom: 14px;
-  padding: 12px 16px;
+  padding: 12px 18px;
   border-radius: 14px;
-  font-size: 15px;
-  line-height: 1.5;
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 17px;
+  line-height: 1.6;
+  letter-spacing: 0.15px;
   overflow-wrap: break-word;
 }
 
 .en-message-user {
+  font-weight: 400;
   margin-left: auto;
   background-color: #084dc2;
   color: #ffffff;
@@ -86,9 +89,10 @@
 }
 
 .en-message-assistant {
+  font-weight: 400;
   margin-right: auto;
   background-color: #e8f0ff;
-  color: #0b2e6b;
+  color: #1a2942;;
   border-bottom-left-radius: 2px;
   border: 1px solid #d0dcf5;
 }
@@ -575,6 +579,7 @@
   opacity: 0.7; 
   display: block;
   margin: 0 0 4px 0;
+  letter-spacing: 0.3px;
 }
 .en-plain-text {
   white-space: pre-wrap;
@@ -958,6 +963,55 @@ input:disabled + .en-slider:before {
   overflow-y: auto;
   white-space: pre-wrap;
   word-break: break-all;
+}
+.en-troubleshooter-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background-color: #ffffff;
+  border: 1px solid #d4e1ff;
+  border-radius: 8px;
+  padding: 8px;
+}
+.en-progress-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13.5px;
+  color: #7b95cc;
+  padding: 8px 12px;
+  border-radius: 6px;
+  border-left: 3px solid transparent;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+.en-progress-item.active {
+  color: #0b2e6b;
+  font-weight: 700;
+  background-color: #e8f0ff;
+  border-left: 3px solid #0b6efb;
+}
+.en-progress-item.completed {
+  color: #27ae60;
+}
+.en-progress-icon {
+  color: #0b2e6b;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  font-weight: bold;
+  font-size: 16px;
+}
+.en-progress-bubble {
+  background-color: #f6f8fc;
+  border: 1px solid #d4e1ff;
+}
+.en-progress-title {
+  margin: 0 0 12px 0;
+  font-weight: 600;
+  color: #0b2e6b;
+  font-size: 14px;
 }
 @media (max-width: 900px) {
   .experiment-negotiation-main {
