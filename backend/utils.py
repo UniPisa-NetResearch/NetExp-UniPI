@@ -58,6 +58,35 @@ def parse_inventory(inventory_path: str, return_hosts_only: bool = False, return
 
     return result
 
+# read every field of each device inside the inventory
+def parse_complete_inventory_hosts(inventory_path):
+    hosts = {}
+    with open(inventory_path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or line.startswith("["):
+                continue
+            parts = line.split()
+            name = parts[0]
+            info = {"host": None, "user": None, "password": None, "become": False, "become_pass": None, "role": "host", "iface": "eth0"}
+            for p in parts[1:]:
+                if p.startswith("ansible_host="):
+                    info["host"] = p.split("=", 1)[1]
+                elif p.startswith("ansible_user="):
+                    info["user"] = p.split("=", 1)[1]
+                elif p.startswith("ansible_ssh_pass="):
+                    info["password"] = p.split("=", 1)[1]
+                elif p.startswith("ansible_become="):
+                    info["become"] = p.split("=", 1)[1].lower() == "yes"
+                elif p.startswith("ansible_become_pass="):
+                    info["become_pass"] = p.split("=", 1)[1]
+                elif p.startswith("role="):
+                    info["role"] = p.split("=", 1)[1]
+                elif p.startswith("res_iface="):
+                    info["iface"] = p.split("=", 1)[1]
+            hosts[name] = info
+    return hosts
+
 def resolve_netbox_device(dev, nb=None, fetch_interface: bool = False) -> dict:
     #extract common fields from a pynetbox device object
 
