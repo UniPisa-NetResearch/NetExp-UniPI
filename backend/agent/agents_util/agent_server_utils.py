@@ -8,10 +8,12 @@ import yaml
 import paramiko
 import socket
 import threading
+import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from ..llm_client import chat_with_llm
-from .prompts import ALLOWED_DIAGNOSTIC_COMMANDS, DEVICE_KIND_RULES, READ_INTENTS, AGENT_PROMPTS, FORBIDDEN_RULES
-from ...config import REDIS_HOST, REDIS_PORT, REDIS_DB, CONTAINERLAB_HOST, CONTAINERLAB_HOST_USER, JSON_RETRIES, SAFETY_ITERATIONS
+from ...app import app
+from ..llm_client import chat_with_llm, chat_with_llm_stream
+from .prompts import ALLOWED_DIAGNOSTIC_COMMANDS, DEVICE_KIND_RULES, READ_INTENTS, AGENT_PROMPTS, FORBIDDEN_RULES, TROUBLESHOOTER_PROMPTS
+from ...config import REDIS_HOST, REDIS_PORT, REDIS_DB, CONTAINERLAB_HOST, CONTAINERLAB_HOST_USER, JSON_RETRIES, SAFETY_ITERATIONS, MAX_TROUBLESHOOTER_MESSAGES
 from ...utils import get_is_virtual_from_db, parse_complete_inventory_hosts
 
 # redis store for conversation history, keyed by username and reservation_id
@@ -682,3 +684,269 @@ def handle_chat_logic(username, reservation_id, chat_id, agent_role, message, ll
         return {"reply": reply, "chat_id": chat_id, "reasoning_steps": reasoning_steps}, 200
     except Exception as e:
         return {"error": str(e)}, 500
+
+# call client function to send request to the llm and receive the reasoning in stream mode and the real output
+def consume_llm_stream_with_retries(llm_history, role, llm_model):
+        print(f"[DEBUG SSE] Start stream for: {role} (Max Retries: {JSON_RETRIES})")
+
+        for attempt in range(JSON_RETRIES):
+            print(f"[DEBUG SSE] --- Attempt {attempt + 1}/{JSON_RETRIES} ---")
+            full_json_str = ""
+            stream_error = None
+        
+            try:
+                # until the request has been entirely processed call the stream function in the client
+                for chunk in chat_with_llm_stream(llm_history, llm_model):
+                    
+                    if chunk["type"] == "thought":
+                        # instantly send the reasoning to show in the user interface
+                        yield f"data: {json.dumps({'type': 'thought', 'content': chunk['content']})}\n\n"
+                    
+                    elif chunk["type"] == "content":
+                        # collect the real output without sending to the client
+                        full_json_str += chunk["content"]
+
+                    elif chunk["type"] == "error":
+                        stream_error = chunk["content"]
+
+                # when the response is processed, get the entire json and remove possible characters like ```json between curly brackets
+                clean_json_str = full_json_str
+                json_match = re.search(r'```(?:json)?\s*(\{.*\})\s*```', full_json_str, re.DOTALL)
+
+                # maintain only real json content
+                if json_match:
+                    clean_json_str = json_match.group(1)
+                else:
+                    start = full_json_str.find('{')
+                    end = full_json_str.rfind('}')
+                    if start != -1 and end != -1 and end > start:
+                        clean_json_str = full_json_str[start:end+1]
+
+                print(f"[DEBUG SSE] Stream completed. Start JSON validation.")
+
+                is_valid = False
+                parsed_data_or_error = None
+
+                if stream_error:
+                    is_valid = False
+                    parsed_data_or_error = f"System/API issue: {stream_error}"
+                else:
+                    # validate the entire json
+                    is_valid, parsed_data_or_error = validate_json_format(clean_json_str, role)
+
+                if is_valid:
+                    print(f"[DEBUG SSE] Valid json at attempt {attempt + 1}.")
+                    return (True, parsed_data_or_error)
+
+                print(f"[DEBUG SSE] Failed validation at attempt {attempt + 1}. Error: {parsed_data_or_error}")
+                
+                if attempt < JSON_RETRIES - 1:
+                    # inform the user that the model will think again for the same phase due to an error
+                    yield f"data: {json.dumps({'type': 'thought', 'content': f'\n\n[System: JSON validation faled. Autocorrection attempt {attempt+2}/{JSON_RETRIES} in progress...]\n\n'})}\n\n"
+                    
+                    # update history so that the LLM can autocorrect in the next loop iteration
+                    llm_history.append({"role": "assistant", "content": full_json_str})
+                    llm_history.append({
+                        "role": "user", 
+                        "content": f"Your previous response failed because of an error: {parsed_data_or_error}. You MUST NOT return an empty or truncated response. Please generate a new complete response in valid JSON following the mandatory structure."
+                    })
+
+            except Exception as stream_err:
+                print(f"[DEBUG SSE] Error during stream process: {stream_err}")
+                return (False, {"error": str(stream_err)})
+
+        print(f"[DEBUG SSE] Maximum number of attempts reached.")
+        return (False, {"error": "Max JSON retries reached."})
+
+# manage troubleshooter flow with streaming of reasoning
+def generate_troubleshooter_sse(history, request_data):
+    print("[DEBUG SSE] Start SSE generator...")
+
+    reservation_id = request_data['reservation_id']
+    chat_id = request_data['chat_id']
+    message = request_data['message']
+    llm_model = request_data['llm_model']
+    current_phase = request_data['current_phase']
+    context = request_data['context']
+    execution_report = request_data['execution_report']
+    safe_commands = request_data['safe_commands']
+    approved_commands = request_data['approved_commands']
+    session_key = request_data['session_key']    
+
+    # context to call the database
+    with app.app_context():
+        
+        try:
+            if current_phase == "diagnostic_intent":
+                # find the index of the last generated summary
+                last_summary_idx = -1
+                for i in range(len(history) - 1, -1, -1):
+                    if history[i].get("role") == "summary":
+                        last_summary_idx = i
+                        break
+
+                # first message after last summary
+                start_idx = last_summary_idx + 1 if last_summary_idx != -1 else 1
+                # number of user messages since last summary
+                user_msg_count = sum(1 for m in history[start_idx:] if m.get("role") == "user")
+
+                # if the limit is surpassed, generate a new summary
+                if user_msg_count >= MAX_TROUBLESHOOTER_MESSAGES:
+                    summarizer_sys_prompt = TROUBLESHOOTER_PROMPTS["diagnostic_summarizer"]
+                    summarizer_history = [{"role": "system", "content": summarizer_sys_prompt}]
+
+                    # send to summarizer the last generated summary if exists
+                    if last_summary_idx != -1:
+                        summarizer_history.append({"role": "system", "content": f"<previous_chat_summary>\n{history[last_summary_idx]['content']}\n</previous_chat_summary>"})
+
+                        # add every message after the last summary, except execution_log type messages
+                    for m in history[start_idx:]:
+                        if m.get("role") != "execution_log":
+                            summarizer_history.append(m)
+
+                    # add a temporary message to instruct summarizer to create the summary (the agent return with stop error if the last message is a system message)
+                    summarizer_history.append({"role": "user", "content": "Please generate the JSON summary of the conversation above based exactly on your system instructions."})
+                    
+                    is_valid_sum, _, summary_json = get_validated_llm_reply(summarizer_history, "diagnostic_summarizer", llm_model)
+
+                    if is_valid_sum:
+                        # append summary in the history
+                        history.append({"role": "summary", "content": summary_json.get("summary", "")})
+                        print("[DEBUG] Chat limit reached. New summary appended to global history.")
+
+                        # update indexes
+                        last_summary_idx = len(history) - 1
+                        start_idx = last_summary_idx + 1
+
+                # append user message
+                history.append({"role": "user", "content": message})
+
+                # create active window to send to the intent agent, send the summary as temporary system message, in redis is saved as summary message to retrieve easily the last summary
+                active_window = [history[0]]
+                if last_summary_idx != -1:
+                    active_window.append({"role": "system", "content": f"<previous_chat_summary>\n{history[last_summary_idx]['content']}\n</previous_chat_summary>"})
+
+                # add messages from the last summary to the end of the history
+                active_window.extend(history[start_idx:])
+
+                # filter execution_log messages
+                intent_history = [m for m in active_window if m.get("role") != "execution_log"]
+
+                # Intent agent
+                is_valid, intent_json = yield from consume_llm_stream_with_retries(intent_history, "diagnostic_intent", llm_model)
+                if not is_valid:
+                    print("[DEBUG SSE] Intent validation failed")
+                    yield f"data: {json.dumps({'type': 'result', 'data': {'error': 'Failed intent evaluation'}})}\n\n"
+                    return
+
+                status = intent_json.get("status", "").upper()
+                response_msg = intent_json.get("response", "")
+                next_context = intent_json.get("context", "")
+                print(f"[DEBUG SSE] Intent Status: {status}")
+
+                if status == "REJECTED":
+                    history.append({"role": "assistant", "content": response_msg})
+                    redis_client.set(session_key, json.dumps(history), ex=432000)
+                    yield f"data: {json.dumps({'type': 'result', 'data': {'reply': response_msg, 'chat_id': chat_id, 'requires_approval': False, 'next_phase': None}})}\n\n"
+                else:
+                    redis_client.set(session_key, json.dumps(history), ex=432000)
+                    yield f"data: {json.dumps({'type': 'result', 'data': {'chat_id': chat_id, 'requires_approval': False, 'context': next_context, 'next_phase': 'diagnostic_planner'}})}\n\n"
+
+
+            elif current_phase == "diagnostic_planner":
+                planner_sys_prompt = TROUBLESHOOTER_PROMPTS["diagnostic_planner"]
+                dynamic_rules = get_dynamic_device_rules("diagnostic_planner")
+
+                if dynamic_rules: 
+                    planner_sys_prompt += f"\n<device_specific_rules>\n{dynamic_rules}\n</device_specific_rules>\n"
+
+                planner_sys_prompt += f"\n\n<topology>\n```yaml\n{testbed_topology}\n```\n</topology>\n"
+                
+                # Planner agent
+                planner_history = [{"role": "system", "content": planner_sys_prompt}, {"role": "user", "content": f"<context>\n{context}\n</context>"}]
+
+                is_valid, planner_json = yield from consume_llm_stream_with_retries(planner_history, "diagnostic_planner", llm_model)
+                if not is_valid:
+                    yield f"data: {json.dumps({'type': 'result', 'data': {'error': 'Failed planner evaluation'}})}\n\n"
+                    return
+
+                diag_cmds = planner_json.get("diagnostic_commands", [])
+                approve_cmds = planner_json.get("commands_to_approve", [])
+                safe_cmds = []
+                pending_cmds = approve_cmds.copy()
+                
+                print(f"[DEBUG SSE] Planner ended. Safe commands: {len(diag_cmds)}, Commands to approve: {len(approve_cmds)}")
+
+                for cmd_str in diag_cmds:
+                    if ":" in cmd_str:
+                        dev, cmd = cmd_str.split(":", 1)
+                        if is_command_whitelisted(cmd): safe_cmds.append(cmd_str)
+                        else: pending_cmds.append(cmd_str)
+
+                if pending_cmds:
+                    # ask approval to the frontend
+                    # return context and chat_id so that the fontend resend this data
+                    yield f"data: {json.dumps({'type': 'result', 'data': {'chat_id': chat_id, 'requires_approval': True, 'commands': pending_cmds, 'safe_commands': safe_cmds, 'context': context, 'next_phase': 'execution'}})}\n\n"
+                else:
+                    yield f"data: {json.dumps({'type': 'result', 'data': {'chat_id': chat_id, 'requires_approval': False, 'safe_commands': safe_cmds, 'context': context, 'next_phase': 'execution'}})}\n\n"
+
+
+            elif current_phase == "execution":
+                raw_commands_to_run = safe_commands + approved_commands
+                commands_to_run = []
+
+                # add count or timeout to possible infinite read commands, read only last 50 raws of log files
+                for cmd_str in raw_commands_to_run:
+                    if ":" in cmd_str:
+                        dev, cmd = cmd_str.split(":", 1)
+                        cmd = cmd.strip()
+                        if cmd.startswith("ping ") and "-c" not in cmd:
+                            cmd = cmd.replace("ping ", "ping -c 4 ", 1)
+                        elif (cmd.startswith("iperf ") or cmd.startswith("iperf3 ")) and "-t" not in cmd:
+                            cmd = cmd.replace("iperf", "iperf -t 10", 1)
+                        elif "tcpdump" in cmd and "timeout" not in cmd:
+                            cmd = f"timeout 10 {cmd}"
+                        elif cmd.startswith("cat /var/log/"):
+                            cmd = cmd.replace("cat ", "tail -n 50 ", 1)
+                        commands_to_run.append(f"{dev}: {cmd}")
+                    else:
+                        commands_to_run.append(cmd_str)
+                
+                if not commands_to_run:
+                    exec_report = "[SYSTEM LOG]: The user rejected all proposed commands. No read operations were performed. Inform the user that you cannot complete the analysis without executing the commands, and ask them to try again or rephrase their request."
+                else:
+                    base_dir = os.path.dirname(os.path.abspath(__file__))
+                    inventory_path = os.path.abspath(os.path.join(base_dir, "..", "..", "controller", "inventories", f"res-{reservation_id}-inventory.ini"))
+                    
+                    exec_report = run_parallel_commands(inventory_path, commands_to_run, reservation_id, is_intent=False)
+
+                yield f"data: {json.dumps({'type': 'result', 'data': {'chat_id': chat_id, 'requires_approval': False, 'execution_report': exec_report, 'context': context, 'next_phase': 'diagnostic_reporter'}})}\n\n"
+
+
+            elif current_phase == "diagnostic_reporter":
+                reporter_sys_prompt = TROUBLESHOOTER_PROMPTS["diagnostic_reporter"]
+                reporter_sys_prompt += f"\n\n<topology>\n```yaml\n{testbed_topology}\n```\n</topology>\n"
+                
+                # Reporter agent
+                reporter_history = [{"role": "system", "content": reporter_sys_prompt}, {"role": "user", "content": f"<context>\n{context}\n</context>\n<execution_report>\n{execution_report}\n</execution_report>"}]
+            
+                is_valid, reporter_json = yield from consume_llm_stream_with_retries(reporter_history, "diagnostic_reporter", llm_model)
+                if not is_valid:
+                    yield f"data: {json.dumps({'type': 'result', 'data': {'error': 'Failed reporter evaluation'}})}\n\n"
+                    return
+
+                final_response = reporter_json.get("response", "Error during report generation")
+
+                # save execution log (hidden from the user) and final message in the chat visible by user
+                history.append({"role": "execution_log", "content": execution_report})
+                history.append({"role": "assistant", "content": final_response})
+                redis_client.set(session_key, json.dumps(history), ex=432000)
+
+                yield f"data: {json.dumps({'type': 'result', 'data': {'reply': final_response, 'chat_id': chat_id, 'requires_approval': False, 'execution_log': execution_report, 'next_phase': None}})}\n\n"
+
+        except Exception as e:
+            print(f"\n[DEBUG SSE] Exception in SSE fgenerator: {str(e)}")
+            traceback.print_exc()
+            yield f"data: {json.dumps({'type': 'result', 'data': {'error': str(e)}})}\n\n"
+        
+        print("[DEBUG SSE] SSE generator ended \n" + "="*50)

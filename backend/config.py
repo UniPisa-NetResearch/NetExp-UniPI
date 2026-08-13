@@ -75,4 +75,4 @@ PHASES_ORDER = ['negotiation', 'planning', 'safety', 'execution']
 TROUBLESHOOTER_PHASES_ORDER = ["diagnostic_intent", "diagnostic_planner", "execution", "diagnostic_reporter"]
 LLM_TIMEOUT_SECONDS = 300
 LLM_MAX_OUTPUT_TOKENS = 16384                                   #16384 - 32768
-MAX_TROUBLESHOOTER_MESSAGES = 3
+MAX_TROUBLESHOOTER_MESSAGES = 10
