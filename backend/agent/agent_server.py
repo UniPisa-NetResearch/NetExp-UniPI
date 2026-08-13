@@ -4,14 +4,14 @@ import time
 import os
 import io
 import zipfile
-from flask import request, jsonify, send_file
+from flask import request, jsonify, send_file, Response
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from ..app import app
 from ..utils import parse_complete_inventory_hosts
-from ..config import PHASES_ORDER, AVAILABLE_MODELS, LLM_MODEL, TROUBLESHOOTER_PHASES_ORDER, MAX_TROUBLESHOOTER_MESSAGES
+from ..config import PHASES_ORDER, AVAILABLE_MODELS, LLM_MODEL, TROUBLESHOOTER_PHASES_ORDER
 from .agents_util.prompts import ROLLBACK_BASE_CMD, TROUBLESHOOTER_PROMPTS
-from .agents_util.agent_server_utils import (redis_client, testbed_topology, is_command_whitelisted, get_dynamic_device_rules, open_ssh_connections, close_ssh_connections, 
-                                             execute_single_ssh_command, run_agent_execution_plan, run_parallel_commands, validate_json_format, get_validated_llm_reply, handle_chat_logic)
+from .agents_util.agent_server_utils import (redis_client, testbed_topology, open_ssh_connections, close_ssh_connections, execute_single_ssh_command, 
+                                             run_agent_execution_plan, run_parallel_commands, validate_json_format, handle_chat_logic, generate_troubleshooter_sse)
 
 
 @app.route("/api/agent_server/chat", methods=["POST"])
@@ -31,7 +31,6 @@ def chat():
     result, status_code = handle_chat_logic(username, reservation_id, chat_id, agent_role, message, llm_model, files, is_manual_chat)
     return jsonify(result), status_code
 
-    
 @app.route("/api/agent_server/advance", methods=["POST"])
 def advance_agent():
     data = request.get_json()
@@ -378,201 +377,45 @@ def rollback_experiment():
 
 @app.route("/api/agent_server/troubleshooter/chat", methods=["POST"])
 def troubleshooter_chat():
-    username = request.form.get("username", "")
-    reservation_id = request.form.get("reservation_id", "")
-    chat_id = request.form.get("chat_id", "")
-    message = request.form.get("message", "")
-    llm_model = request.form.get("llm_model", LLM_MODEL)
 
-    # parameters for step execution
-    current_phase = request.form.get("current_phase", "diagnostic_intent")
-    context = request.form.get("context", "")
-    execution_report = request.form.get("execution_report", "")
-    safe_commands_str = request.form.get("safe_commands", "[]")
-    safe_commands = json.loads(safe_commands_str) if safe_commands_str else []
-    approved_commands_str = request.form.get("approved_commands", "[]")
-    approved_commands = json.loads(approved_commands_str) if approved_commands_str else []
+    print("\n" + "="*50)
+
+    request_data = {
+        'username': request.form.get("username", ""),
+        'reservation_id': request.form.get("reservation_id", ""),
+        'chat_id': request.form.get("chat_id", ""),
+        'message': request.form.get("message", ""),
+        'llm_model': request.form.get("llm_model", LLM_MODEL),
+        'current_phase': request.form.get("current_phase", "diagnostic_intent"),
+        'context': request.form.get("context", ""),
+        'execution_report': request.form.get("execution_report", ""),
+        'safe_commands': json.loads(request.form.get("safe_commands", "[]") or "[]"),
+        'approved_commands': json.loads(request.form.get("approved_commands", "[]") or "[]")
+    }
+
+    print(f"[DEBUG SSE] Request phase: {request_data['current_phase']} | User: {request_data['username']} | Reservation: {request_data['reservation_id']}")
     
-    if not chat_id:
-        chat_id = f"{int(time.time())}_{uuid.uuid4().hex[:8]}"
+    if not request_data['chat_id']:
+        request_data['chat_id'] = f"{int(time.time())}_{uuid.uuid4().hex[:8]}"
 
-    session_key = f"agent_history:troubleshooter_chat:{username}:{reservation_id}:{chat_id}"
-    history_str = redis_client.get(session_key)
+    # retrieve chat history if present
+    request_data['session_key'] = f"agent_history:troubleshooter_chat:{request_data['username']}:{request_data['reservation_id']}:{request_data['chat_id']}"
+    history_str = redis_client.get(request_data['session_key'])
     
     if history_str:
+        # load history if present
         history = json.loads(history_str)
     else:
+        # add system promtp to the history
         system_prompt = TROUBLESHOOTER_PROMPTS["diagnostic_intent"]
         system_prompt += f"\n\n<topology>\n```yaml\n{testbed_topology}\n```\n</topology>\n"
         history = [{"role": "system", "content": system_prompt}]
 
-    if current_phase == "diagnostic_intent":
-
-        # find the index of the last generated summary
-        last_summary_idx = -1
-        for i in range(len(history) - 1, -1, -1):
-            if history[i].get("role") == "summary":
-                last_summary_idx = i
-                break
-
-        # first message after last summary
-        start_idx = last_summary_idx + 1 if last_summary_idx != -1 else 1
-        # number of user mesages since last summary
-        user_msg_count = sum(1 for m in history[start_idx:] if m.get("role") == "user")
-
-        # if the limit is surpassed, generate a new summary
-        if user_msg_count >= MAX_TROUBLESHOOTER_MESSAGES:
-            summarizer_sys_prompt = TROUBLESHOOTER_PROMPTS["diagnostic_summarizer"]
-            summarizer_history = [{"role": "system", "content": summarizer_sys_prompt}]
-            
-            # send to summarizer the last generated summary if exists
-            if last_summary_idx != -1:
-                summarizer_history.append({"role": "system", "content": f"<previous_chat_summary>\n{history[last_summary_idx]['content']}\n</previous_chat_summary>"})
-            
-            # add every message after the last summary, except execution_log type messages
-            for m in history[start_idx:]:
-                if m.get("role") != "execution_log":
-                    summarizer_history.append(m)
-
-            # add a temporary message to instruct summarizer to create the summary (the agent return with stop error if the last message is a system message)
-            summarizer_history.append({"role": "user", "content": "Please generate the JSON summary of the conversation above based exactly on your system instructions."})
-            
-            is_valid, _, summary_json = get_validated_llm_reply(summarizer_history, "diagnostic_summarizer", llm_model)
-            if is_valid:
-                new_summary = summary_json.get("summary", "")
-                
-                # append summary in the history
-                history.append({"role": "summary", "content": new_summary})
-                print("[DEBUG] Chat limit reached. New summary appended to global history.")
-                
-                # update indexes
-                last_summary_idx = len(history) - 1
-                start_idx = last_summary_idx + 1
-
-        # append user message
-        history.append({"role": "user", "content": message})
-
-        # create active window to send to the intent agent, send the summary as temporary system message, in redis is saved as summary message to retrieve easily the last summary
-        active_window = [history[0]]
-        if last_summary_idx != -1:
-            active_window.append({"role": "system", "content": f"<previous_chat_summary>\n{history[last_summary_idx]['content']}\n</previous_chat_summary>"})
-        
-        # add messages from the last summary to the end of the history
-        active_window.extend(history[start_idx:])
-
-        # filter execution_log messages
-        intent_history = [m for m in active_window if m.get("role") != "execution_log"]
+    sse_stream = generate_troubleshooter_sse(history=history, request_data=request_data)
     
-        # Intent agent
-        is_valid, _, intent_json = get_validated_llm_reply(intent_history, "diagnostic_intent", llm_model)
-        if not is_valid:
-            return jsonify({"error": "Failed intent evaluation"}), 500
+    print("[DEBUG SSE] Return Flask response to the Client...")
+    return Response(sse_stream, mimetype="text/event-stream")
 
-        print("\n" + "="*50)
-        print(f"[TROUBLESHOOTER - INTENT AGENT] Result:")
-        print(json.dumps(intent_json, indent=2))
-        print("="*50 + "\n")
-
-        status = intent_json.get("status", "").upper()
-        response_msg = intent_json.get("response", "")
-        context = intent_json.get("context", "")
-
-        if status == "REJECTED":
-            # if questions, save the chat and reply to user
-            history.append({"role": "assistant", "content": response_msg})
-            redis_client.set(session_key, json.dumps(history), ex=432000)
-            return jsonify({"reply": response_msg, "chat_id": chat_id, "requires_approval": False, "next_phase": None}), 200
-
-        # if status approved, save only user message, do not save intent agent response
-        redis_client.set(session_key, json.dumps(history), ex=432000)
-        return jsonify({"chat_id": chat_id, "requires_approval": False, "context": context, "next_phase": "diagnostic_planner"}), 200
-        
-    elif current_phase == "diagnostic_planner":
-        planner_sys_prompt = TROUBLESHOOTER_PROMPTS["diagnostic_planner"]
-        dynamic_rules = get_dynamic_device_rules("diagnostic_planner")
-
-        if dynamic_rules:
-            planner_sys_prompt += f"\n<device_specific_rules>\n{dynamic_rules}\n</device_specific_rules>\n"
-
-        planner_sys_prompt += f"\n\n<topology>\n```yaml\n{testbed_topology}\n```\n</topology>\n"
-
-        # Planner agent
-        planner_history = [
-            {"role": "system", "content": planner_sys_prompt},
-            {"role": "user", "content": f"<context>\n{context}\n</context>"}
-        ]
-
-        is_valid, _, planner_json = get_validated_llm_reply(planner_history, "diagnostic_planner", llm_model)
-        if not is_valid:
-            return jsonify({"error": "Failed planner evaluation"}), 500
-
-        print("\n" + "="*50)
-        print(f"[TROUBLESHOOTER - PLANNER AGENT] Result:")
-        print(json.dumps(planner_json, indent=2))
-        print("="*50 + "\n")
-
-        diag_cmds = planner_json.get("diagnostic_commands", [])
-        approve_cmds = planner_json.get("commands_to_approve", [])
-
-        # check whitelist
-        safe_cmds = []
-        pending_cmds = approve_cmds.copy()
-
-        for cmd_str in diag_cmds:
-            if ":" in cmd_str:
-                dev, cmd = cmd_str.split(":", 1)
-                if is_command_whitelisted(cmd):
-                    safe_cmds.append(cmd_str)
-                else:
-                    pending_cmds.append(cmd_str)
-
-        if pending_cmds:
-            # ask approval to the frontend
-            # return context and chat_id so that the fontend resend this data
-            return jsonify({"chat_id": chat_id, "requires_approval": True, "commands": pending_cmds, "safe_commands": safe_cmds, "context": context, "next_phase": "execution"}), 200
-
-        return jsonify({"chat_id": chat_id, "requires_approval": False, "safe_commands": safe_cmds, "context": context, "next_phase": "execution"}), 200
-
-    elif current_phase == "execution":
-        commands_to_run = safe_commands + approved_commands
-
-        if not commands_to_run:
-            execution_report = "[SYSTEM LOG]: The user rejected all proposed commands, and there were no whitelisted commands available. No read operations were performed on the devices. Inform the user that you cannot complete the analysis without executing the commands, and ask them to try again or rephrase their request."
-        else:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            inventory_path = os.path.abspath(os.path.join(base_dir, "..", "controller", "inventories", f"res-{reservation_id}-inventory.ini"))
-    
-            execution_report = run_parallel_commands(inventory_path, commands_to_run, reservation_id, is_intent=False)
-
-        return jsonify({"chat_id": chat_id, "requires_approval": False, "execution_report": execution_report, "context": context, "next_phase": "diagnostic_reporter"}), 200
-
-    elif current_phase == "diagnostic_reporter":
-        reporter_sys_prompt = TROUBLESHOOTER_PROMPTS["diagnostic_reporter"]
-        reporter_sys_prompt += f"\n\n<topology>\n```yaml\n{testbed_topology}\n```\n</topology>\n"
-    
-        # Reporter agent
-        reporter_history = [
-            {"role": "system", "content": reporter_sys_prompt},
-            {"role": "user", "content": f"<context>\n{context}\n</context>\n<execution_report>\n{execution_report}\n</execution_report>"}
-        ]
-    
-        is_valid, _, reporter_json = get_validated_llm_reply(reporter_history, "diagnostic_reporter", llm_model)
-        if not is_valid:
-                return jsonify({"error": "Failed reporter evaluation"}), 500
-
-        print("\n" + "="*50)
-        print(f"[TROUBLESHOOTER - REPORTER AGENT] Result:")
-        print(json.dumps(reporter_json, indent=2))
-        print("="*50 + "\n")
-
-        final_response = reporter_json.get("response", "Error during report generation")
-
-        # save execution log (hidden from the user) and final message in the chat visible by user
-        history.append({"role": "execution_log", "content": execution_report})
-        history.append({"role": "assistant", "content": final_response})
-        redis_client.set(session_key, json.dumps(history), ex=432000)
-
-        return jsonify({"reply": final_response, "chat_id": chat_id, "requires_approval": False, "execution_log": execution_report, "next_phase": None}), 200
 
 if __name__ == "__main__":
     app.run(debug=True, host='0.0.0.0', port=5006, use_reloader=False)

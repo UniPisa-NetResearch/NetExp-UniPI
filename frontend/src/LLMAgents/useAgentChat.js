@@ -19,6 +19,66 @@ export const sendChatRequest = async (url, payload, files = []) => {
   return await response.json();
 };
 
+// Sends a POST request streams SSE from the backend. Calls onThought(chunk) for every "thought" delta to update the UI in real time, resolves with the final "result" payload when the stream ends
+export const sendChatRequestStream = async (url, payload, files = [], onThought) => {
+  // build FormData from the payload object, skipping null/undefined values
+  const formData = new FormData();
+  Object.keys(payload).forEach(key => {
+    if (payload[key] !== null && payload[key] !== undefined) formData.append(key, payload[key]);
+  });
+
+  // append all files under the same "files" field name
+  files.forEach(file => formData.append("files", file));
+
+  // start the streaming POST request
+  const response = await fetch(url, { method: "POST", body: formData });
+  
+  if (!response.body) throw new Error("ReadableStream not supported");
+  
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  // accumulator for partial SSE text until we find complete events
+  let buffer = "";
+  // hold the final result object once the "result" event is received
+  let finalResult = null;
+
+  // read chuncks until the stream ends
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    
+    buffer += decoder.decode(value, { stream: true });
+    // SSE events are separated by double newlines
+    let boundary = buffer.indexOf("\n\n");
+    
+    // process all complete events currently in the buffer
+    while (boundary !== -1) {
+      // extract one complete SSE event line
+      const chunkLine = buffer.slice(0, boundary).trim();
+      // remove the processed event from the buffer
+      buffer = buffer.slice(boundary + 2);
+      // look for the next event
+      boundary = buffer.indexOf("\n\n");
+      
+      if (chunkLine.startsWith("data: ")) {
+        try {
+          const data = JSON.parse(chunkLine.substring(6));
+          if (data.type === "thought" && onThought) {
+            // if this is a thought, show immediately on the GUI
+            onThought(data.content);
+          } else if (data.type === "result") {
+            // capture the final structured result for the return value
+            finalResult = data.data;
+          }
+        } catch (e) { console.error("Errore parsing SSE:", e); }
+      }
+    }
+  }
+  
+  if (finalResult && finalResult.error) throw new Error(finalResult.error);
+  return finalResult;
+};
+
 export const useAgentChat = (username, reservation_id, defaultRole) => {
   const [messages, setMessages] = useState([]);
   const [inputValue, setInputValue] = useState("");
