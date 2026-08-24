@@ -105,7 +105,7 @@ def chat_with_llm_stream(messages: list, model_name: str):
     print("="*70 + "\n")
 
     start_time = time.time()
-    full_raw_response = ""
+    json_output_only = ""
 
     try:
         # use gemini API for gemini models
@@ -122,7 +122,7 @@ def chat_with_llm_stream(messages: list, model_name: str):
                 else:
                     # assign role of the message
                     gemini_role = "user" if m["role"] == "user" else "model"
-                    # create the message jsn with role and text
+                    # create the message json with role and text
                     gemini_messages.append({"role": gemini_role, "parts": [{"text": m["content"]}]})
             
             config = types.GenerateContentConfig(
@@ -146,11 +146,10 @@ def chat_with_llm_stream(messages: list, model_name: str):
                         for part in candidate.content.parts:
                             if getattr(part, "thought", False):
                                 # this part is marked as "thought" (reasoning content)
-                                full_raw_response += part.text
                                 yield {"type": "thought", "content": part.text}
                             elif part.text:
                                 # this is regular response content (not reasoning)
-                                full_raw_response += part.text
+                                json_output_only += part.text
                                 yield {"type": "content", "content": part.text}
 
                     finish_reason = getattr(candidate, "finish_reason", None)
@@ -175,20 +174,20 @@ def chat_with_llm_stream(messages: list, model_name: str):
                 # extract the message dictionary from the Ollama chunk
                 message = chunk.get('message', {})
                 
-                # Implementazione esatta della tua logica per Ollama
+                # extract thinking and real content from the response
                 thought = message.get('thinking')
                 content = message.get('content')
 
                 # if the model emitted a "thinking" field, yield it as a thought event
                 if thought:
-                    full_raw_response += thought
                     yield {"type": "thought", "content": thought}
 
                 # if the model emitted regular content, yield it as a content event
                 if content:
-                    full_raw_response += content
+                    json_output_only += content
                     yield {"type": "content", "content": content}
 
+                # get reason for which the LLM stop genrating the response
                 if chunk.get("done"):
                     done_reason = chunk.get("done_reason", "")
                     if done_reason and done_reason.lower() in ["length", "max_tokens"]:
@@ -196,8 +195,7 @@ def chat_with_llm_stream(messages: list, model_name: str):
 
         elapsed_time = time.time() - start_time
         print(f"\n[DEBUG LLM] --- NATIVE STREAM COMPLETED IN {elapsed_time:.2f} SECONDS ---")
-        print(f"[DEBUG LLM] FULL RAW RESPONSE LENGTH: {len(full_raw_response)}")
-        print(f"[DEBUG LLM] FULL RAW RESPONSE:\n{full_raw_response}\n" + "="*70 + "\n")    
+        print(f"[DEBUG LLM] JSON OUTPUT:\n{json_output_only}\n" + "="*70 + "\n")    
 
     except Exception as e:
         elapsed_time = time.time() - start_time

@@ -111,7 +111,7 @@ AGENT_PROMPTS = {
 
         "--- STRICT RULES ---\n"
         "- NO CHITCHAT (CRITICAL): Do not use polite formulas, transitional phrases, or introductory text (e.g., 'After analyzing...', 'Here is the report'). Start directly with the mandatory Markdown structure and never add text outside of it.\n"
-        "- HANDLING UNCERTAINTY: If you are unsure about the safety of an action or the user's intent, do NOT guess. Stop, explain the doubt, and ask the user.\n"
+        "- HANDLING UNCERTAINTY: If you are unsure about the safety of an action or the user's intent, do NOT guess. Stop, explain the doubt, insert 'AWAITING_CLARIFICATIONS' in the 'status' field and and ask the user.\n"
         "- STATUS DEFINITION (CRITICAL): Compare your final executable_plan with the original <execution_plan> + <verification_commands> or your previous rejected <executable_plan> . If you removed even a single redundant command, or changed even one character, you MUST output 'REJECTED'. You can ONLY output 'APPROVED' if your executable_plan is a 1:1 identical copy of the input plan.\n"
         "- EXACT MATCH REDUNDANCY (CRITICAL): A command is ONLY redundant if the EXACT SAME configuration (e.g., the exact IPv4 address like 192.168.1.1/24, or the exact route) is ALREADY present in the `<device_report>`. If an interface only shows an IPv6 link-local address (starting with 'fe80::') but lacks the required IPv4 address, applying the IPv4 address is NOT redundant and you MUST KEEP the command. You must only reject and remove a command if its exact target state is already achieved.\n"
         "- OUT OF SCOPE: If the user request is not inherent to the purpose of a network experiment on this testbed, you MUST reply explicitly that the request is out of scope and the user has to specify a network experiment.\n"
@@ -129,7 +129,7 @@ AGENT_PROMPTS = {
         "--- OUTPUT FORMAT ---\n"
         "You MUST respond EXCLUSIVELY with a valid JSON object matching this exact structure and data types:\n"
         "{\n"
-        '  "status": "(string) Write \'REJECTED\' if you change or remove anything from the original plan. Write \'APPROVED\' ONLY if the original plan is 100% correct as is. Otherwise write \'AWAITING_DEVICE_READ\' or \'AWAITING INFORMATION\'.",\n'
+        '  "status": "(string) Write \'REJECTED\' if you change or remove anything from the original plan. Write \'APPROVED\' ONLY if the original plan is 100% correct as is. Otherwise write \'AWAITING_DEVICE_READ\' if you receive `<device_report>\nnull\n</device_report>` or \'AWAITING_CLARIFICATIONS\' if you ask to user some questions.",\n'
         '  "read_operations": [\n'
         '    "(string) Format: `device: intent`. Example: `csw1: routing`. Use this ONLY when status is AWAITING_DEVICE_READ.",\n'
         '    "(string) Leave this array empty [] if device read is already provided or not needed."\n'
@@ -140,7 +140,7 @@ AGENT_PROMPTS = {
         '  ],\n'
         '  "topology_mapping_check": [\n'
         '    "(string) Line by line confirmation of devices/interfaces used vs YAML topology.",\n'
-        '    "(string) Leave this array empty [] if status is AWAITING_DEVICE_READ. Example: \'Switch sw1 interface Ethernet1 connects to h1. Confirmed in YAML\'"\n'
+        '    "(string) Leave this array empty [] if status is AWAITING_DEVICE_READ or AWAITING_CLARIFICATIONS. Example: \'Switch sw1 interface Ethernet1 connects to h1. Confirmed in YAML\'"\n'
         '  ],\n'
         '  "executable_plan": [\n'
         '    "(string) If APPROVED, copy the original plan here.",\n'

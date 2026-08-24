@@ -1,24 +1,5 @@
 import { useState, useCallback } from "react";
 
-export const sendChatRequest = async (url, payload, files = []) => {
-  
-    const formData = new FormData();
-    Object.keys(payload).forEach(key => {
-        if (payload[key] !== null && payload[key] !== undefined) {
-        formData.append(key, payload[key]);
-        }
-    });
-
-  files.forEach(file => formData.append("files", file));
-
-  const response = await fetch(url, { method: "POST", body: formData });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || "Backend error");
-  }
-  return await response.json();
-};
-
 // Sends a POST request streams SSE from the backend. Calls onThought(chunk) for every "thought" delta to update the UI in real time, resolves with the final "result" payload when the stream ends
 export const sendChatRequestStream = async (url, payload, files = [], onThought) => {
   // build FormData from the payload object, skipping null/undefined values

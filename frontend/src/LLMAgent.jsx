@@ -1,151 +1,389 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import "./style/llmAgent.css";
-import { ChatSidebar, FileUploader, ChatHeader } from "./LLMAgents/SharedChatComponents";
-import { useAgentChat, sendChatRequest } from "./LLMAgents/useAgentChat";
+import { UniversalPipelineChat } from "./LLMAgents/SharedChatComponents";
+import { useAgentChat, sendChatRequestStream } from "./LLMAgents/useAgentChat";
 
-const LLMAgent = ({ username, reservation_id}) => {
+// component exclusively for Admins: read-only view of historical JSON messages
+const AdminReadOnlyDebugger = ({ username, reservation_id, activeChatId, phases, renderMessage }) => {
+  const [debugPhase, setDebugPhase] = useState(phases.length > 0 ? phases[0] : 'negotiation');
+  const [debugMessages, setDebugMessages] = useState([]);
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  // synchronizes the debug view phase if the available phases change
+  useEffect(() => {
+    if (phases.length > 0 && !phases.includes(debugPhase)) {
+        setDebugPhase(phases[0]);
+    }
+  }, [phases]);
+
+  // fetches the unfiltered historical messages for the selected phase directly from the backend whenever the chat ID, phase, or expanded state changes
+  useEffect(() => {
+      if (!activeChatId || !isExpanded) return;
+      
+      const fetchPhaseHistory = async () => {
+          try {
+              const response = await fetch(`/api/agent_server/history?username=${encodeURIComponent(username)}&reservation_id=${encodeURIComponent(reservation_id)}&chat_id=${encodeURIComponent(activeChatId)}&agent_role=${encodeURIComponent(debugPhase)}`);
+              if (response.ok) {
+                  const data = await response.json();
+
+                  const messagesWithIds = (data.messages || []).map((msg, idx) => ({
+                      ...msg,
+                      id: msg.id || `debug-${debugPhase}-${idx}`
+                  }));
+
+                  setDebugMessages(messagesWithIds);
+              }
+          } catch (err) {
+              console.error("Error loading debug history:", err);
+          }
+      };
+      fetchPhaseHistory();
+  }, [debugPhase, activeChatId, isExpanded, username, reservation_id]);
+  
+  // cycles through the available phases (forward or backward) when the admin clicks the transition buttons.
+  const handlePhaseChange = (direction) => {
+      const currentIndex = phases.indexOf(debugPhase);
+      if (direction === 'next' && currentIndex < phases.length - 1) {
+          setDebugPhase(phases[currentIndex + 1]);
+      } else if (direction === 'prev' && currentIndex > 0) {
+          setDebugPhase(phases[currentIndex - 1]);
+      }
+  };
+
+  return (
+    <div className="admin-debugger-container">
+      <div className="admin-debugger-main">
+        <div className="admin-debugger-header">
+          <h3 className="admin-debugger-title">🛠️ Admin Debug View</h3>
+          <button onClick={() => setIsExpanded(!isExpanded)} className="en-download-chat-btn admin-debugger-btn" disabled={!activeChatId}>
+              {isExpanded ? 'Hide Debugger' : 'Expand Debugger'}
+          </button>
+        </div>
+
+        {isExpanded && activeChatId && (
+            <div className="admin-debugger-content">
+                <div className="en-stepper history-mode admin-debugger-stepper">
+                    {phases.map((phase) => (
+                        <div 
+                            key={phase} 
+                            className={`en-step ${debugPhase === phase ? 'active' : ''} clickable`}
+                            onClick={() => setDebugPhase(phase)}
+                        >
+                            {phase.toUpperCase()}
+                        </div>
+                    ))}
+                </div>
+
+                <div className="experiment-negotiation-chat admin-debugger-chat">
+                    {debugMessages.length === 0 ? (
+                        <p className="admin-debugger-empty">No history found for {debugPhase.toUpperCase()} phase.</p>
+                    ) : (
+                        debugMessages.map(renderMessage)
+                    )}
+                </div>
+
+                <div className="en-transition-actions admin-debugger-actions">
+                    <button 
+                        className="en-transition-btn en-secondary-transition-btn"
+                        onClick={() => handlePhaseChange('prev')}
+                        disabled={phases.indexOf(debugPhase) === 0}
+                    >
+                        Previous Phase
+                    </button>
+                    <button 
+                        className="en-transition-btn en-primary-transition-btn"
+                        onClick={() => handlePhaseChange('next')}
+                        disabled={phases.indexOf(debugPhase) === phases.length - 1}
+                    >
+                        Next Phase
+                    </button>
+                </div>
+            </div>
+        )}
+        {isExpanded && !activeChatId && (
+            <div className="admin-debugger-content">
+                <p className="admin-debugger-empty">Start a chat or select a previous session to view debug info.</p>
+            </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const LLMAgent = ({ username, reservation_id, isAdmin}) => {
   const chat = useAgentChat(username, reservation_id, "negotiation");
 
-  const [currentPhase, setCurrentPhase] = useState('negotiation');
-  // current phase during an active experiment
-  const [activePipelinePhase, setActivePipelinePhase] = useState('negotiation');
+  const chatEndRef = useRef(null);
+  const reasoningRef = useRef(null);
+
+  const [currentProgressPhase, setCurrentProgressPhase] = useState(null);
+  const [activeReasoning, setActiveReasoning] = useState("");
+
+  // to know from which phase restart when the pipeline is blocked
+  const [resumePhase, setResumePhase] = useState("negotiation");
+
+  // serial or parallel
+  const [executionMode, setExecutionMode] = useState("serial");
 
   const [negotiationQuestions, setNegotiationQuestions] = useState([]);
   const [negotiationAnswers, setNegotiationAnswers] = useState({});
 
-  const [canAdvance, setCanAdvance] = useState(false);
-  const [needsClarification, setNeedsClarification] = useState(false);
-
-  // to distinguish experiment running or chat visualization after experiment
-  const [isReadOnly, setIsReadOnly] = useState(false);
   // pipeline phases (each phase corresponds to an agent)
-  const [phases, setPhases] = useState([]);
-
-  // visualizing a past phase during an active experiment
-  const isViewingPastPhase = !isReadOnly && currentPhase !== activePipelinePhase;
-
-  // input enabled only for negotiation phase and safety phase in case of clarification is needed
-  const isInputDisabled = chat.isSending || isReadOnly || isViewingPastPhase || canAdvance || currentPhase === 'planning' || currentPhase === 'execution' || (currentPhase === 'safety' && !needsClarification);
-  
-  // determine if the user input is empty (no text and no files)
-  const isInputEmpty = chat.inputValue.trim() === "" && chat.selectedFiles.length === 0;
+  const [LLMAgentPhases, setLLMAgentPhases] = useState([]);
 
   // check if there are questions and if the user has written every answer
   const hasUnansweredQuestions = negotiationQuestions.length > 0 && !negotiationQuestions.every((_, i) => (negotiationAnswers[i] || "").trim() !== "");
 
-  const isButtonDisabled = chat.isSending ||  isInputDisabled || (negotiationQuestions.length > 0 ? hasUnansweredQuestions : isInputEmpty);
+  // number of safety iterations
+  const [safetyIterations, setSafetyIterations] = useState(3);
 
-  // phases states to use navigation buttons
-  const currentPhaseIndex = phases.indexOf(currentPhase);
-  const hasPreviousPhase = currentPhaseIndex > 0;
-  const hasNextPhase = currentPhaseIndex !== -1 && currentPhaseIndex < phases.length - 1;
-  const previousPhase = hasPreviousPhase ? phases[currentPhaseIndex - 1] : null;
-  const nextPhase = hasNextPhase ? phases[currentPhaseIndex + 1] : null;
-
-  // states for the ACTIVE pipeline
-  const activePhaseIndex = phases.indexOf(activePipelinePhase);
-  const hasNextActivePhase = activePhaseIndex !== -1 && activePhaseIndex < phases.length - 1;
-  const nextActivePhase = hasNextActivePhase ? phases[activePhaseIndex + 1] : null;
-  // approved or rejected
-  const [executionStatus, setExecutionStatus] = useState(null);                     
   // rollback states
   const [isRollingBack, setIsRollingBack] = useState(false);
-  const [showRollbackModal, setShowRollbackModal] = useState(false);
-  // serial or parallel
-  const [executionMode, setExecutionMode] = useState("serial");
 
-  // show "Go back to planning" if execution is rejected and iterations are not ended
-  const isExecutionLoopActive = activePipelinePhase === 'execution' && executionStatus === 'REJECTED';
+  // status of the execution phase
+  const [executionStatus, setExecutionStatus] = useState(null);
 
-  const executeRollback = async () => {
-    if (!chat.activeChatId) return;                                  // if there are no active chat, rollback is unnecessary
-    
-    chat.setIsSending(true);                                         // lock UI during rollback
+  const isInputEmpty = chat.inputValue.trim() === "" && chat.selectedFiles.length === 0;
+
+  const isExperimentTerminated = () => executionStatus === 'APPROVED' || executionStatus === 'TERMINATED';
+  const isPendingRetry = executionStatus === 'REJECTED';
+  
+  // different placeholders for chat
+  let inputPlaceholder = "Type your message...";
+  if (chat.isSending) inputPlaceholder = "Processing phase, please wait...";
+  else if (isExperimentTerminated()) inputPlaceholder = "Experiment terminated. Chat is closed.";
+  else if (isPendingRetry) inputPlaceholder = "Execution failed. Choose an action above to continue or terminate.";
+
+  const isChatLocked = chat.isSending || isExperimentTerminated() || isPendingRetry;
+
+  const isButtonDisabled = chat.isSending || isChatLocked || (negotiationQuestions.length > 0 ? hasUnansweredQuestions : isInputEmpty);
+
+  const [isRollbackModalOpen, setIsRollbackModalOpen] = useState(false);
+
+  // extracts the execution status (e.g., APPROVED, REJECTED, TERMINATED) from a given assistant message payload to update the UI accordingly
+  const extractExecutionStatus = (msg) => {
+    if (!msg || msg.role !== 'assistant') return null;
+
     try {
-      const response = await fetch("/api/agent_server/experimentRollback", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: username, reservation_id: reservation_id, chat_id: chat.activeChatId}),
-      });
+      const parsed = typeof msg.content === 'string' ? JSON.parse(msg.content) : msg.content;
+      // execution agent is the only one that returns a json with "report" as a field
+      if (parsed && parsed.report !== undefined && parsed.status !== undefined) {
+        const status = String(parsed.status).toUpperCase();
 
-      if (!response.ok) {
-        console.error("Error during testbed rollback");
+        // return extracted execution status
+        if (status.includes('APPROVED')) return 'APPROVED';
+        else if (status.includes('TERMINATED')) return 'TERMINATED';
+        else if (status.includes('REJECTED')) return 'REJECTED';
       }
-
-    } catch (err) {
-      console.error("Network error duringrollback:", err);
-    } finally {
-      chat.setIsSending(false);
+    } catch (e) {
+      // fallback: manually match predefined termination strings if JSON parsing fails
+      const contentStr = String(msg.content);
+      if (contentStr.includes('"status": "TERMINATED"')) return 'TERMINATED';
     }
+    return null;
   };
 
-  const startNewChat = async (skipModal = false) => {
+  // watches the chat messages and automatically updates the global execution status whenever a new message is appended
+  useEffect(() => {
+    if (chat.messages.length > 0) {
+      const lastMsg = chat.messages[chat.messages.length - 1];
+      const status = extractExecutionStatus(lastMsg);
+      
+      if (status) setExecutionStatus(status);
+    }
+  }, [chat.messages]);
 
-    // reset only if we pass explicitly
-    const forceReset = skipModal === true;
+  // fetches the available sessions on component mount, establishing the phase order and safety constraints from the backend configuration
+  useEffect(() => {
+    chat.fetchSessions("negotiation").then(data => {
+      
+      if (data && data.phases_order && LLMAgentPhases.length === 0) { 
+        setLLMAgentPhases(data.phases_order);
+      }
 
-    // rollback performed only if there is an active chat and we are not in history mode
-    if (!forceReset && chat.activeChatId && !isReadOnly && executionStatus !== null) {
+      if (data && data.safety_iterations) {
+        setSafetyIterations(data.safety_iterations);
+      }
 
-      setShowRollbackModal(true);
-      return;   
-  
-    } 
+    });
+    
+  }, [chat.fetchSessions, LLMAgentPhases.length]);
+
+  // Auto-scrolls the reasoning/thought window to the bottom to ensure the latest streamed tokens are always visible
+  useEffect(() => {
+    if (reasoningRef.current) {
+      reasoningRef.current.scrollTop = reasoningRef.current.scrollHeight;
+    }
+  }, [activeReasoning]);
+
+  const startNewChat = () => {
 
     chat.resetBaseChat();
     setExecutionMode("serial");
     setNegotiationQuestions([]);
     setNegotiationAnswers({});
-    setCanAdvance(false);
-    setCurrentPhase('negotiation');
-    setActivePipelinePhase('negotiation');
-    setIsReadOnly(false);
     setExecutionStatus(null);
-
-    
+    setResumePhase(LLMAgentPhases.length > 0 ? LLMAgentPhases[0] : "negotiation");
   };
 
-  const handleConfirmRollback = async () => {
-    
-    setShowRollbackModal(false);   
-    setIsRollingBack(true);    
-    await executeRollback();
-    setIsRollingBack(false);
-    await startNewChat(true);
+  // fetches and loads the message history for a specific chat ID
+  const handleLoadHistory = async (chatId) => {
 
-  };
-
-  const handleDeclineRollback = async () => {
-    setShowRollbackModal(false);
-    await startNewChat(true);
-  };
-
-  // reset all fields when a new chat is started (either from the button or after the execution phase)
-  useEffect(() =>{ startNewChat(); }, []);
-
-  useEffect(() => {
-    chat.fetchSessions("negotiation").then(data => {
+    // load messages of the chat
+    try {
+      const response = await fetch(`/api/agent_server/history?username=${encodeURIComponent(username)}&reservation_id=${encodeURIComponent(reservation_id)}&chat_id=${encodeURIComponent(chatId)}&agent_role=all_llm_agents`);
       
-      if (data && data.phases_order && phases.length === 0) { setPhases(data.phases_order);}
+      let combinedMessages = [];
+      if (response.ok) {
+        const data = await response.json();
+        const allMsgs = data.messages || [];
 
-    });
-    
-  }, [chat.fetchSessions, phases.length]);
+        // find last active phase
+        let detectedPhase = LLMAgentPhases.length > 0 ? LLMAgentPhases[0] : "negotiation";
+        if (allMsgs.length > 0) {
+          const lastMsg = allMsgs[allMsgs.length - 1];
+          if (lastMsg.agent_phase) {
+            detectedPhase = lastMsg.agent_phase;
+          }
+        }
+        // set the phase from which resume execution
+        setResumePhase(detectedPhase);
 
-  // load the chat history for a specific chat_id and phase
-  const loadLLMHistory = async (chatId, phase, fromSidebar = false) => {
-    const loadedMessages = await chat.loadHistory(chatId, phase);
-    if (loadedMessages) {
-      setCurrentPhase(phase);
+        // counter for consecutive rejected safety messages
+        let rejectedCount = 0;
+
+        const filteredMessages = allMsgs.filter(m => {
+          // show all negotiation phase messages
+          if (m.agent_phase === "negotiation") return true;
+          // show only assistant messages for execution phase
+          if (m.agent_phase === "execution" && m.role === "assistant") return true;
+          // show only approved or last rejected assistant message for safety phase
+          if (m.agent_phase === "safety" && m.role === "assistant") {
+
+            try {
+              const parsed = typeof m.content === 'string' ? JSON.parse(m.content) : m.content;
+              const status = String(parsed.status).toUpperCase();
+              
+              if (status.includes("REJECTED")) {
+                  
+                rejectedCount++;
+                  
+                  // if we reached N rejected messages, we show the message generated in teh last turn
+                  if (rejectedCount === safetyIterations) {
+                      rejectedCount = 0; 
+                      return true;
+                  }
+                  
+                  // otherwise, hide previous failed messages
+                  return false;
+              
+                } else if (status.includes("AWAITING_DEVICE_READ")) {
+
+                  // remove reading command messages
+                  return false;
+            
+              } else {
+                  
+                // if status is APPROVED or AWAITING_CLARIFICATIONS, the message is shown and reset the counter
+                  rejectedCount = 0;
+                  return true;
+              }
+            } catch (e) {
+                return true;
+            }
+          }
+
+          // fallback for messagges without agent_phase tag
+          if (!m.agent_phase) return true; 
           
-      // advance with buttons in history mode
-      if (fromSidebar) {
-        // if we are loading from the sidebar or going ahead in the history
-        setIsReadOnly(true); 
-        // we enable the advancing in the historical case
-        setCanAdvance(true);
+          // do not show other messages as default
+          return false;
+
+        }).map(m => {
+          
+          // filter safety messages, get only specific fields
+          if (m.agent_phase === "safety" && m.role === "assistant") {
+            
+            try {
+              const parsed = typeof m.content === 'string' ? JSON.parse(m.content) : m.content;
+              
+              // get only relevant fields
+              const filtered = {
+                status: parsed.status,
+                executable_plan: parsed.executable_plan || [],
+                verification_plan: parsed.verification_plan || []
+              };
+              
+              // get issues from last rejected message (at this point there is at most only a rejected message)
+              if (String(parsed.status).toUpperCase().includes("REJECTED") && parsed.issues) {
+                filtered.issues = parsed.issues;
+              }
+              
+              // get clarifying questions if present
+              if (parsed.clarifying_questions && parsed.clarifying_questions.length > 0) {
+                filtered.clarifying_questions = parsed.clarifying_questions;
+              }
+              
+              return { ...m, content: JSON.stringify(filtered) };
+
+            } catch (e) {
+              return m;
+            }
+          }
+          return m;
+        });
+
+        combinedMessages = filteredMessages.map((m, i) => ({
+            ...m, 
+            id: m.id || `hist-${i}`
+        }));
       }
+
+      chat.setMessages(combinedMessages);
+      chat.setActiveChatId(chatId);
+      setExecutionStatus(null);
+      
+      // reconstruct the clarification form state if the last negotiation message asked questions
+      if (combinedMessages.length > 0) {
+        const lastAssistantMsg = combinedMessages.slice().reverse().find(m => m.role === 'assistant');
+        const status = extractExecutionStatus(lastAssistantMsg);
+        if (status) setExecutionStatus(status);
+        
+        let hasQuestions = false;
+
+        // get last assistant message of negotioation
+        if (lastAssistantMsg && (lastAssistantMsg.agent_phase === 'negotiation')) {
+          try {
+            const parsed = typeof lastAssistantMsg.content === 'string' ? JSON.parse(lastAssistantMsg.content) : lastAssistantMsg.content;
+
+            //if there are questions and staus is not APPROVED, show form
+            if (parsed && parsed.clarifying_questions && Array.isArray(parsed.clarifying_questions) && parsed.clarifying_questions.length > 0 && parsed.status !== "APPROVED") {
+              setNegotiationQuestions(parsed.clarifying_questions);
+              
+              const initialAnswers = {};
+              parsed.clarifying_questions.forEach((_, i) => { initialAnswers[i] = ""; });
+              setNegotiationAnswers(initialAnswers);
+              hasQuestions = true;
+            }
+          } catch (e) {
+            console.log("Message parsing failed");
+          }
+        }
+
+        if (!hasQuestions) {
+          setNegotiationQuestions([]);
+          setNegotiationAnswers({});
+        }
+      } else {
+        setNegotiationQuestions([]);
+        setNegotiationAnswers({});
+      }
+    } catch (err) {
+        console.error("Error loading combined history:", err);
+        setExecutionStatus(null);
+        setNegotiationQuestions([]);
+        setNegotiationAnswers({});
     }
   };
 
@@ -164,239 +402,198 @@ const LLMAgent = ({ username, reservation_id}) => {
     
   };
 
-  const handleInputChange = (e) => {
-    chat.setInputValue(e.target.value);
-  };
-
-  // parse a JSON string returned by the backend and update UI state, so the user can proceed to the next phase when allowed
-  const parseLLMResponse = (reply, phase) => {
-    // ignore empty values or non-string payloads to keep parsing predictable
-    if (!reply || typeof reply !== "string") return;
+  // calls the backend API to physically rollback the lab testbed to its initial state, bypassing normal chat transitions. Resets the UI upon completion.
+  const executeRollback = async () => {
+    
+    chat.setIsSending(true);               // lock UI during rollback
+    setIsRollingBack(true);
 
     try {
-      // backend responses are normalized as JSON strings
-      const parsed = JSON.parse(reply);
+      const response = await fetch("/api/agent_server/experimentRollback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: username, reservation_id: reservation_id, chat_id: chat.activeChatId || ""}),
+      });
 
-      // normalize status checks to avoid case-sensitivity issues
-      const status = (parsed.status || "").toUpperCase();
-
-      // negotiation and planning can advance only after an approved status
-      if (phase === 'negotiation' || phase === 'planning') {
-
-        if (status.includes("APPROVED")) { 
-          
-          setCanAdvance(true);
-          // hide the form if the status is approved
-          setNegotiationQuestions([]);
-
-        } else if (phase === 'negotiation') {
-          // extract clarifying questions
-          const questions = parsed.clarifying_questions;
-          if (Array.isArray(questions) && questions.length > 0 && String(questions[0]).toLowerCase() !== "none") {
-            setNegotiationQuestions(questions);
-            
-            const initialAnswers = {};
-            questions.forEach((_, i) => { initialAnswers[i] = ""; });
-            setNegotiationAnswers(initialAnswers);
-
-          } else {
-            setNegotiationQuestions([]); // no questions, show the chat
-          }
-        }
-
-      // safety may either approve the plan or require more user input  
-      } else if (phase === 'safety') {
-
-        if (status.includes("APPROVED")) {
-
-          setCanAdvance(true);
-          setNeedsClarification(false);
-
-        } else {
-          setNeedsClarification(true);
-        }
-
-        // any clarification question keeps the input enabled for the user
-        const questions = parsed.clarifying_questions;
-        if (questions && String(questions).toLowerCase() !== "none") {
-
-          setNeedsClarification(true);
-
-        }
-
-      // execution is the terminal phase, so completion unlocks the final action
-      } else if (phase === 'execution') {
-        setCanAdvance(true);
-        setExecutionStatus(status);
+      if (!response.ok) {
+        console.error("Error during testbed rollback");
       }
-    } catch (e) {
-      console.error("Failed to parse JSON response:", e);
+
+    } catch (err) {
+      console.error("Network error during rollback:", err);
+    } finally {
+      chat.setIsSending(false);
+      setIsRollingBack(false);
+      startNewChat();
     }
   };
 
-  // move the current conversation to the next agent phase, in read-only mode, this only loads stored history from Redis
-  const handleAdvance = async (overrideNextPhase = null) => {
-    // overrideNextPhase has value when the current phase is execution and a new planning is needed
-    const actualNextPhase = overrideNextPhase || (isReadOnly ? nextPhase : nextActivePhase);
-    
-    // advance only if a next phase exists
-    if (actualNextPhase) {
+  const handleRollbackClick = () => {
+    // open the modal window to confirm rollback execution
+    setIsRollbackModalOpen(true);
+  };
 
-      if (isReadOnly) {
+  // maps an internal phase key to a user-friendly string description
+  const formatPhaseName = (phaseString, index) => {
+    const descriptions = [
+        "Negotiating experiment details...",
+        "Planning network configuration...",
+        "Validating plan safety...",
+        "Generationg report after commands execution on testbed..."
+    ];
+    return descriptions[index] || phaseString.toUpperCase();
+  };
 
-        // load only history of next phase on redis in history mode
-        loadLLMHistory(chat.activeChatId, actualNextPhase, true);
+  // core orchestrator for the multi-agent pipeline. It continuously connects to the SSE stream endpoint, manages phase transitions, and aggregates reasoning and final output
+  const runExperimentPipeline = async (initialPayload, initialFiles) => {
+    let payload = { ...initialPayload };
+    let currentFiles = initialFiles;
+    chat.setIsSending(true);
 
-      } else {
-
-        // switch the UI immediately to the next phase and show a loading state
-        setCurrentPhase(actualNextPhase);
-        setActivePipelinePhase(actualNextPhase);
-        setCanAdvance(false);
-        chat.setMessages([]); // clean chat for new view
-        setNegotiationQuestions([]);
-        setNegotiationAnswers({});
-        chat.setIsSending(true);
-
-        try {
-          // ask the backend to forward the validated context to the next agent
-          const response = await fetch("/api/agent_server/advance", {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({
-              username: username,
-              reservation_id: reservation_id,
-              chat_id: chat.activeChatId,
-              current_agent: currentPhase,
-              next_agent: actualNextPhase,
-              llm_model: chat.selectedModel,
-              execution_mode: executionMode
-            }),
-          });
-
-          const data = await response.json();
-
-          if (response.ok) {
-            // show the auto-forwarded context so the user can see what was passed downstream
-            if (data.context_sent) {
-              chat.appendMessage("user", `[System: Auto-forwarded context from ${currentPhase}]\n\n${data.context_sent}`);
-            }
-
-            // safety may return multiple correction iterations; render each one separately
-            if (data.reasoning_steps && data.reasoning_steps.length > 0) {
-
-              data.reasoning_steps.forEach((step) => {chat.appendMessage(step.role || "assistant", `[Iteration ${step.iteration}]\n${step.content}`);});
-
-            } else if (data.reply) {
-              // other phases return a single final reply
-              chat.appendMessage("assistant", data.reply);
-            }
-
-            // use the last reasoning step as the authoritative result when present
-            const finalReply = (data.reasoning_steps && data.reasoning_steps.length > 0) ? data.reasoning_steps[data.reasoning_steps.length - 1].content : data.reply;
-
-            parseLLMResponse(finalReply, actualNextPhase);
-            
-          } else {
-            console.error("Error advancing:", data.error);
-            chat.setError(data.error || "Failed to advance to the next agent.");
+    try {
+      // loop continues as long as the backend returns a "next_phase" to proceed to
+      while (payload.current_phase) {
+        setCurrentProgressPhase(payload.current_phase);
+        setResumePhase(payload.current_phase);
+        setActiveReasoning("");
+        
+        // subscribes to the stream and captures tokens chunk by chunk
+        const data = await sendChatRequestStream("/api/agent_server/experiment/stream", payload, currentFiles,
+          (thoughtChunk) => {
+            // add current chucnk to the previous collected chunks
+            setActiveReasoning((prev) => prev + thoughtChunk);
           }
-        } catch (err) {
-          console.error("Network error advancing:", err);
-          chat.setError("Network error advancing.");
-        } finally {
+        );
+        // files are only sent during the first phase loop
+        currentFiles = []; 
+        
+        // if it's a new chat, update the application state with the new chat_id
+        if (data.chat_id && !payload.chat_id) {
+          payload.chat_id = data.chat_id;
+          chat.setActiveChatId(data.chat_id);
+          chat.setSavedChats((prev) => [...new Set([data.chat_id, ...prev])]);
+        }
+
+        // handle negotiation clarification questions
+        if (data.requires_answers) {
+          chat.appendMessage("assistant", data.reply);
+          setNegotiationQuestions(data.questions || []);
+          const initialAnswers = {};
+          (data.questions || []).forEach((_, i) => { initialAnswers[i] = ""; });
+          setNegotiationAnswers(initialAnswers);
           chat.setIsSending(false);
+          return; 
+        }
+
+        // after the execution the experimenti is not correct
+        if (data.execution_rejected) {
+          setExecutionStatus("REJECTED");
+          chat.appendMessage("assistant", data.reply || "The plan failed to execute correctly.");
+          chat.setIsSending(false);
+          return;
+        }
+        
+        // standard flow: print the agent's finalized JSON payload to the chat
+        if (data.reply) chat.appendMessage("assistant", data.reply);
+
+        // state machine transition
+        if (data.next_phase) {
+          payload.current_phase = data.next_phase;
+          if (data.context) payload.context = data.context;
+          // remove payload to avoid send to next phases
+          payload.message = "";
+        } else {
+          // if we arive here, the pipeline is complete
+          if (payload.current_phase === (LLMAgentPhases[LLMAgentPhases.length - 1] ||'execution')) setExecutionStatus("APPROVED");
+          payload.current_phase = null; 
         }
       }
-    } else {
-      startNewChat(); // return at negotiation phase after execution (both live and history)
+    } catch (err) {
+      chat.setError(err.message || "Unexpected error");
+    } finally {
+      chat.setIsSending(false);
+      setCurrentProgressPhase(null);
+      setActiveReasoning("");
     }
   };
-
-  // go to the previous phase in history navigation
-  const handleGoBackHistory = async () => {
-    if (!isReadOnly || !chat.activeChatId || !hasPreviousPhase) return;
-    loadLLMHistory(chat.activeChatId, previousPhase, true);
-  };
-
-  // terminate experiment and return to negotiation phase (click End Experiment session)
-  const handleCancelPipeline = () => {
-    if (chat.isSending) return;
-    startNewChat();
-  };
-
-  const handleStepperClick = (clickedPhase) => {
-    // click is ignored if there is not an active chat, if the system is sending a request to the LLM, or if the user click the voice of the menu of the current phase
-    if (!chat.activeChatId || currentPhase === clickedPhase || chat.isSending) return;
-
-    // in History Mode the menu is not active
-    if (isReadOnly) return;
-    
-    // load history for the clicked phase (it automatically set isReadOnly = true)
-    loadLLMHistory(chat.activeChatId, clickedPhase, false);
-  };
-
+  
   // send a user message and optional files to the current agent
-  const handleSubmit = async (e, autoText = null, autoPhase = null) => {
+  const handleSubmit = async (e) => {
     if(e) e.preventDefault();
     chat.setError(null);
 
     let textToSend = chat.inputValue.trim();
 
     // if there are questions, create formatted text and ignore the inputValue
-    if (currentPhase === 'negotiation' && negotiationQuestions.length > 0) {
+    if (negotiationQuestions.length > 0) {
+      const allAnswered = negotiationQuestions.every((_, i) => (negotiationAnswers[i] || "").trim() !== "");
+      if (!allAnswered) {
+        chat.setError("Please answer all clarifying questions before proceeding.");
+        return;
+      }
       textToSend = negotiationQuestions.map((q, i) => `${i + 1}. ${q}\nAnswer: ${negotiationAnswers[i]}`).join('\n\n');
     }
 
     if (!textToSend && chat.selectedFiles.length === 0) return;
 
     chat.appendMessage("user", textToSend);
-    
+    chat.setInputValue("");
+    setNegotiationQuestions([]);
+    setNegotiationAnswers({});
     chat.setIsSending(true);
 
-    try {
-      // build a multipart request because the payload may include uploaded files
-
-      const data = await sendChatRequest("/api/agent_server/chat", {
-        message: textToSend, username, reservation_id, chat_id: chat.activeChatId,
-        agent_role: currentPhase, is_manual_chat: "true", llm_model: chat.selectedModel
-      }, chat.selectedFiles);
-      
-      // safety can emit multiple self-correction iterations before producing a final outcome
-      if (currentPhase === 'safety' && data.reasoning_steps) {
-
-         data.reasoning_steps.forEach((step) => {
-            chat.appendMessage(step.role || "assistant", `[Iteration ${step.iteration}]\n${step.content}`);
-         });
-
-      } else if (data.reply) {
-        // other agents return only one message
-        chat.appendMessage("assistant", data.reply);
+    // determines if this submission is a direct reply to the safety agent's manual clarification requests
+    let isAnsweringQuestion = false;
+    if (chat.messages.length > 0) {
+      const lastMsg = chat.messages[chat.messages.length - 1];
+      if (lastMsg.role === "assistant") {
+        try {
+          const parsed = typeof lastMsg.content === 'string' ? JSON.parse(lastMsg.content) : lastMsg.content;
+          if (parsed && parsed.status && String(parsed.status).toUpperCase().includes('AWAITING_CLARIFICATIONS')) {
+            isAnsweringQuestion = true;
+          }
+        } catch (e) {}
       }
-
-      // persist the generated chat id so later phases and history use the same session
-      if (data.chat_id && !chat.activeChatId) {
-        chat.setActiveChatId(data.chat_id);
-        if (currentPhase === 'negotiation') chat.setSavedChats((prev) => [data.chat_id, ...prev]);
-      }
-
-      chat.setInputValue("");
-      chat.setSelectedFiles([]);
-      setNegotiationQuestions([]);
-      setNegotiationAnswers({});
-
-      // analyze response to unlock next phase
-      const finalReply = (data.reasoning_steps && data.reasoning_steps.length > 0) ? data.reasoning_steps[data.reasoning_steps.length - 1].content : data.reply;
-
-      parseLLMResponse(finalReply, currentPhase);
-
-    } catch (err) {
-      console.error("Error sending message:", err);
-      chat.setError(err.message || "Unexpected error occurred while sending the message.");
-      chat.appendMessage("assistant", "An error occurred.");
-    } finally {
-      chat.setIsSending(false);
     }
+
+    // build the request payload. In case of manual safety intervention, apply the special flag
+    const initialPayload = {
+        message: textToSend, 
+        username, 
+        reservation_id, 
+        chat_id: chat.activeChatId, 
+        llm_model: chat.selectedModel, 
+        current_phase: resumePhase,
+        is_manual_chat: (resumePhase === (LLMAgentPhases.length > 2 ? LLMAgentPhases[2] : "safety") && !isAnsweringQuestion) ? "true" : "false",
+        execution_mode: executionMode
+    };
+
+    await runExperimentPipeline(initialPayload, chat.selectedFiles);
+    chat.setSelectedFiles([]);
+  };
+
+  // recovers a failed execution state by requesting a new plan from the planning
+  const handleRetryPlanning = async () => {
+    setExecutionStatus(null);
+    const retryPayload = {
+        message: "RETRY_PLANNING",
+        username, reservation_id, chat_id: chat.activeChatId, 
+        llm_model: chat.selectedModel, current_phase: LLMAgentPhases.length > 1 ? LLMAgentPhases[1] : "planning", 
+        execution_mode: executionMode
+    };
+    await runExperimentPipeline(retryPayload, []);
+  };
+
+  // aborts the failed experiment permanently, updating both the local UI state and notifying the backend via a dedicated endpoint
+  const handleTerminateExperiment = async () => {
+    setExecutionStatus('TERMINATED');
+    chat.appendMessage("assistant", '{"status": "TERMINATED", "report": "The experiment was manually terminated after an execution failure."}');
+
+    fetch("/api/agent_server/terminate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, reservation_id, chat_id: chat.activeChatId })
+    });
   };
 
   // render structured JSON responses in a readable key/value layout
@@ -451,6 +648,16 @@ const LLMAgent = ({ username, reservation_id}) => {
     let displayContent = message.content;
 
     if (isUser && typeof displayContent === "string" && displayContent) {
+
+      displayContent = displayContent.replace(
+        /<(device_report|execution_results|execution_report)>([\s\S]*?)<\/\1>/g,
+        (match, tag, innerContent) => {
+          // remove === inside specified tags
+          const cleaned = innerContent.replace(/ ===\n/g, "\n").replace(/ ===/g, "");
+          return `<${tag}>${cleaned}</${tag}>`;
+        }
+      );
+
       // remove file content from the user message and replace with a placeholder
       const fileRegex = /--- Start attached file content: (.*?) ---[\s\S]*?--- End attached file content: \1 ---/g;
       // show the file name in the user message and remove the content for better readability
@@ -510,7 +717,7 @@ const LLMAgent = ({ username, reservation_id}) => {
     return (
       <div key={message.id} className="en-message-bubble en-message-assistant">
         <div className="en-message-role">
-          {`LLM ${currentPhase.charAt(0).toUpperCase() + currentPhase.slice(1)} Agent`}
+          System Agent
         </div>
         <div className="en-message-content">
           {formattedContent ? (
@@ -526,204 +733,65 @@ const LLMAgent = ({ username, reservation_id}) => {
   };
 
   return (
-    <div className="experiment-negotiation-container">
-
-      <div className={`en-stepper ${isReadOnly ? 'history-mode' : ''}`}>
-        {phases.map((phase, idx) => {
-          // true if the current step is active
-          const isActive = currentPhase === phase;
-
-          // if history mode, completed steps are computed respect to currentPhase. While if active, completed steps are computed respect to activePipelinePhase
-          const isCompleted = isReadOnly ? phases.indexOf(currentPhase) > idx : phases.indexOf(activePipelinePhase) > idx;
-          // yellow shown only in active mode
-          const isPipelineActive = !isReadOnly && phase === activePipelinePhase && currentPhase !== activePipelinePhase;
-
-          // cickable if: active experiment, not loading, not the visualized current phase
-          const isClickable = !isReadOnly && !chat.isSending && currentPhase !== phase;
-
-          return (
-            <div key={phase} className={`en-step ${isActive ? 'active' : ''} ${isCompleted ? 'completed' : ''} ${isPipelineActive ? 'pipeline-active' : ''} ${isClickable ? 'clickable' : ''}`}
-              onClick={() => handleStepperClick(phase)}>
-              {phase.toUpperCase()}
-            </div>
-          );
-        })}
-      </div>
-
-      <ChatHeader 
-        title={`${currentPhase.charAt(0).toUpperCase() + currentPhase.slice(1)} Agent`}
-        availableModels={chat.availableModels}
-        selectedModel={chat.selectedModel}
-        onModelChange={chat.setSelectedModel}
-        isDisabled={chat.isSending || isReadOnly}
+    <>
+      <UniversalPipelineChat 
+        mode="llmagent"
+        chat={chat}
+        title="Experiment LLM Agent"
+        phases={LLMAgentPhases}
+        currentProgressPhase={currentProgressPhase}
+        activeReasoning={activeReasoning}
+        isChatLocked={isChatLocked}
+        isRollingBack={isRollingBack}
+        isButtonDisabled={isButtonDisabled}
+        executionMode={executionMode}
+        setExecutionMode={setExecutionMode}
+        onRollback={handleRollbackClick}
+        onSubmit={handleSubmit}
+        formatPhaseName={formatPhaseName}
+        renderMessage={renderMessage}
+        negotiationQuestions={negotiationQuestions}
+        negotiationAnswers={negotiationAnswers}
+        setNegotiationAnswers={setNegotiationAnswers}
+        sessionLabel="Experiment"
+        startNewChat={startNewChat}
+        handleDownloadChat={handleDownloadChat}
+        handleDeleteChat={handleDeleteChat}
+        isPendingRetry={isPendingRetry}
+        onRetryPlanning={handleRetryPlanning}
+        onTerminateExperiment={handleTerminateExperiment}
+        inputPlaceholder={inputPlaceholder}
+        onLoadHistory={handleLoadHistory}
+        chatEndRef={chatEndRef}
+        reasoningRef={reasoningRef}
       />
 
-      {/* Agent response area */}
-      <div className="experiment-negotiation-main">
-        <ChatSidebar
-          savedChats={chat.savedChats}
-          activeChatId={chat.activeChatId}
-          isSending={chat.isSending}
-          disableListActions={chat.activeChatId !== null}
-          onNewChat={startNewChat}
-          onDownloadChat={handleDownloadChat}
-          onLoadHistory={(id) => loadLLMHistory(id, 'negotiation', true)}
-          onDeleteChat={handleDeleteChat}
-          sessionLabel="Conversation"
+      {/* Admin Debugger View */}
+      {isAdmin && (
+        <AdminReadOnlyDebugger 
+            username={username}
+            reservation_id={reservation_id}
+            activeChatId={chat.activeChatId}
+            phases={LLMAgentPhases}
+            renderMessage={renderMessage}
         />
-
-        <div className="experiment-negotiation-chat">
-          <div className="en-chat-window">
-            {isRollingBack ? (
-              <div className="en-message-bubble en-message-assistant">
-                <div className="en-message-role">System</div>
-                <div className="en-message-content">**[System]** Rollback execution on the testbed. Please wait...</div>
-              </div>
-            ) : (
-              <>
-                {chat.messages.map((msg) => renderMessage(msg))}
-                {chat.isSending && (
-                  <div className="en-message-bubble en-message-assistant">
-                    <div className="en-message-role">LLM Agent</div>
-                    <div className="en-message-content">Computing response, please wait...</div>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-
-          <form className="en-input-area" onSubmit={handleSubmit} autoComplete="off">
-            <div className="en-input-actions-wrapper">
-              <FileUploader
-                selectedFiles={chat.selectedFiles}
-                isInputDisabled={isInputDisabled}
-                onFileChange={chat.handleFileChange}
-                onRemoveFile={chat.handleRemoveFile}
-              />
-
-              <div className="en-execution-toggle-container">
-                  <span className="en-toggle-label">Select execution type: </span>
-                  
-                  <label className="en-switch">
-                    <input
-                      type="checkbox"
-                      checked={executionMode === 'parallel'}
-                      disabled={!(currentPhase === 'safety' && canAdvance) || isReadOnly}
-                      onChange={(e) => setExecutionMode(e.target.checked ? 'parallel' : 'serial')}
-                    />
-                    <span className="en-slider"></span>
-                  </label>
-                  <span className={`en-toggle-status ${executionMode === 'parallel' ? 'parallel' : ''}`}>{executionMode === 'parallel' ? 'Parallel' : 'Serial'}</span>
-              </div>
-            </div>
-
-            <div className="en-input-row">
-              {currentPhase === 'negotiation' && negotiationQuestions.length > 0 && !isReadOnly && currentPhase === activePipelinePhase ? (
-                <div className="en-questions-form">
-                  {negotiationQuestions.map((q, i) => (
-                    <div key={i} className="en-question-item">
-                      <label className="en-question-label">{i + 1}. {q}</label>
-                      <textarea 
-                        className="en-question-input"
-                        value={negotiationAnswers[i] || ""} 
-                        onChange={(e) => setNegotiationAnswers({...negotiationAnswers, [i]: e.target.value})}
-                        placeholder="Type your answer here..."
-                        rows={1}
-                        disabled={chat.isSending}
-                      />
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <textarea
-                  className="en-textarea"
-                  value={chat.inputValue}
-                  onChange={handleInputChange}
-                  placeholder={currentPhase === "negotiation" ? "Describe the experiment you want to run..." : "Describe the topology and insert all requested information..."}
-                  rows={3}
-                  disabled={isInputDisabled}
-                />
-              )}
-              <button
-                type="submit"
-                className={`en-send-button ${isButtonDisabled ? "en-send-button-disabled" : ""}`}
-                disabled={isButtonDisabled}
-                aria-label="Send"
-              >
-                <span className="en-send-icon">↑</span>
-              </button>
-            </div>
-              {chat.error && (<div className="en-error-message">{chat.error}</div>)}
-          </form>
-          
-          <div className="en-transition-actions">
-            {/* transition buttons to navigate in the history*/}
-            {isReadOnly ? (
-              <>
-                <button
-                  className={`en-transition-btn en-secondary-transition-btn ${(!hasPreviousPhase || chat.isSending) ? "en-transition-btn-disabled" : ""}`}
-                  onClick={handleGoBackHistory}
-                  disabled={!hasPreviousPhase || chat.isSending}
-                >
-                  {hasPreviousPhase ? `View ${previousPhase.toUpperCase()} History` : "No Previous History"}
-                </button>
-
-                <button
-                  className={`en-transition-btn en-primary-transition-btn ${(!canAdvance || chat.isSending) ? "en-transition-btn-disabled" : ""}`}
-                  onClick={() => handleAdvance()}
-                  disabled={!canAdvance || chat.isSending}
-                >
-                  {hasNextPhase ? `View ${nextPhase.toUpperCase()} History` : "Back to NEGOTIATION"}
-                </button>
-              </>
-            ) : (
-              <>
-                {/* transition buttons to navigate during experiment*/}
-                <button
-                  className={`en-transition-btn en-secondary-transition-btn ${chat.isSending ? "en-transition-btn-disabled" : ""}`}
-                  onClick={handleCancelPipeline}
-                  disabled={chat.isSending}
-                >
-                  End Experiment Session
-                </button>
-
-                {isExecutionLoopActive && currentPhase === 'execution' ? (
-                  <button
-                      className={`en-transition-btn en-primary-transition-btn ${(chat.isSending) ? "en-transition-btn-disabled" : ""}`}
-                      onClick={() => handleAdvance('planning')}
-                      disabled={chat.isSending}
-                  >
-                      Go back to PLANNING
-                  </button>
-                ) : (
-                  <button
-                    className={`en-transition-btn en-primary-transition-btn ${(!canAdvance || chat.isSending || isViewingPastPhase) ? "en-transition-btn-disabled" : ""}`}
-                    onClick={() => handleAdvance ()}
-                    disabled={!canAdvance || chat.isSending || isViewingPastPhase}
-                  >
-                    {hasNextPhase ? `Proceed to ${nextPhase.toUpperCase()}` : "Finish & Return to Start"}
-                  </button>
-                )}
-              </>
-            )}
-          </div>
-        </div>
-      </div>
-      {showRollbackModal && (
+      )}
+      {/*rollback confirmation window*/}
+      {isRollbackModalOpen && (
         <div className="en-modal-overlay">
           <div className="en-modal-content">
             <div className="en-modal-header">
-              <h3>Rollback Experiment</h3>
-              <p>An execution phase was detected for this session. Do you want to rollback the configurations applied to the testbed?</p>
+              <h3>Confirm Rollback</h3>
+              <p>Are you sure you want to rollback the experiment? This will revert the testbed to the initial snapshot and reset the current chat.</p>
             </div>
             <div className="en-modal-footer">
-              <button className="en-btn-cancel" onClick={handleDeclineRollback}>No, skip rollback</button>
-              <button className="en-btn-confirm" onClick={handleConfirmRollback}>Yes, run rollback</button>
+              <button className="en-btn-cancel" onClick={() => setIsRollbackModalOpen(false)}>Cancel</button>
+              <button className="en-btn-confirm" onClick={() => {setIsRollbackModalOpen(false); executeRollback();}}>Confirm</button>
             </div>
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 };
 

@@ -8,181 +8,203 @@ from flask import request, jsonify, send_file, Response
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from ..app import app
 from ..utils import parse_complete_inventory_hosts
-from ..config import PHASES_ORDER, AVAILABLE_MODELS, LLM_MODEL, TROUBLESHOOTER_PHASES_ORDER
+from ..config import PHASES_ORDER, AVAILABLE_MODELS, LLM_MODEL, TROUBLESHOOTER_PHASES_ORDER, SAFETY_ITERATIONS
 from .agents_util.prompts import ROLLBACK_BASE_CMD, TROUBLESHOOTER_PROMPTS
-from .agents_util.agent_server_utils import (redis_client, testbed_topology, open_ssh_connections, close_ssh_connections, execute_single_ssh_command, 
-                                             run_agent_execution_plan, run_parallel_commands, validate_json_format, handle_chat_logic, generate_troubleshooter_sse)
+from .agents_util.agent_server_utils import (redis_client, testbed_topology, open_ssh_connections, close_ssh_connections, execute_single_ssh_command, run_agent_execution_plan, 
+                                             run_parallel_commands, validate_json_format, handle_chat_logic, generate_troubleshooter_sse, format_as_string, parse_plan, get_last_agent_message)
 
 
-@app.route("/api/agent_server/chat", methods=["POST"])
-def chat():
-    message = request.form.get("message", "")
+@app.route("/api/agent_server/experiment/stream", methods=["POST"])
+def experiment_stream():
+    
     username = request.form.get("username", "")
     reservation_id = request.form.get("reservation_id", "")
-    agent_role = request.form.get("agent_role", "")
     chat_id = request.form.get("chat_id", "")
-    is_manual_chat = request.form.get("is_manual_chat", "false").lower() == "true"
-    files = request.files.getlist("files")
+    current_role = request.form.get("current_phase", "")
+    message = request.form.get("message", "")
     llm_model = request.form.get("llm_model", LLM_MODEL)
+    execution_mode = request.form.get("execution_mode", "serial")
+    context_payload = request.form.get("context", "")
+    files = request.files.getlist("files")
+    is_manual_chat = request.form.get("is_manual_chat", "false").lower() == "true"
 
-    if not username or not reservation_id:
-        return jsonify({"error": "Missing username or reservation_id"}), 400
-
-    result, status_code = handle_chat_logic(username, reservation_id, chat_id, agent_role, message, llm_model, files, is_manual_chat)
-    return jsonify(result), status_code
-
-@app.route("/api/agent_server/advance", methods=["POST"])
-def advance_agent():
-    data = request.get_json()
-    username = data.get("username", "")
-    reservation_id = data.get("reservation_id", "")
-    chat_id = data.get("chat_id", "")
-    current_role = data.get("current_agent", "")
-    next_role = data.get("next_agent", "")
-    llm_model = data.get("llm_model", LLM_MODEL)
-    execution_mode = data.get("execution_mode", "serial")
-
-    if not all([username, reservation_id, chat_id, current_role, next_role]):
+    if not all([username, reservation_id, current_role]):
         return jsonify({"error": "Missing parameters"}), 400
-
-    current_key = f"agent_history:{current_role}:{username}:{reservation_id}:{chat_id}"
-    next_key = f"agent_history:{next_role}:{username}:{reservation_id}:{chat_id}"
-
-    history_str = redis_client.get(current_key)
-    if not history_str:
-        return jsonify({"error": "Current session not found"}), 404
-
-    history = json.loads(history_str)
-    last_reply = history[-1]["content"]
-
-    is_valid, parsed = validate_json_format(last_reply, current_role)
-    if not is_valid:
-        return jsonify({"error": "Failed to parse last valid JSON for context extraction"}), 500
-    
-    # convert json lists in formatted text
-    def format_as_string(val):
-        if isinstance(val, list):
-            return "\n".join([str(item) for item in val])
-        return str(val)
-
-    # extract payload from current role
-    context_payload = ""
 
     # retrieve negotiation experiment context if available, it is common for next agents, usefull also in execution when the experiment is not approved
     experiment_context = "No specific experiment context provided."
     exit_conditions = "No specific exit conditions provided."
+    execution_report = "No report found"
+    old_plan = "No previous plan found."
 
-    if current_role in ["planning", "safety", "execution"]:
-        negotiation_key = f"agent_history:negotiation:{username}:{reservation_id}:{chat_id}"
-        negotiation_history_str = redis_client.get(negotiation_key)
+    if current_role in ["planning", "safety", "execution"] and chat_id:
+
+        is_valid_negotiation, parsed_negotiation = get_last_agent_message(username, reservation_id, chat_id, "negotiation")
+            
+        if is_valid_negotiation and parsed_negotiation.get("status") == "APPROVED":
+            experiment_context = format_as_string(parsed_negotiation.get("context_for_planning", "No specific experiment context provided."))
+            exit_conditions = format_as_string(parsed_negotiation.get("exit_conditions", "No specific exit conditions provided."))
+
+    if current_role == "planning" and message.strip() == "RETRY_PLANNING":
         
-        if negotiation_history_str:
-            negotiation_history = json.loads(negotiation_history_str)
-            last_negotiation_msg = negotiation_history[-1]["content"]
-            is_valid_negotiation, parsed_negotiation = validate_json_format(last_negotiation_msg, "negotiation")
-            
-            if is_valid_negotiation and parsed_negotiation.get("status") == "APPROVED":
-                experiment_context = format_as_string(parsed_negotiation.get("context_for_planning", "No specific experiment context provided."))
-                exit_conditions = format_as_string(parsed_negotiation.get("exit_conditions", "No specific exit conditions provided."))
-
-    if current_role == "negotiation":
-
-        raw_context = format_as_string(parsed.get("context_for_planning", ""))
-        raw_exit = format_as_string(parsed.get("exit_conditions", ""))
-        context_payload = f"<experiment_context>\n{raw_context}\n</experiment_context>\n\n<exit_conditions>\n{raw_exit}\n</exit_conditions>"
-
-    elif current_role == "planning":
-        plan = format_as_string(parsed.get("execution_plan", ""))
-        verification = format_as_string(parsed.get("verification", []))
-        
-        context_payload = f"<experiment_context>\n{experiment_context}\n</experiment_context>\n\n<exit_conditions>\n{exit_conditions}\n</exit_conditions>\n\n<execution_plan>\n{plan}\n</execution_plan>\n\n<verification_commands>\n{verification}\n</verification_commands>\n\n<device_report>\nnull\n</device_report>"
-    
-    elif current_role == "safety":
-        plan = parsed.get("executable_plan", "[]")
-        v_plan = parsed.get("verification_plan", [])
-
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        inventory_path = os.path.abspath(os.path.join(base_dir, "..", "controller", "inventories", f"res-{reservation_id}-inventory.ini"))
-
-        def parse_plan(plan):
-            if isinstance(plan, str):
-                if plan.strip().upper() in ["", "N/A", "NONE", "[]"]:
-                    return []
-                else:
-                    # if the plan is a string, we parse as a list of commands
-                    return [line.strip() for line in plan.strip().split('\n') if line.strip()]
-            return plan if isinstance(plan, list) else []
-
-        plan = parse_plan(plan)
-        v_plan = parse_plan(v_plan)
-
-        if len(plan) > 0 and len(v_plan) > 0:
-            
-            if execution_mode == "parallel":
-
-                all_devices = set()
-                for item in plan + v_plan:
-                    if ":" in item:
-                        all_devices.add(item.split(":", 1)[0].strip())
-
-                shared_connections = open_ssh_connections(all_devices, inventory_path, reservation_id)
-
-                start_time = time.time()
-
-                try:
-                    exec_report = run_parallel_commands(inventory_path, plan, reservation_id, is_intent=False, connections=shared_connections)
-                    verif_report = run_parallel_commands(inventory_path, v_plan, reservation_id, is_intent=False, connections=shared_connections)
-                finally:
-                    close_ssh_connections(shared_connections)
-
-                execution_report = f"--- CONFIGURATION REPORT ---\n{exec_report}\n\n--- VERIFICATION REPORT ---\n{verif_report}"
-
-                elapsed_time = time.time() - start_time
-                print(f"\n[DEBUG EXECUTION] --- PARALLEL PLAN EXECUTED IN {elapsed_time:.2f} SECONDS ---")      
-            else:
-                complete_plan = plan + v_plan
-
-                start_time = time.time()
-
-                execution_report = run_agent_execution_plan(inventory_path, complete_plan, reservation_id)
-
-                elapsed_time = time.time() - start_time
-                print(f"\n[DEBUG EXECUTION] --- SERIAL PLAN EXECUTED IN {elapsed_time:.2f} SECONDS ---")      
-
-            context_payload = f"<experiment_context>\n{experiment_context}\n</experiment_context>\n\n<exit_conditions>\n{exit_conditions}\n</exit_conditions>\n\n<execution_results>\n{execution_report}\n</execution_results>\n"
-            
-        else:    
-            context_payload = f"<experiment_context>\n{experiment_context}\n</experiment_context>\n\n<exit_conditions>\n{exit_conditions}\n</exit_conditions>\n\n<execution_results>\nNo execution plan was provided. Report that the safety check passed with no commands to execute.\n</execution_results>\n"
-            
-    elif current_role == "execution" and next_role == "planning":
         # get the report generated by the execution agent
-        execution_report = format_as_string(parsed.get("report", ""))
+        is_parsed_execution_valid, parsed_execution = get_last_agent_message(username, reservation_id, chat_id, "execution")
+        
+        if is_parsed_execution_valid:
+            execution_report = format_as_string(parsed_execution.get("report", ""))
 
         # retrieve the approved experiment plan from the safety agent
-        safety_key = f"agent_history:safety:{username}:{reservation_id}:{chat_id}"
-        safety_history_str = redis_client.get(safety_key)
+        is_parsed_safety_valid, parsed_safety = get_last_agent_message(username, reservation_id, chat_id, "safety")
         
-        if safety_history_str:
-            safety_history = json.loads(safety_history_str)
-            # get the last safety message
-            last_safety_msg = safety_history[-1]["content"]
-            is_parsed_safety_valid, parsed_safety = validate_json_format(last_safety_msg, "safety")
+        if is_parsed_safety_valid:
+            old_plan = format_as_string(parsed_safety.get("executable_plan", ""))
 
-            if is_parsed_safety_valid:
-                old_plan = format_as_string(parsed_safety.get("executable_plan", ""))
-            else:
-                old_plan = "No previous plan found."
-        else:
-            old_plan = "No previous plan found."
+        message = f"Please analyze the errors below and generate a NEW corrected execution plan. You MUST respond in a valid JSON object.\n\n<experiment_context>\n{experiment_context}\n</experiment_context>\n\n<exit_conditions>\n{exit_conditions}\n</exit_conditions>\n\n<failed_execution_plan>\n{old_plan}\n</failed_execution_plan>\n\n<execution_report>\n{execution_report}\n</execution_report>"
 
-        context_payload = f"Please analyze the errors below and generate a NEW corrected execution plan. You MUST respond in a valid JSON object.\n\n<experiment_context>\n{experiment_context}\n</experiment_context>\n\n<failed_execution_plan>\n{old_plan}\n</failed_execution_plan>\n\n<execution_report>\n{execution_report}\n</execution_report>"
-        
-    result, status_code = handle_chat_logic(username, reservation_id, chat_id, next_role, context_payload, llm_model, files=None)
-    
-    if status_code == 200:
-        result["context_sent"] = context_payload
+    # add user message to the context resturned by the client if the current phase is not negotiation and we are not in a retry in planning phase    
+    elif current_role != "negotiation" and context_payload:
+        message = context_payload + ("\n\n" + message if message.strip() else "")
 
-    return jsonify(result), status_code
+    def stream_gen():
+        with app.app_context():
+            # run LLM request sending reasoning in streaming
+            generator = handle_chat_logic(username, reservation_id, chat_id, current_role, message, llm_model, files, is_manual_chat)
+            
+            final_reply = None
+            chat_id_out = chat_id
+
+            try:
+                while True:
+                    # send reasoning chunk to the frontend in rela time
+                    yield next(generator)
+            except StopIteration as e:
+                # when handle_chat_logic ends, an exception is raised and the final value of the function can be retrieved
+                final_reply, chat_id_out = e.value
+            except Exception as e:
+                yield f"data: {json.dumps({'type': 'result', 'data': {'error': str(e)}})}\n\n"
+                return
+            # if the API does not generate a json, advertise the frontend and return to avoid lock
+            if not final_reply:
+                yield f"data: {json.dumps({'type': 'result', 'data': {'error': 'No reply generated'}})}\n\n"
+                return
+
+            # get final reply of the agent after reasoning
+            parsed = final_reply
+            status = str(parsed.get("status", "")).upper()
+
+            filtered_reply = None
+
+            if current_role == "negotiation":
+                # show complete negotiation message
+                filtered_reply = parsed
+            
+            # for planning, filtered_reply is None (we never show the planning message)
+            elif current_role == "safety":
+                # show only some fields of safety message
+                filtered_reply = {
+                    "status": status,
+                    "executable_plan": parsed.get("executable_plan", []),
+                    "verification_plan": parsed.get("verification_plan", [])
+                }
+                # add issues field only if the plan was rejected
+                if "REJECTED" in status:
+                    filtered_reply["issues"] = parsed.get("issues", [])
+                
+                # add clarifying questions if present
+                if parsed.get("clarifying_questions"):
+                    filtered_reply["clarifying_questions"] = parsed.get("clarifying_questions")
+                    
+            elif current_role == "execution":
+                # show complete execution message
+                filtered_reply = parsed
+
+            # update result_data only if there is reply that can be shown
+            result_data = {"chat_id": chat_id_out}
+            if filtered_reply:
+                result_data["reply"] = json.dumps(filtered_reply)
+
+            # for every phase add to result_data the context for the next agent and the name of the next agent of the pipeline
+            if current_role == "negotiation":
+                if "APPROVED" in status:
+                    raw_context = format_as_string(parsed.get("context_for_planning", ""))
+                    raw_exit = format_as_string(parsed.get("exit_conditions", ""))
+                    next_context = f"<experiment_context>\n{raw_context}\n</experiment_context>\n\n<exit_conditions>\n{raw_exit}\n</exit_conditions>"
+                    result_data.update({"context": next_context, "next_phase": "planning"})
+                else:
+                    result_data.update({"requires_answers": True, "questions": parsed.get("clarifying_questions", [])})
+
+            elif current_role == "planning":
+                if "APPROVED" in status:
+                    plan = format_as_string(parsed.get("execution_plan", ""))
+                    verification = format_as_string(parsed.get("verification", []))
+                    next_context = f"<experiment_context>\n{experiment_context}\n</experiment_context>\n\n<exit_conditions>\n{exit_conditions}\n</exit_conditions>\n\n<execution_plan>\n{plan}\n</execution_plan>\n\n<verification_commands>\n{verification}\n</verification_commands>\n\n<device_report>\nnull\n</device_report>"
+                    result_data.update({"context": next_context, "next_phase": "safety"})
+
+            elif current_role == "safety":
+                if "APPROVED" in status:
+                    plan = parsed.get("executable_plan", "[]")
+                    v_plan = parsed.get("verification_plan", [])
+
+                    base_dir = os.path.dirname(os.path.abspath(__file__))
+                    inventory_path = os.path.abspath(os.path.join(base_dir, "..", "controller", "inventories", f"res-{reservation_id}-inventory.ini"))
+
+                    plan = parse_plan(plan)
+                    v_plan = parse_plan(v_plan)
+
+                    # add message to show before starting execution of the plan on devices
+                    if len(plan) > 0 and len(v_plan) > 0:
+                        yield f"data: {json.dumps({'type': 'thought', 'content': f'\n\n[System: Executing verified plan on testbed...]\n\n'})}\n\n"
+                        
+                        if execution_mode == "parallel":
+                            # in parallel execution mode, commands are executed in parallel for differente devices, execution and verification are maintained separated and serial for consistency
+                            all_devices = set()
+                            for item in plan + v_plan:
+                                if ":" in item:
+                                    all_devices.add(item.split(":", 1)[0].strip())
+
+                            shared_connections = open_ssh_connections(all_devices, inventory_path, reservation_id)
+
+                            start_time = time.time()
+
+                            try:
+                                exec_report = run_parallel_commands(inventory_path, plan, reservation_id, is_intent=False, connections=shared_connections)
+                                verif_report = run_parallel_commands(inventory_path, v_plan, reservation_id, is_intent=False, connections=shared_connections)
+                            finally:
+                                close_ssh_connections(shared_connections)
+
+                            execution_report = f"--- CONFIGURATION REPORT ---\n{exec_report}\n\n--- VERIFICATION REPORT ---\n{verif_report}"
+
+                            elapsed_time = time.time() - start_time
+                            print(f"\n[DEBUG EXECUTION] --- PARALLEL PLAN EXECUTED IN {elapsed_time:.2f} SECONDS ---")      
+                        else:
+                            # in serial mode, every command is executed following the rder of the execution and verification plans
+                            complete_plan = plan + v_plan
+
+                            start_time = time.time()
+
+                            execution_report = run_agent_execution_plan(inventory_path, complete_plan, reservation_id)
+
+                            elapsed_time = time.time() - start_time
+                            print(f"\n[DEBUG EXECUTION] --- SERIAL PLAN EXECUTED IN {elapsed_time:.2f} SECONDS ---")      
+
+                        next_context = f"<experiment_context>\n{experiment_context}\n</experiment_context>\n\n<exit_conditions>\n{exit_conditions}\n</exit_conditions>\n\n<execution_results>\n{execution_report}\n</execution_results>\n"
+                        
+                    else:    
+                        next_context = f"<experiment_context>\n{experiment_context}\n</experiment_context>\n\n<exit_conditions>\n{exit_conditions}\n</exit_conditions>\n\n<execution_results>\nNo execution plan was provided. Report that the safety check passed with no commands to execute.\n</execution_results>\n"
+
+                    result_data.update({"context": next_context, "next_phase": "execution"})
+
+            elif current_role == "execution":
+                if "APPROVED" in status:
+                    result_data.update({"next_phase": None})
+                else:
+                    
+                    result_data.update({"execution_rejected": True})
+
+            # return final result for the current phase
+            yield f"data: {json.dumps({'type': 'result', 'data': result_data})}\n\n"
+
+    return Response(stream_gen(), mimetype="text/event-stream")
     
 @app.route("/api/agent_server/sessions", methods=["GET"])
 def get_sessions():
@@ -204,27 +226,72 @@ def get_sessions():
     # order chat_ids in descendent order
     chat_ids.sort(reverse=True)
     
-    return jsonify({"chat_ids": chat_ids, "phases_order": PHASES_ORDER, "troubleshooter_phases_order": TROUBLESHOOTER_PHASES_ORDER, "available_models": AVAILABLE_MODELS, "default_model": LLM_MODEL})
+    return jsonify({"chat_ids": chat_ids, "phases_order": PHASES_ORDER, "troubleshooter_phases_order": TROUBLESHOOTER_PHASES_ORDER, "available_models": AVAILABLE_MODELS, "default_model": LLM_MODEL, "safety_iterations": SAFETY_ITERATIONS})
 
 @app.route("/api/agent_server/history", methods=["GET"])
 def get_history():
     username = request.args.get("username", "")
     reservation_id = request.args.get("reservation_id", "")
     chat_id = request.args.get("chat_id", "")
-    agent_role = request.args.get("agent_role", "")
+    agent_roles_str = request.args.get("agent_role", "")
 
-    if not username or not reservation_id or not chat_id:
+    if not username or not reservation_id or not chat_id or not agent_roles_str:
         return jsonify({"error": "Missing parameters"}), 400
 
-    session_key = f"agent_history:{agent_role}:{username}:{reservation_id}:{chat_id}"
-    history_str = redis_client.get(session_key)
+    # frontend sends a special value if needs all agents
+    if agent_roles_str == "all_llm_agents":
+        agent_roles = PHASES_ORDER
+    else:
+        # frontend sends list of agents separated with comma if needs a partial list of agents
+        agent_roles = [r.strip() for r in agent_roles_str.split(",") if r.strip()]
 
+    # combine messages of different agents in teh same list
+    combined_messages = []
+
+    for agent_role in agent_roles:
+        session_key = f"agent_history:{agent_role}:{username}:{reservation_id}:{chat_id}"
+        history_str = redis_client.get(session_key)
+
+        if history_str:
+            history = json.loads(history_str)
+            visible_messages = [msg for msg in history if msg.get("role") not in ["system", "summary"]]
+
+            for msg in visible_messages:
+                msg["agent_phase"] = agent_role
+
+            combined_messages.extend(visible_messages)
+
+    # order messages by timestamp ascendent
+    combined_messages.sort(key=lambda x: x.get("timestamp", 0))
+
+    return jsonify({"messages": combined_messages})
+    
+
+@app.route("/api/agent_server/terminate", methods=["POST"])
+def terminate_experiment():
+    # save permanently TERMINATED status for execution messages on redis
+    data = request.get_json() or {}
+    username = data.get("username", "")
+    reservation_id = data.get("reservation_id", "")
+    chat_id = data.get("chat_id", "")
+
+    if not all([username, reservation_id, chat_id]):
+        return jsonify({"error": "Missing parameters"}), 400
+    
+    session_key = f"agent_history:execution:{username}:{reservation_id}:{chat_id}"
+    history_str = redis_client.get(session_key)
+    
     if history_str:
         history = json.loads(history_str)
-        visible_messages = [msg for msg in history if msg.get("role") not in ["system", "summary"]]
-        return jsonify({"messages": visible_messages})
-    
-    return jsonify({"messages": []})
+        # add termination message to execution history
+        history.append({
+            "role": "assistant", 
+            "content": '{"status": "TERMINATED", "report": "The experiment was manually terminated after an execution failure."}',
+            "timestamp": time.time()
+        })
+        redis_client.set(session_key, json.dumps(history), ex=432000)
+        
+    return jsonify({"status": "success"}), 200
 
 @app.route("/api/agent_server/history", methods=["DELETE"])
 def delete_history():
@@ -316,16 +383,8 @@ def rollback_experiment():
     reservation_id = data.get("reservation_id", "")
     chat_id = data.get("chat_id", "")
 
-    if not reservation_id or not username or not chat_id:
+    if not reservation_id or not username:
         return jsonify({"error": "Missing parameters"}), 400
-
-    # verify on redis if there was an execution
-    exec_key = f"agent_history:execution:{username}:{reservation_id}:{chat_id}"
-    exec_history = redis_client.get(exec_key)
-    if not exec_history:
-        # if an experiment was never executed, cancel the rollback
-        print("No execution history found, rollback is skipped")
-        return jsonify({"status": "SKIPPED", "message": "No execution phase found, skip rollback."}), 200
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
     inventory_path = os.path.abspath(os.path.join(base_dir, "..", "controller", "inventories", f"res-{reservation_id}-inventory.ini"))
