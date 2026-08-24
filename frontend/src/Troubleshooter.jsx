@@ -2,8 +2,8 @@ import React, { useState, useEffect, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import "./style/llmAgent.css";
 
-import { ChatSidebar, FileUploader, ChatHeader } from "./LLMAgents/SharedChatComponents";
-import { useAgentChat, sendChatRequest, sendChatRequestStream } from "./LLMAgents/useAgentChat";
+import { UniversalPipelineChat } from "./LLMAgents/SharedChatComponents";
+import { useAgentChat, sendChatRequestStream } from "./LLMAgents/useAgentChat";
 
 
 // common wrapper component for execution log and code fragments in agent messages
@@ -48,7 +48,7 @@ const ExecutionLogViewer = ({ message }) => {
       renderContent={(allOpen) =>
         reports.map((report, idx) => {
           // separate command from the output
-          const splitIndex = report.indexOf(' |');
+          const splitIndex = report.indexOf('===');
           if (splitIndex === -1) {
             return (
               <details key={idx} className="en-execution-log-details" open={allOpen}>
@@ -59,8 +59,10 @@ const ExecutionLogViewer = ({ message }) => {
               </details>
             );
           }
+          // first part is associated to real command
           const cmdPart = report.substring(0, splitIndex).trim();
-          const outputPart = report.substring(splitIndex + 2).trim();
+          // second part after the three characters (===) is the output of the command
+          const outputPart = report.substring(splitIndex + 3).trim();
           
           return (
             <details key={idx} className="en-execution-log-details" open={allOpen}>
@@ -141,6 +143,8 @@ const Troubleshooter = ({ username, reservation_id }) => {
   const [currentProgressPhase, setCurrentProgressPhase] = useState(null);
   // one agent is reasoning
   const [activeReasoning, setActiveReasoning] = useState("");
+  // conditions to disable send button
+  const isButtonDisabled = chat.isSending || (!chat.inputValue.trim() && chat.selectedFiles.length === 0);
 
   const phaseDescriptions = [
     "Request analysis and problem identification...",
@@ -148,6 +152,9 @@ const Troubleshooter = ({ username, reservation_id }) => {
     "Reading network status from devices...",
     "Preparation and generation of the final report..."
   ];
+
+  // placcehlder shown in the chat
+  let inputPlaceholder = chat.isSending ? "Processing phase, please wait..." : "Type your message...";
 
   // fetch of previous sessions
   useEffect(() => {
@@ -264,7 +271,7 @@ const Troubleshooter = ({ username, reservation_id }) => {
     chat.appendMessage("user", textToSend || "[Attached file]");
     chat.setInputValue("");
     
-    const initialPayload = {message: textToSend, username, reservation_id, chat_id: chat.activeChatId, llm_model: chat.selectedModel, current_phase: "diagnostic_intent"};
+    const initialPayload = {message: textToSend, username, reservation_id, chat_id: chat.activeChatId, llm_model: chat.selectedModel, current_phase: troubleshooterPhases.length > 0 ? troubleshooterPhases[0] : "diagnostic_intent"};
 
     await runTroubleshooterPipeline(initialPayload, chat.selectedFiles);
     chat.setSelectedFiles([]);
@@ -290,7 +297,8 @@ const Troubleshooter = ({ username, reservation_id }) => {
     setIsModalOpen(false);
     chat.setIsSending(true);
     // restart execution from execution phase with approved commands
-    setCurrentProgressPhase("execution");
+    const execPhase = troubleshooterPhases.length > 2 ? troubleshooterPhases[2] :
+    setCurrentProgressPhase(execPhase);
 
     const userApprovedCommands = pendingCommands.filter((_, idx) => commandDecisions[idx] === "accepted");
     
@@ -299,7 +307,7 @@ const Troubleshooter = ({ username, reservation_id }) => {
       reservation_id, 
       chat_id: chat.activeChatId, 
       llm_model: chat.selectedModel,
-      current_phase: "execution",
+      current_phase: execPhase,
       context: currentContext,
       safe_commands: JSON.stringify(safeCommandsBuffer),
       approved_commands: JSON.stringify(userApprovedCommands)
@@ -340,99 +348,27 @@ const Troubleshooter = ({ username, reservation_id }) => {
   };
 
   return (
-    <div className="experiment-negotiation-container">
-      <ChatHeader 
+    <>
+      <UniversalPipelineChat 
+        mode="troubleshooter"
+        chat={chat}
         title="Diagnostic Troubleshooter"
-        availableModels={chat.availableModels}
-        selectedModel={chat.selectedModel}
-        onModelChange={chat.setSelectedModel}
-        isDisabled={chat.isSending}
+        phases={troubleshooterPhases}
+        currentProgressPhase={currentProgressPhase}
+        activeReasoning={activeReasoning}
+        isChatLocked={false}
+        isButtonDisabled={isButtonDisabled} 
+        onSubmit={handleSubmit}
+        formatPhaseName={formatPhaseName}
+        renderMessage={renderMessage}
+        sessionLabel="Session"
+        startNewChat={startNewChat}
+        handleDownloadChat={handleDownloadChat}
+        handleDeleteChat={handleDeleteChat}
+        inputPlaceholder={inputPlaceholder}
+        chatEndRef={chatEndRef}
+        reasoningRef={reasoningRef}
       />
-
-      <div className="experiment-negotiation-main">
-        <ChatSidebar
-          savedChats={chat.savedChats}
-          activeChatId={chat.activeChatId}
-          isSending={chat.isSending}
-          disableListActions={false}
-          onNewChat={startNewChat}
-          onDownloadChat={handleDownloadChat}
-          onLoadHistory={(id) => chat.loadHistory(id)}
-          onDeleteChat={handleDeleteChat}
-          sessionLabel="Session"
-        />
-
-        <div className="experiment-negotiation-chat">
-          <div className="en-chat-window">
-            {chat.messages.map(renderMessage)}
-            {chat.isSending && currentProgressPhase && troubleshooterPhases.length > 0 && (
-              <div className="en-message-bubble en-message-assistant en-progress-bubble">
-                <div className="en-message-role">Troubleshooter Agent</div>
-                <div className="en-message-content">
-                  <p className="en-progress-title">
-                    Analyzing testbed, please wait...
-                  </p>
-                  <div className="en-troubleshooter-progress">
-                    {troubleshooterPhases.map((phaseKey, idx) => {
-                      const currentIndex = troubleshooterPhases.indexOf(currentProgressPhase);
-                      const isActive = idx === currentIndex;
-                      const isCompleted = idx < currentIndex;
-                      return (
-                        <div key={idx} className={`en-progress-item ${isActive ? 'active' : ''} ${isCompleted ? 'completed' : ''}`}>
-                          <span className="en-progress-icon">
-                            {isCompleted ? '✓' : isActive ? '●' : '○'}
-                          </span>
-                          <span className="en-progress-text">{formatPhaseName(phaseKey, idx)}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  {activeReasoning && (
-                    <div className="en-reasoning-box">
-                      <div className="en-reasoning-box-header">
-                        Agent Thinking Stream:
-                      </div>
-                      <div className="en-reasoning-box-content" ref={reasoningRef}>
-                        {activeReasoning}
-                        <span>▌</span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-            <div ref={chatEndRef} />
-          </div>
-
-          <form className="en-input-area" onSubmit={handleSubmit} autoComplete="off">
-            <FileUploader
-              selectedFiles={chat.selectedFiles}
-              isInputDisabled={chat.isSending}
-              onFileChange={chat.handleFileChange}
-              onRemoveFile={chat.handleRemoveFile}
-            />
-
-            <div className="en-input-row">
-              <textarea
-                className="en-textarea"
-                value={chat.inputValue}
-                onChange={(e) => chat.setInputValue(e.target.value)}
-                placeholder="E.g., Verify if h1 can ping h2 or check BGP on sw1..."
-                rows={3}
-                disabled={chat.isSending}
-              />
-              <button
-                type="submit"
-                className={`en-send-button ${((!chat.inputValue.trim() && chat.selectedFiles.length === 0) || chat.isSending) ? "en-send-button-disabled" : ""}`}
-                disabled={(!chat.inputValue.trim() && chat.selectedFiles.length === 0) || chat.isSending}
-              >
-                <span className="en-send-icon">↑</span>
-              </button>
-            </div>
-            {chat.error && <div className="en-error-message">{chat.error}</div>}
-          </form>
-        </div>
-      </div>
 
       {/* Approval modal */}
       {isModalOpen && (
@@ -478,7 +414,7 @@ const Troubleshooter = ({ username, reservation_id }) => {
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 };
 
