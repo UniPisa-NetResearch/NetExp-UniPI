@@ -58,9 +58,87 @@
 .logout-button:hover {
     background-color: #a71d2a;
 }
-.active-timer{
+.active-timer {
     font-weight: 700;
     color: var(--primary-blue);
     font-size: 1em;
     margin-right: 10px;
+}
+.progress-modal-header {
+    margin-bottom: 10px;
+}
+.progress-modal-wait-message {
+    margin: 0;
+}
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(11, 46, 107, 0.6);
+  z-index: 9999;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+.modal-content {
+  background-color: #ffffff;
+  padding: 24px;
+  border-radius: 8px;
+  max-width: 800px;
+  width: 90%;
+  border: 1px solid #d4e1ff;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+.modal-header h3 {
+  margin-top: 0;
+  color: #0b2e6b;
+}
+.modal-header p {
+  color: #32508a;
+  font-size: 14px;
+}
+.modal-body {
+    padding: 20px 0;
+}
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 20px;
+}
+.progress-modal-res {
+    text-align: center; 
+    color: #f39c12;
+     font-size: 16px; 
+     font-weight: bold;
+}
+.progress-container {
+    display: flex;
+    flex-direction: column; 
+    gap: 15px;
+}
+.progress-element {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 5px;
+    font-size: 14px;
+}
+.progress-bar {
+    width: 100%;
+    background-color: #e0e0e0;
+    border-radius: 8px; 
+    height: 12px;
+    overflow: hidden;
+}
+.progress-bar-fill {
+    height: 100%;
+    transition: width 0.5s ease-in-out;
+}
+.progress-bar-fill.in-progress {
+    background-color: #3498db;
+}
+.progress-bar-fill.completed {
+    background-color: #27ae60;
 }

@@ -24,6 +24,7 @@ CONTROLLER_CONFIGS_DIR = os.path.join(BASE_DIR, "controllerConfigs")
 USER_PLAYBOOKS_DIR = os.path.join(BASE_DIR, "userPlaybooks")
 USER_CONFIGS_DIR = os.path.join(BASE_DIR, "userConfigs")
 SNAPSHOTS_DIR = os.path.join(BASE_DIR, "snapshots")
+PROGRESS_LOGS_DIR = os.path.join(BASE_DIR, "playbookProgressLogs")
 TEMPLATES_DIR = os.path.join(CONTROLLER_PLAYBOOKS_DIR, "templates")
 WRAPPERS_DIR = os.path.join(CONTROLLER_PLAYBOOKS_DIR, "wrappers")
 CONTAINERLAB_TOPO_DIR = os.path.join(CONTROLLER_PLAYBOOKS_DIR, "containerlabTopology")
@@ -55,6 +56,7 @@ INPUT_TEMPLATE_CONTENT = r"""- name: Apply per-host commands
 """
 
 active_reservations = {}    # dictionary that contains active and usable (after key insertion) reservation
+playbook_tasks_cache = {}   # cache dictionary to store the total number of tasks per reservation
 
 def safe_filename(name: str) -> str:
     # sanitize a string for use as filename
@@ -141,7 +143,49 @@ def write_inventory(reservation_id: int, devices: list):
 def win_to_wsl_path(path):
     return "/mnt/" + path.replace("\\", "/").replace(":", "").lower()
 
-def run_ansible_playbook(inventory_path: str, playbook_path: str, extra_vars: dict = None, timeout: int = 900, remote_user: str = None):
+def get_dynamic_total_tasks(reservation_id, is_virtual):
+    
+    # executes a dry-run to dynamically calculate the number of tasks in the playbook 
+    pb_path = get_playbook_template_path("grant", is_virtual=is_virtual)
+    
+    if not pb_path:
+        return 30 # fallback value
+
+    # build the path to the inventory to prevent Ansible warnings during --list-tasks
+    safe_res_inv = safe_filename(f"res-{reservation_id}-inventory")
+    inv_path = os.path.join(INVENTORY_DIR, f"{safe_res_inv}.ini")
+        
+    try:
+        # run ansible asking only for the task list
+        cmd = ["ansible-playbook", "-i", inv_path, "--list-tasks", pb_path]
+
+        # if in LOCAL_TEST mode, adapt the command for WSL execution
+        if LOCAL_TEST:
+            inv_path_wsl = win_to_wsl_path(inv_path)
+            pb_path_wsl = win_to_wsl_path(pb_path)
+            cmd = ["wsl", "ansible-playbook", "-i", inv_path_wsl, "--list-tasks", pb_path_wsl]
+
+        out = subprocess.check_output(cmd, text=True)
+        
+        # count occurrences of "TAGS:" which appears exactly once per task
+        total_tags = out.count("TAGS:")
+        # count play headers to subtract them
+        play_headers = out.count("play #")
+        total_tasks = total_tags - play_headers
+        
+        # save the result in the cache for future polling requests
+        playbook_tasks_cache[reservation_id] = total_tasks
+
+        print("Number of tasks in grant playbook: ", total_tasks)
+
+        # return exact number of strictly normal tasks
+        return total_tasks
+    
+    except Exception as e:
+        print(f"Error counting tasks: {e}")
+        return 30 # fallback value in case of subprocess execution failure
+
+def run_ansible_playbook(inventory_path: str, playbook_path: str, extra_vars: dict = None, timeout: int = 900, remote_user: str = None, log_file_path: str = None):
     # function to run ansible-playbook
     if extra_vars is None:
         extra_vars = {}
@@ -216,6 +260,10 @@ def run_ansible_playbook(inventory_path: str, playbook_path: str, extra_vars: di
             if line:
                 print(line.rstrip())  # print in real time
                 stdout_lines.append(line)
+                # write to the log file in real-time if a path is provided (provided only in grant access execution)
+                if log_file_path:
+                    with open(log_file_path, "a", encoding="utf-8") as lf:
+                        lf.write(line)
 
             time.sleep(0.1)  # small pause
 
@@ -224,6 +272,10 @@ def run_ansible_playbook(inventory_path: str, playbook_path: str, extra_vars: di
         if remaining_out:
             print(remaining_out.rstrip())
             stdout_lines.append(remaining_out)
+            # write remaining output to the log file
+            if log_file_path:
+                with open(log_file_path, "a", encoding="utf-8") as lf:
+                    lf.write(remaining_out)
 
         remaining_err = proc.stderr.read()
         if remaining_err:
@@ -367,7 +419,15 @@ def grant_access():
 
     # run ansible-playbook
     extra_vars = {"username": username, "ssh_key": ssh_key, "full_user": bool(full_user), "nas_ip": NAS_IP, "nas_mount_base": NAS_MOUNT_BASE, "nfs_opts": NFS_OPTS, 'reservation_id': reservation_id, 'nas_password': MINIPC_PASS, 'nas_user': MINIPC_USER }
-    rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars)
+
+    # ensure the logs directory exists
+    os.makedirs(PROGRESS_LOGS_DIR, exist_ok=True)
+    # define the log path and delete it if it already exists from a previous zombie run
+    log_path = os.path.join(PROGRESS_LOGS_DIR, f"res_{reservation_id}_progress.log")
+    if os.path.exists(log_path):
+        os.remove(log_path)
+
+    rc, out, err = run_ansible_playbook(inv_path, pb_path, extra_vars=extra_vars, log_file_path=log_path)
 
     if rc == 0:
         # user account creation completed
@@ -483,6 +543,9 @@ def revoke_access():
     exp_telemetry_path = os.path.join(EXPERIMENT_TELEMETRY_DIR, experimenter_res_prefix)
     exp_templates_path = os.path.join(EXPERIMENT_TEMPLATES_DIR, experimenter_res_prefix)
 
+    # grant access log
+    grant_access_progress_log_path = os.path.join(PROGRESS_LOGS_DIR, f"res_{reservation_id}_progress.log")
+
     # execute revoke playbook
     pb_path = get_playbook_template_path("revoke", is_virtual=is_virtual)
     if not pb_path:
@@ -548,6 +611,9 @@ def revoke_access():
     # remove experimentTemplates/res_<reservation_id>
     remove_files(exp_templates_path, "folder")
 
+    # remove grant access progress log file
+    remove_files(grant_access_progress_log_path, "file")
+
     # remove active res file
     remove_files(f"res{reservation_id}", "file")
     print("Deleted generated files for reservation", reservation_id)
@@ -568,6 +634,10 @@ def revoke_access():
     if username in active_reservations:
         del active_reservations[username]  # remove reservation from active reservation list
         print(f"User {username} removed from active_reservations")
+
+    # remove the cached total tasks for this reservation
+    if reservation_id in playbook_tasks_cache:
+        del playbook_tasks_cache[reservation_id]
 
     if run_rollback:
         return jsonify({"ok": True, "message": "Revoke with rollback executed", "stdout": out, "stderr": err}), 200
@@ -611,6 +681,18 @@ def cleanup_reservation():
         if active_reservations[username] == reservation_id:
             del active_reservations[username]
             print(f"Removed {username} from active_reservations")
+
+    log_file_path = os.path.join(PROGRESS_LOGS_DIR, f"res_{reservation_id}_progress.log")
+    if os.path.exists(log_file_path):
+        try:
+            os.remove(log_file_path)
+            print(f"Removed file {log_file_path}")
+        except Exception as e:
+            pass
+
+    # remove the cached total tasks for this reservation
+    if reservation_id in playbook_tasks_cache:
+        del playbook_tasks_cache[reservation_id]
 
     # remove file if exists
     file_path = f"res{reservation_id}"
@@ -1076,6 +1158,56 @@ def delete_user_file():
     finally:
         if sftp:
             sftp.close()
+
+
+@app.route('/api/controller/getSetupProgress', methods=['GET'])
+def get_setup_progress():
+    # retrieve setup progress reading the log file generated by ansible
+    reservation_id = request.args.get("reservation_id")
+    if not reservation_id:
+        return jsonify({"ok": False, "message": "Missing reservation_id parameter"}), 400
+
+    log_path = os.path.join(PROGRESS_LOGS_DIR, f"res_{reservation_id}_progress.log")
+
+    if not os.path.exists(log_path):
+        # file does not exist: the orchestrator is waiting for the lock to run the playbook
+        return jsonify({"ok": True, "status": "queued"}), 200
+
+    device_tasks_done = {}
+    
+    with open(log_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            
+            # ignore loops and ignored errors to avoid counting them multiple times
+            if "=> (item=" in line or "...ignoring" in line:
+                continue
+                
+            # regex to match the completion status of a task for a specific device
+            match = re.match(r'^(ok|changed|skipping|fatal):\s*\[([^\]]+)\]', line)
+            
+            if match:
+                device = match.group(2)         # extract the device hostname (e.g., 'ch1')
+                
+                if device not in device_tasks_done:
+                    device_tasks_done[device] = 0
+                device_tasks_done[device] += 1
+
+    # dynamically retrieve the total number of tasks defined in the playbook
+    is_virtual = get_is_virtual_from_db(reservation_id)
+    # if the ttal is already computed, use the cached value, otherwise compute it
+    if reservation_id in playbook_tasks_cache:
+        total_tasks = playbook_tasks_cache[reservation_id]
+    else:
+        total_tasks = get_dynamic_total_tasks(reservation_id, is_virtual)
+    
+    # calculate the percentage for each device
+    progress_data = {}
+    for dev, done in device_tasks_done.items():
+        percent = int((done / total_tasks) * 100) if total_tasks > 0 else 0
+        progress_data[dev] = min(percent, 100) # ensure the percentage never exceeds 100% (e.g., when extra handlers are executed)
+
+    return jsonify({"ok": True, "status": "running", "progress": progress_data}), 200
 
 if __name__ == '__main__':
 

@@ -47,7 +47,7 @@ SUPPORTED_KEY_TYPES = ['ssh-ed25519', 'ssh-rsa']
 # orchestrator parameters
 TEST_MODE = True                                # test mode, each reservation starts at current date + 2 min
 TEST_DOUBLE_RES = False                         # test two consecutive reservations mode
-EXPERIMENT_DURATION = 300                       # expressed in minutes
+EXPERIMENT_DURATION = 420                       # expressed in minutes
 MAX_HOURS = 72                                  # maximum duration of a reservation in hours
                                                 # if changed, also change in Reservation.jsx line 11
 

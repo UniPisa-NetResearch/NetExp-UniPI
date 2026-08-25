@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import './style/style.css';
 import './style/home.css';
 
@@ -849,6 +849,84 @@ const AdminReservationManager = () => {
     );
 };
 
+const AdminContainerlabManager = () => {
+    const [output, setOutput] = useState('');
+    const [isProcessing, setIsProcessing] = useState(false);
+    // reference applied to the scrollable container
+    const terminalContainerRef = useRef(null);
+
+    // auto-scrollthe terminal container to the bottom
+    useEffect(() => {
+        if (terminalContainerRef.current) {
+            terminalContainerRef.current.scrollTop = terminalContainerRef.current.scrollHeight;
+        }
+    }, [output]);
+
+    const handleRedeploy = async () => {
+        if (!window.confirm("Are you sure you want to destroy and redeploy Containerlab deployment?")) {
+            return;
+        }
+
+        setIsProcessing(true);
+        setOutput('');
+
+        try {
+            // fetch request to the streaming endpoint
+            const response = await fetch('/api/auth/admin/redeployContainerlab', {
+                method: 'GET'
+            });
+
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
+            // get the stream reader directly from the response body
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder('utf-8');
+
+            // read the stream chunk by chunk in real-time
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+
+                // decode the Uint8Array chunk into a string and append it
+                let chunk = decoder.decode(value, { stream: true });
+                // regex to strip ANSI escape sequences (terminal color codes)
+                chunk = chunk.replace(/\x1B\[\d*(;\d+)*[a-zA-Z]/g, '');
+                // remove terminal query codes (OSC) like ESC]10;?ESC\
+                chunk = chunk.replace(/\x1B\]\d+;\?[^\x1B]*\x1B\\/g, '');
+                // append the clean chunk to the state
+                setOutput(prev => prev + chunk);
+            }
+        } catch (error) {
+            setOutput(prev => prev + `\n[CONNECTION ERROR] ${error.message}\n`);
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    return (
+        <div className="card admin-manager-card containerlab-manager-card">
+            <h2 className="title">Admin Panel - Containerlab Redeployment</h2>
+            <div className="containerlab-action-row">
+                <p>Destroy and recreate the virtual testbed on the Containerlab device:</p>
+                
+                <button 
+                    onClick={handleRedeploy} 
+                    className="submit-button delete-btn containerlab-manager-button" 
+                    disabled={isProcessing}
+                >
+                    {isProcessing ? 'Processing...' : 'Destroy & Deploy Containerlab'}
+                </button>
+            </div>
+
+            <div className="terminal-output-container" ref={terminalContainerRef}>
+                <pre className="terminal-output">
+                    {output || 'Press the button to execute deplyment...'}
+                </pre>
+            </div>
+        </div>
+    );
+};
+
 const Home = ({username, isAdmin, userId}) => {
     const [refreshTrigger, setRefreshTrigger] = useState(0);
     const [isProcessing, setIsProcessing] = useState(false);
@@ -859,6 +937,7 @@ const Home = ({username, isAdmin, userId}) => {
             <UserFilesManager username={username} isProcessing={isProcessing} setIsProcessing={setIsProcessing}/>
             {isAdmin && <AdminUserManager currentUserId={userId}  onUserDeleted={() => setRefreshTrigger(prev => prev + 1)}/>}
             {isAdmin && <AdminReservationManager key={refreshTrigger}/>}
+            {isAdmin && <AdminContainerlabManager />}
         </div>
     );
 };
