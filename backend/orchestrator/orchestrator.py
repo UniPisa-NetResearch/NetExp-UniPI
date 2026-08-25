@@ -674,17 +674,36 @@ def get_active_reservation_status():
         return jsonify({
             "ok": True,
             "isActive": True,
+            "isWaiting": False,
             "token": active_reservation.token,
             "reservation_id": active_reservation.id,
-            #"is_virtual": active_reservation.is_virtual,
             # SO string: YYYY-MM-DDTHH:MM:SS
             "expires_at": f"{active_reservation.endDate.isoformat()}T{active_reservation.endTime.strftime('%H:%M:%S')}"
+        }), 200
+
+    # check for a WAITING reservation (time is valid, but token is None due to queue)
+    waiting_reservation = Reservation.query.filter(
+        and_(
+            Reservation.username == username,
+            Reservation.token.is_(None),
+            start_condition,
+            end_condition
+        )
+    ).order_by(Reservation.startDate.desc(), Reservation.startTime.desc()).first()
+
+    if waiting_reservation:
+        return jsonify({
+            "ok": True,
+            "isActive": False,
+            "isWaiting": True, # the reservation is queued
+            "reservation_id": waiting_reservation.id # return the ID so the modal can fetch the logs
         }), 200
 
     # no active reservation
     return jsonify({
         "ok": True,
-        "isActive": False
+        "isActive": False,
+        "isWaiting": False
     }), 200
 
 def remove_all_scheduled_jobs():

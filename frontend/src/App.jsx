@@ -329,7 +329,7 @@ function App() {
 
     // wrapper component to show layout and content
     const NavbarWrapper = ({ children }) => (
-        <NavbarLayout onLogout={handleLogout} activeReservationExpiration={activeReservationExpiration} isReservationActive={isReservationActive} isAccessGranted={isAccessGranted} isEvaluationAccessGranted={isEvaluationAccessGranted} checkEvaluationAccess={checkEvaluationAccess}>
+        <NavbarLayout username={currentUser} onLogout={handleLogout} activeReservationExpiration={activeReservationExpiration} isReservationActive={isReservationActive} isAccessGranted={isAccessGranted} checkEvaluationAccess={checkEvaluationAccess} reservationId={reservationId}>
             {children}
         </NavbarLayout>
     );

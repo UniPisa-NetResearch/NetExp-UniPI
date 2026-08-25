@@ -1,12 +1,14 @@
-from flask import jsonify, request
+from flask import jsonify, request, Response
 from ..database.db import db, User, Reservation, ReservationDevice
 import base64
+import paramiko
+import subprocess
 from redis import Redis
 from rq import Queue
 from rq.job import Job
 from ..utils import get_next_available_id
 from ..app import app
-from ..config import REDIS_URL, SUPPORTED_KEY_TYPES
+from ..config import REDIS_URL, SUPPORTED_KEY_TYPES, CONTAINERLAB_HOST, CONTAINERLAB_HOST_USER
 
 redis = Redis.from_url(REDIS_URL)
 queue = Queue(connection=redis)
@@ -302,6 +304,63 @@ def delete_reservation():
         db.session.rollback()
         app.logger.error(f"Error deleting reservation: {ex}")
         return jsonify({"message": "Failed to delete reservation"}), 500
+
+@app.route('/api/auth/admin/redeployContainerlab', methods=['GET'])
+def redeploy_containerlab():
+    # Executes containerlab destruction and deployment remotely, and cleans known_hosts locally. Streams output in real-time.
+    
+    def generate_output():
+        yield "--- Starting Containerlab Redeployment ---\n\n"
+        try:
+            # connect to remote CONTAINERLAB_HOST using Paramiko
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            # key-based auth is configured for the host
+            client.connect(hostname=CONTAINERLAB_HOST, username=CONTAINERLAB_HOST_USER)
+
+            # commands to run remotely
+            commands = [
+                ("Destroying current lab...", "cd testbed-sonic && sudo containerlab destroy"),
+                ("Deploying new lab...", "cd testbed-sonic && sudo containerlab deploy")
+            ]
+
+            for desc, cmd in commands:
+                yield f"\n>>> {desc}\n"
+                # get_pty=True helps capture real-time stdout and stderr sequentially
+                stdin, stdout, stderr = client.exec_command(cmd, get_pty=True)
+
+                # read and yield stdout line by line in real-time
+                for line in iter(stdout.readline, ""):
+                    yield line
+
+                exit_status = stdout.channel.recv_exit_status()
+                if exit_status != 0:
+                    yield f"\n[ERROR] Command failed with exit status {exit_status}\n"
+                    client.close()
+                    return
+
+            client.close()
+
+            # run local script to clean known_hosts
+            yield "\n>>> Cleaning known hosts locally...\n"
+            proc = subprocess.Popen(["./clean_known_hosts.sh"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+            
+            # read and yield local stdout line by line
+            for line in iter(proc.stdout.readline, ""):
+                yield line
+                
+            proc.wait()
+            if proc.returncode != 0:
+                yield f"\n[ERROR] Local script failed with exit status {proc.returncode}\n"
+                return
+
+            yield "\n--- Redeployment Completed Successfully! ---\n"
+
+        except Exception as e:
+            yield f"\n[EXCEPTION] {str(e)}\n"
+
+    # return the generator as a plain text stream
+    return Response(generate_output(), mimetype='text/plain')
 
 
 if __name__ == '__main__':
