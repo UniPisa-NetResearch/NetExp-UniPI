@@ -1,5 +1,10 @@
 from .database.db import db, Reservation
+import os
+import yaml
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# define the path for the reservation devices inside the agent folder
+RESERVATION_DEVICES_DIR = os.path.join(BASE_DIR, "agent", "agents_util", "reservation_devices")
 
 def get_next_available_id(model_class):
     # Find the first available ID (fills gaps)
@@ -151,3 +156,26 @@ def get_is_virtual_from_db(reservation_id) -> bool:
     except Exception as e:
         print(f"Error reading Reservation for reservation {reservation_id}: {e}")
         return False
+
+def create_reserved_devices_yaml(reservation_id, devices):
+    # creates a YAML file containing the list of reserved devices for the LLM agents
+    os.makedirs(RESERVATION_DEVICES_DIR, exist_ok=True)
+    file_path = os.path.join(RESERVATION_DEVICES_DIR, f"res_{reservation_id}_devices.yaml")
+    
+    device_list = []
+    for d in devices:
+        # add only valid devices with an ID/Name and their role
+        if d.get("id_device"):
+            device_list.append({
+                "name": d.get("id_device"),
+                "role": d.get("role", "unknown")
+            })
+    
+    data = {"reserved_devices": device_list}
+    
+    try:
+        with open(file_path, 'w', encoding='utf-8') as f:
+            yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+        print(f"Created reserved devices YAML at {file_path}")
+    except Exception as e:
+        print(f"Error creating reserved devices YAML: {e}")

@@ -5,7 +5,7 @@ import { UniversalPipelineChat } from "./LLMAgents/SharedChatComponents";
 import { useAgentChat, sendChatRequestStream } from "./LLMAgents/useAgentChat";
 
 // component exclusively for Admins: read-only view of historical JSON messages
-const AdminReadOnlyDebugger = ({ username, reservation_id, activeChatId, phases, renderMessage }) => {
+const AdminReadOnlyDebugger = ({ username, reservation_id, activeChatId, phases, renderMessage, agentNames }) => {
   const [debugPhase, setDebugPhase] = useState(phases.length > 0 ? phases[0] : 'negotiation');
   const [debugMessages, setDebugMessages] = useState([]);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -70,14 +70,14 @@ const AdminReadOnlyDebugger = ({ username, reservation_id, activeChatId, phases,
                             className={`en-step ${debugPhase === phase ? 'active' : ''} clickable`}
                             onClick={() => setDebugPhase(phase)}
                         >
-                            {phase.toUpperCase()}
+                            {(agentNames[phase] || phase).toUpperCase()}
                         </div>
                     ))}
                 </div>
 
                 <div className="experiment-negotiation-chat admin-debugger-chat">
                     {debugMessages.length === 0 ? (
-                        <p className="admin-debugger-empty">No history found for {debugPhase.toUpperCase()} phase.</p>
+                        <p className="admin-debugger-empty">No history found for {agentNames[debugPhase] || debugPhase.toUpperCase()} phase.</p>
                     ) : (
                         debugMessages.map(renderMessage)
                     )}
@@ -441,7 +441,7 @@ const LLMAgent = ({ username, reservation_id, isAdmin}) => {
         "Validating plan safety...",
         "Generationg report after commands execution on testbed..."
     ];
-    return descriptions[index] || phaseString.toUpperCase();
+    return descriptions[index] || chat.agentNames[phaseString] || phaseString.toUpperCase();
   };
 
   // core orchestrator for the multi-agent pipeline. It continuously connects to the SSE stream endpoint, manages phase transitions, and aggregates reasoning and final output
@@ -717,7 +717,9 @@ const LLMAgent = ({ username, reservation_id, isAdmin}) => {
     return (
       <div key={message.id} className="en-message-bubble en-message-assistant">
         <div className="en-message-role">
-          System Agent
+          {message.agent_phase && chat.agentNames[message.agent_phase] 
+            ? chat.agentNames[message.agent_phase] 
+            : "System Agent"}
         </div>
         <div className="en-message-content">
           {formattedContent ? (
@@ -774,6 +776,7 @@ const LLMAgent = ({ username, reservation_id, isAdmin}) => {
             activeChatId={chat.activeChatId}
             phases={LLMAgentPhases}
             renderMessage={renderMessage}
+            agentNames={chat.agentNames}
         />
       )}
       {/*rollback confirmation window*/}

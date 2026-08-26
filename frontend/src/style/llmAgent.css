@@ -440,6 +440,7 @@
   transition: color 0.3s ease;
   border-radius: 8px;
   padding:8px;
+  max-width: 20%;
 }
 .en-step.clickable {
   cursor: pointer;
@@ -995,7 +996,7 @@ input:disabled + .en-slider:before {
   white-space: pre-wrap;
   word-break: break-all;
 }
-.en-troubleshooter-progress {
+.en-diagnostic-assistant-progress {
   display: flex;
   flex-direction: column;
   gap: 4px;

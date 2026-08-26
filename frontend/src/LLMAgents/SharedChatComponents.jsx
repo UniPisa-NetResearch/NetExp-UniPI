@@ -132,7 +132,7 @@ export const ChatHeader = ({ title, availableModels, selectedModel, onModelChang
 };
 
 export const UniversalPipelineChat = ({
-    mode, // "llmagent" or "troubleshooter"
+    mode, // "llmagent" or "diagnosticassistant"
     chat, title, phases, currentProgressPhase, activeReasoning, isChatLocked,
     executionMode, setExecutionMode, onRollback, onSubmit, formatPhaseName,
     renderMessage, negotiationQuestions = [], negotiationAnswers = {},
@@ -184,7 +184,7 @@ export const UniversalPipelineChat = ({
                         <p className="en-progress-title">
                           Processing phase, please wait...
                         </p>
-                        <div className="en-troubleshooter-progress">
+                        <div className="en-diagnostic-assistant-progress">
                           {phases.map((phaseKey, idx) => {
                             const currentIndex = phases.indexOf(currentProgressPhase);
                             const isActive = idx === currentIndex;

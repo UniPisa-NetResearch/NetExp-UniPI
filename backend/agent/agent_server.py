@@ -8,10 +8,10 @@ from flask import request, jsonify, send_file, Response
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from ..app import app
 from ..utils import parse_complete_inventory_hosts
-from ..config import PHASES_ORDER, AVAILABLE_MODELS, LLM_MODEL, TROUBLESHOOTER_PHASES_ORDER, SAFETY_ITERATIONS
-from .agents_util.prompts import ROLLBACK_BASE_CMD, TROUBLESHOOTER_PROMPTS
+from ..config import PHASES_ORDER, AVAILABLE_MODELS, LLM_MODEL, DIAGNOSTIC_ASSISTANT_PHASES_ORDER, SAFETY_ITERATIONS, AGENT_NAMES
+from .agents_util.prompts import ROLLBACK_BASE_CMD, DIAGNOSTIC_ASSISTANT_PROMPTS
 from .agents_util.agent_server_utils import (redis_client, testbed_topology, open_ssh_connections, close_ssh_connections, execute_single_ssh_command, run_agent_execution_plan, 
-                                             run_parallel_commands, validate_json_format, handle_chat_logic, generate_troubleshooter_sse, format_as_string, parse_plan, get_last_agent_message)
+                                             run_parallel_commands, handle_chat_logic, generate_diagnostic_assistant_sse, format_as_string, parse_plan, get_last_agent_message, get_reserved_devices)
 
 
 @app.route("/api/agent_server/experiment/stream", methods=["POST"])
@@ -226,7 +226,7 @@ def get_sessions():
     # order chat_ids in descendent order
     chat_ids.sort(reverse=True)
     
-    return jsonify({"chat_ids": chat_ids, "phases_order": PHASES_ORDER, "troubleshooter_phases_order": TROUBLESHOOTER_PHASES_ORDER, "available_models": AVAILABLE_MODELS, "default_model": LLM_MODEL, "safety_iterations": SAFETY_ITERATIONS})
+    return jsonify({"chat_ids": chat_ids, "phases_order": PHASES_ORDER, "diagnostic_assistant_phases_order": DIAGNOSTIC_ASSISTANT_PHASES_ORDER, "available_models": AVAILABLE_MODELS, "default_model": LLM_MODEL, "safety_iterations": SAFETY_ITERATIONS, "agent_names": AGENT_NAMES})
 
 @app.route("/api/agent_server/history", methods=["GET"])
 def get_history():
@@ -357,8 +357,11 @@ def download_chat():
                     
                     # group in the same folder every agent chat
                     folder = f"{cid}/" if not chat_id else ""
+                    # create file name adding _chat only if not present
+                    file_name = f"{role}.json" if role.endswith("_chat") else f"{role}_chat.json"
+                    
                     # add json file to ZIP file 
-                    zf.writestr(f"{folder} {role}_chat.json", formatted_json)
+                    zf.writestr(f"{folder}{file_name}", formatted_json)
                     has_data = True
 
     if not has_data:
@@ -370,7 +373,7 @@ def download_chat():
     if chat_id:
         download_name = f"chat_{chat_id}.zip"  
     elif agent_role:
-        download_name = f"all_troubleshooter_chats_{reservation_id}.zip" 
+        download_name = f"all_diagnostic_assistant_chats_{reservation_id}.zip" 
     else:
         download_name = f"all_chats_{reservation_id}.zip"
     
@@ -434,8 +437,8 @@ def rollback_experiment():
 
     return jsonify({"status": "SUCCESS", "report": "\n".join(report_lines)}), 200
 
-@app.route("/api/agent_server/troubleshooter/chat", methods=["POST"])
-def troubleshooter_chat():
+@app.route("/api/agent_server/diagnosticAssistant/chat", methods=["POST"])
+def diagnostic_assistant_chat():
 
     print("\n" + "="*50)
 
@@ -458,7 +461,7 @@ def troubleshooter_chat():
         request_data['chat_id'] = f"{int(time.time())}_{uuid.uuid4().hex[:8]}"
 
     # retrieve chat history if present
-    request_data['session_key'] = f"agent_history:troubleshooter_chat:{request_data['username']}:{request_data['reservation_id']}:{request_data['chat_id']}"
+    request_data['session_key'] = f"agent_history:diagnostic_assistant_chat:{request_data['username']}:{request_data['reservation_id']}:{request_data['chat_id']}"
     history_str = redis_client.get(request_data['session_key'])
     
     if history_str:
@@ -466,11 +469,14 @@ def troubleshooter_chat():
         history = json.loads(history_str)
     else:
         # add system promtp to the history
-        system_prompt = TROUBLESHOOTER_PROMPTS["diagnostic_intent"]
+        system_prompt = DIAGNOSTIC_ASSISTANT_PROMPTS["diagnostic_intent"]
         system_prompt += f"\n\n<topology>\n```yaml\n{testbed_topology}\n```\n</topology>\n"
+        # add reserved devices constraint list
+        system_prompt += get_reserved_devices(request_data["reservation_id"])
+
         history = [{"role": "system", "content": system_prompt}]
 
-    sse_stream = generate_troubleshooter_sse(history=history, request_data=request_data)
+    sse_stream = generate_diagnostic_assistant_sse(history=history, request_data=request_data)
     
     print("[DEBUG SSE] Return Flask response to the Client...")
     return Response(sse_stream, mimetype="text/event-stream")
