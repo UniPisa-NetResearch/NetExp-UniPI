@@ -68,6 +68,7 @@ export const useAgentChat = (username, reservation_id, defaultRole) => {
   const [error, setError] = useState(null);
   const [savedChats, setSavedChats] = useState([]);
   const [activeChatId, setActiveChatId] = useState(null);
+  const [agentNames, setAgentNames] = useState({});
   // model selection
   const [availableModels, setAvailableModels] = useState([]);
   const [selectedModel, setSelectedModel] = useState("");
@@ -112,6 +113,11 @@ export const useAgentChat = (username, reservation_id, defaultRole) => {
         // select default model if no models are selected
         if (data.default_model && !selectedModel) {
           setSelectedModel(data.default_model);
+        }
+
+        // save the dynamic agent names mapping from backend
+        if (data.agent_names) {
+          setAgentNames(data.agent_names);
         }
 
         return data;
@@ -198,7 +204,7 @@ export const useAgentChat = (username, reservation_id, defaultRole) => {
     error, setError,
     savedChats, setSavedChats,
     activeChatId, setActiveChatId,
-    availableModels, selectedModel, setSelectedModel,
+    availableModels, selectedModel, setSelectedModel, agentNames,
     resetBaseChat, fetchSessions, loadHistory, deleteChat, downloadChat
   };
 };

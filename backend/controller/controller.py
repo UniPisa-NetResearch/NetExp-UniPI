@@ -12,7 +12,7 @@ import stat as stat_module
 from flask import jsonify, request
 import shutil
 import socket
-from ..utils import get_is_virtual_from_db
+from ..utils import get_is_virtual_from_db, create_reserved_devices_yaml
 from ..app import app
 from ..config import LOCAL_TEST, SONIC_USER, SONIC_PASS, MINIPC_USER, MINIPC_PASS, NAS_IP, NAS_MOUNT_BASE, NFS_OPTS, USER_QUOTA_BYTES, CONTAINERLAB_HOST, CONTAINERLAB_HOST_USER, AGENT_SERVER_URL
 
@@ -25,6 +25,7 @@ USER_PLAYBOOKS_DIR = os.path.join(BASE_DIR, "userPlaybooks")
 USER_CONFIGS_DIR = os.path.join(BASE_DIR, "userConfigs")
 SNAPSHOTS_DIR = os.path.join(BASE_DIR, "snapshots")
 PROGRESS_LOGS_DIR = os.path.join(BASE_DIR, "playbookProgressLogs")
+RESERVATION_DEVICES_DIR = os.path.join(BASE_DIR, "..", "agent", "agents_util", "reservation_devices")
 TEMPLATES_DIR = os.path.join(CONTROLLER_PLAYBOOKS_DIR, "templates")
 WRAPPERS_DIR = os.path.join(CONTROLLER_PLAYBOOKS_DIR, "wrappers")
 CONTAINERLAB_TOPO_DIR = os.path.join(CONTROLLER_PLAYBOOKS_DIR, "containerlabTopology")
@@ -410,6 +411,9 @@ def grant_access():
     inv_path, hosts = write_inventory(reservation_id, devices)
     print("Inventory written:", inv_path, "hosts:", hosts)
 
+    # generate the reserved devices YAML for the LLM agents to enforce security boundaries
+    create_reserved_devices_yaml(reservation_id, devices_with_ip)
+
     # check grant playbook file
     pb_path = get_playbook_template_path("grant", is_virtual=is_virtual)
     if not pb_path:
@@ -546,6 +550,9 @@ def revoke_access():
     # grant access log
     grant_access_progress_log_path = os.path.join(PROGRESS_LOGS_DIR, f"res_{reservation_id}_progress.log")
 
+    # reserved devices YAML file for the LLM agents
+    res_devices_yaml_path = os.path.join(RESERVATION_DEVICES_DIR, f"res_{reservation_id}_devices.yaml")
+
     # execute revoke playbook
     pb_path = get_playbook_template_path("revoke", is_virtual=is_virtual)
     if not pb_path:
@@ -613,6 +620,9 @@ def revoke_access():
 
     # remove grant access progress log file
     remove_files(grant_access_progress_log_path, "file")
+
+    # Remove reserved devices file for LLM agents
+    remove_files(res_devices_yaml_path, "file")
 
     # remove active res file
     remove_files(f"res{reservation_id}", "file")
@@ -687,6 +697,15 @@ def cleanup_reservation():
         try:
             os.remove(log_file_path)
             print(f"Removed file {log_file_path}")
+        except Exception as e:
+            pass
+
+    # Remove the reserved devices YAML file during cleanup
+    res_devices_yaml_path = os.path.join(RESERVATION_DEVICES_DIR, f"res_{reservation_id}_devices.yaml")
+    if os.path.exists(res_devices_yaml_path):
+        try:
+            os.remove(res_devices_yaml_path)
+            print(f"Removed file {res_devices_yaml_path}")
         except Exception as e:
             pass
 

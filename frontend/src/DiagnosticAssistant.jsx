@@ -62,7 +62,9 @@ const ExecutionLogViewer = ({ message }) => {
           // first part is associated to real command
           const cmdPart = report.substring(0, splitIndex).trim();
           // second part after the three characters (===) is the output of the command
-          const outputPart = report.substring(splitIndex + 3).trim();
+          let outputPart = report.substring(splitIndex + 3).trim();
+          // filter ansible execution status from the output
+          outputPart = outputPart.replace(/\[SUCCESS]:?[ \t]*\n?/g, '').replace(/\[FAILED: Return code \d+\][ \t]*\n?/g, '').replace(/\[STDOUT]:[ \t]*\n?/g, '').replace(/\[STDERR]:[ \t]*\n?/g, '').replace(/===[ \t]*/g, '').trim();
           
           return (
             <details key={idx} className="en-execution-log-details" open={allOpen}>
@@ -77,9 +79,16 @@ const ExecutionLogViewer = ({ message }) => {
 };
 
 const MarkdownMessageViewer = ({ message, username, isUser }) => {
-  const displayContent = message.content;
+  let displayContent = message.content;
+
+  if (typeof displayContent === 'string') {
+    // filter ansible execution status from the output
+    displayContent = displayContent.replace(/\[SUCCESS]:?[ \t]*\n?/g, '').replace(/\[FAILED: Return code \d+\][ \t]*\n?/g, '').replace(/\[STDOUT]:[ \t]*\n?/g, '').replace(/\[STDERR]:[ \t]*\n?/g, '').replace(/===[ \t]*/g, '');
+  
+  }
+
   const hasCodeBlocks = displayContent.includes("```");
-  const title = isUser ? username : "Troubleshooter Agent";
+  const title = isUser ? username : "Diagnostic Assistant";
   const wrapperClass = isUser ? 'en-message-user' : 'en-message-assistant';
 
   // if there are not code blocks, normally render the message
@@ -127,8 +136,8 @@ const MarkdownMessageViewer = ({ message, username, isUser }) => {
   );
 };
 
-const Troubleshooter = ({ username, reservation_id }) => {
-  const chat = useAgentChat(username, reservation_id, "troubleshooter_chat");
+const DiagnosticAssistant = ({ username, reservation_id }) => {
+  const chat = useAgentChat(username, reservation_id, "diagnostic_assistant_chat");
   const chatEndRef = useRef(null);
   const reasoningRef = useRef(null);
 
@@ -139,7 +148,7 @@ const Troubleshooter = ({ username, reservation_id }) => {
   const [currentContext, setCurrentContext] = useState("");
   const [commandDecisions, setCommandDecisions] = useState({});
   // execution progress states
-  const [troubleshooterPhases, setTroubleshooterPhases] = useState([]);
+  const [diagnosticAssistantPhases, setDiagnosticAssistantPhases] = useState([]);
   const [currentProgressPhase, setCurrentProgressPhase] = useState(null);
   // one agent is reasoning
   const [activeReasoning, setActiveReasoning] = useState("");
@@ -159,9 +168,9 @@ const Troubleshooter = ({ username, reservation_id }) => {
   // fetch of previous sessions
   useEffect(() => {
 
-    chat.fetchSessions("troubleshooter_chat").then(data => {
-      if(data && data.troubleshooter_phases_order){
-        setTroubleshooterPhases(data.troubleshooter_phases_order);
+    chat.fetchSessions("diagnostic_assistant_chat").then(data => {
+      if(data && data.diagnostic_assistant_phases_order){
+        setDiagnosticAssistantPhases(data.diagnostic_assistant_phases_order);
       }
     });
   }, [chat.fetchSessions]);
@@ -188,7 +197,7 @@ const Troubleshooter = ({ username, reservation_id }) => {
   const handleDownloadChat = (chatId, e) => {
     
     if (e) e.stopPropagation();
-    chat.downloadChat(chatId, "troubleshooter_chat");
+    chat.downloadChat(chatId, "diagnostic_assistant_chat");
 
   };
 
@@ -203,7 +212,7 @@ const Troubleshooter = ({ username, reservation_id }) => {
     return phaseString.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
   };
 
-  const runTroubleshooterPipeline = async (initialPayload, initialFiles) => {
+  const runDiagnosticAssistantPipeline = async (initialPayload, initialFiles) => {
     let payload = { ...initialPayload };
     let currentFiles = initialFiles;
     chat.setIsSending(true);
@@ -213,7 +222,7 @@ const Troubleshooter = ({ username, reservation_id }) => {
         setCurrentProgressPhase(payload.current_phase);
         setActiveReasoning("");
 
-        const data = await sendChatRequestStream("/api/agent_server/troubleshooter/chat", payload, currentFiles,
+        const data = await sendChatRequestStream("/api/agent_server/diagnosticAssistant/chat", payload, currentFiles,
           (thoughtChunk) => {
             setActiveReasoning((prev) => prev + thoughtChunk); // collect reasoning tokens and append to the previous collected to recreate the entire reasoning
           }
@@ -271,9 +280,9 @@ const Troubleshooter = ({ username, reservation_id }) => {
     chat.appendMessage("user", textToSend || "[Attached file]");
     chat.setInputValue("");
     
-    const initialPayload = {message: textToSend, username, reservation_id, chat_id: chat.activeChatId, llm_model: chat.selectedModel, current_phase: troubleshooterPhases.length > 0 ? troubleshooterPhases[0] : "diagnostic_intent"};
+    const initialPayload = {message: textToSend, username, reservation_id, chat_id: chat.activeChatId, llm_model: chat.selectedModel, current_phase: diagnosticAssistantPhases.length > 0 ? diagnosticAssistantPhases[0] : "diagnostic_intent"};
 
-    await runTroubleshooterPipeline(initialPayload, chat.selectedFiles);
+    await runDiagnosticAssistantPipeline(initialPayload, chat.selectedFiles);
     chat.setSelectedFiles([]);
 
   };
@@ -297,7 +306,7 @@ const Troubleshooter = ({ username, reservation_id }) => {
     setIsModalOpen(false);
     chat.setIsSending(true);
     // restart execution from execution phase with approved commands
-    const execPhase = troubleshooterPhases.length > 2 ? troubleshooterPhases[2] :
+    const execPhase = diagnosticAssistantPhases.length > 2 ? diagnosticAssistantPhases[2] : "execution";
     setCurrentProgressPhase(execPhase);
 
     const userApprovedCommands = pendingCommands.filter((_, idx) => commandDecisions[idx] === "accepted");
@@ -313,7 +322,7 @@ const Troubleshooter = ({ username, reservation_id }) => {
       approved_commands: JSON.stringify(userApprovedCommands)
     };
 
-    await runTroubleshooterPipeline(resumePayload, []);
+    await runDiagnosticAssistantPipeline(resumePayload, []);
   };
   
   const renderMessage = (message) => {
@@ -339,7 +348,7 @@ const Troubleshooter = ({ username, reservation_id }) => {
 
     return (
       <div key={message.id} className={`en-message-bubble ${isUser ? 'en-message-user' : 'en-message-assistant'}`}>
-        <div className="en-message-role">{isUser ? username : "Troubleshooter Agent"}</div>
+        <div className="en-message-role">{isUser ? username : "Diagnostic Assistant"}</div>
         <div className="en-message-content">
               <span className="en-plain-text">{displayContent}</span>
         </div>
@@ -350,10 +359,10 @@ const Troubleshooter = ({ username, reservation_id }) => {
   return (
     <>
       <UniversalPipelineChat 
-        mode="troubleshooter"
+        mode="diagnosticassistant"
         chat={chat}
-        title="Diagnostic Troubleshooter"
-        phases={troubleshooterPhases}
+        title="Diagnostic Assistant"
+        phases={diagnosticAssistantPhases}
         currentProgressPhase={currentProgressPhase}
         activeReasoning={activeReasoning}
         isChatLocked={false}
@@ -418,4 +427,4 @@ const Troubleshooter = ({ username, reservation_id }) => {
   );
 };
 
-export default Troubleshooter;
+export default DiagnosticAssistant;

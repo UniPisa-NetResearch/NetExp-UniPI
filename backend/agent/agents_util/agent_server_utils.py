@@ -12,8 +12,8 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from ...app import app
 from ..llm_client import chat_with_llm, chat_with_llm_stream
-from .prompts import ALLOWED_DIAGNOSTIC_COMMANDS, DEVICE_KIND_RULES, READ_INTENTS, AGENT_PROMPTS, FORBIDDEN_RULES, TROUBLESHOOTER_PROMPTS
-from ...config import REDIS_HOST, REDIS_PORT, REDIS_DB, CONTAINERLAB_HOST, CONTAINERLAB_HOST_USER, JSON_RETRIES, SAFETY_ITERATIONS, MAX_TROUBLESHOOTER_MESSAGES
+from .prompts import ALLOWED_DIAGNOSTIC_COMMANDS, DEVICE_KIND_RULES, READ_INTENTS, AGENT_PROMPTS, FORBIDDEN_RULES, DIAGNOSTIC_ASSISTANT_PROMPTS
+from ...config import REDIS_HOST, REDIS_PORT, REDIS_DB, CONTAINERLAB_HOST, CONTAINERLAB_HOST_USER, JSON_RETRIES, SAFETY_ITERATIONS, MAX_DIAGNOSTIC_ASSISTANT_MESSAGES
 from ...utils import get_is_virtual_from_db, parse_complete_inventory_hosts
 
 # redis store for conversation history, keyed by username and reservation_id
@@ -685,6 +685,9 @@ def handle_chat_logic(username, reservation_id, chat_id, agent_role, message, ll
 
         system_prompt += f"\n\n<topology>\n```yaml\n{testbed_topology}\n```\n</topology>\n"
 
+        # add reserved devices constraint list to the system prompt
+        system_prompt += get_reserved_devices(reservation_id)
+
         # add fobidden rules instructions for safety agent
         if agent_role == "safety":
             rules_formatted = "\n".join([f"- {rule}" for rule in FORBIDDEN_RULES])
@@ -833,7 +836,7 @@ def consume_llm_stream_with_retries(llm_history, role, llm_model):
         return (False, {"error": "Max JSON retries reached."})
 
 # manage troubleshooter flow with streaming of reasoning
-def generate_troubleshooter_sse(history, request_data):
+def generate_diagnostic_assistant_sse(history, request_data):
     print("[DEBUG SSE] Start SSE generator...")
 
     reservation_id = request_data['reservation_id']
@@ -865,8 +868,8 @@ def generate_troubleshooter_sse(history, request_data):
                 user_msg_count = sum(1 for m in history[start_idx:] if m.get("role") == "user")
 
                 # if the limit is surpassed, generate a new summary
-                if user_msg_count >= MAX_TROUBLESHOOTER_MESSAGES:
-                    summarizer_sys_prompt = TROUBLESHOOTER_PROMPTS["diagnostic_summarizer"]
+                if user_msg_count >= MAX_DIAGNOSTIC_ASSISTANT_MESSAGES:
+                    summarizer_sys_prompt = DIAGNOSTIC_ASSISTANT_PROMPTS["diagnostic_summarizer"]
                     summarizer_history = [{"role": "system", "content": summarizer_sys_prompt}]
 
                     # send to summarizer the last generated summary if exists
@@ -928,13 +931,16 @@ def generate_troubleshooter_sse(history, request_data):
 
 
             elif current_phase == "diagnostic_planner":
-                planner_sys_prompt = TROUBLESHOOTER_PROMPTS["diagnostic_planner"]
+                planner_sys_prompt = DIAGNOSTIC_ASSISTANT_PROMPTS["diagnostic_planner"]
                 dynamic_rules = get_dynamic_device_rules("diagnostic_planner")
 
                 if dynamic_rules: 
                     planner_sys_prompt += f"\n<device_specific_rules>\n{dynamic_rules}\n</device_specific_rules>\n"
 
                 planner_sys_prompt += f"\n\n<topology>\n```yaml\n{testbed_topology}\n```\n</topology>\n"
+
+                # add reserved devices constraint list
+                planner_sys_prompt += get_reserved_devices(reservation_id)
                 
                 # Planner agent
                 planner_history = [{"role": "system", "content": planner_sys_prompt}, {"role": "user", "content": f"<context>\n{context}\n</context>"}]
@@ -998,7 +1004,7 @@ def generate_troubleshooter_sse(history, request_data):
 
 
             elif current_phase == "diagnostic_reporter":
-                reporter_sys_prompt = TROUBLESHOOTER_PROMPTS["diagnostic_reporter"]
+                reporter_sys_prompt = DIAGNOSTIC_ASSISTANT_PROMPTS["diagnostic_reporter"]
                 reporter_sys_prompt += f"\n\n<topology>\n```yaml\n{testbed_topology}\n```\n</topology>\n"
                 
                 # Reporter agent
@@ -1024,3 +1030,21 @@ def generate_troubleshooter_sse(history, request_data):
             yield f"data: {json.dumps({'type': 'result', 'data': {'error': str(e)}})}\n\n"
         
         print("[DEBUG SSE] SSE generator ended \n" + "="*50)
+
+
+# reads the reserved devices YAML file and formats it for the LLM prompt
+def get_reserved_devices(reservation_id: str) -> str:
+  
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    yaml_path = os.path.join(base_dir, "reservation_devices", f"res_{reservation_id}_devices.yaml")
+    
+    try:
+        with open(yaml_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        return f"\n<reserved_devices>\n```yaml\n{content}```\n</reserved_devices>\n"
+    except FileNotFoundError:
+        print(f"[WARNING] Reserved devices file not found at {yaml_path}")
+        return "\n<reserved_devices>\n# No reserved devices info found\n</reserved_devices>\n"
+    except Exception as e:
+        print(f"[ERROR] Failed to read reserved devices file: {e}")
+        return ""

@@ -72,7 +72,13 @@ AVAILABLE_BASE_URLS = ["https://generativelanguage.googleapis.com/v1beta/openai/
 SAFETY_ITERATIONS = 3
 JSON_RETRIES = 3
 PHASES_ORDER = ['negotiation', 'planning', 'safety', 'execution']
-TROUBLESHOOTER_PHASES_ORDER = ["diagnostic_intent", "diagnostic_planner", "execution", "diagnostic_reporter"]
+AGENT_NAMES = {
+    "negotiation": "Intent Analyst",
+    "planning": "Action Planner",
+    "safety": "Compliance Auditor",
+    "execution": "Execution Reporter"
+}
+DIAGNOSTIC_ASSISTANT_PHASES_ORDER = ["diagnostic_intent", "diagnostic_planner", "execution", "diagnostic_reporter"]
 LLM_TIMEOUT_SECONDS = 300
 LLM_MAX_OUTPUT_TOKENS = 16384                                   #16384 - 32768
-MAX_TROUBLESHOOTER_MESSAGES = 10
+MAX_DIAGNOSTIC_ASSISTANT_MESSAGES = 10

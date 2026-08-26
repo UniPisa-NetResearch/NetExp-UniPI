@@ -7,7 +7,7 @@ import Home from './Home.jsx';
 import Reservation from './Reservation.jsx';
 import Configuration from './Configuration.jsx';
 import LLMAgent from "./LLMAgent.jsx";
-import Troubleshooter from "./Troubleshooter.jsx";
+import DiagnosticAssistant from "./DiagnosticAssistant.jsx";
 import Experiment from "./Experiment.jsx";
 import Evaluation from "./Evaluation.jsx";
 
@@ -357,7 +357,7 @@ function App() {
                 <Route path="/reservation" element={<NavbarWrapper><Reservation username={currentUser} isReservationActive={isReservationActive} /> </NavbarWrapper>} />
                 <Route path="/configuration" element={<NavbarWrapper><ProtectedPageGuard isReservationActive={isReservationActive} isAccessGranted={isAccessGranted}><Configuration username={currentUser} reservation_id={reservationId}/> </ProtectedPageGuard></NavbarWrapper>} />
                 <Route path="/llmAgent" element={<NavbarWrapper><ProtectedPageGuard isReservationActive={isReservationActive} isAccessGranted={isAccessGranted}><LLMAgent username={currentUser} reservation_id={reservationId} isAdmin={isAdmin}/> </ProtectedPageGuard></NavbarWrapper>} />
-                <Route path="/troubleshooter" element={<NavbarWrapper><ProtectedPageGuard isReservationActive={isReservationActive} isAccessGranted={isAccessGranted}><Troubleshooter username={currentUser} reservation_id={reservationId}/> </ProtectedPageGuard></NavbarWrapper>} />
+                <Route path="/diagnosticAssistant" element={<NavbarWrapper><ProtectedPageGuard isReservationActive={isReservationActive} isAccessGranted={isAccessGranted}><DiagnosticAssistant username={currentUser} reservation_id={reservationId}/> </ProtectedPageGuard></NavbarWrapper>} />
                 <Route path="/experiment" element={<NavbarWrapper><ProtectedPageGuard isReservationActive={isReservationActive} isAccessGranted={isAccessGranted}><Experiment username={currentUser} reservation_id={reservationId}/> </ProtectedPageGuard></NavbarWrapper>} />
                 <Route path="/evaluation" element={<NavbarWrapper><ProtectedPageGuard isReservationActive={isReservationActive} isAccessGranted={isEvaluationAccessGranted}><Evaluation username={currentUser} reservation_id={reservationId}/></ProtectedPageGuard></NavbarWrapper>} />
             </Route>
