@@ -19,26 +19,28 @@ const AdminReadOnlyDebugger = ({ username, reservation_id, activeChatId, phases,
 
   // fetches the unfiltered historical messages for the selected phase directly from the backend whenever the chat ID, phase, or expanded state changes
   useEffect(() => {
-      if (!activeChatId || !isExpanded) return;
-      
-      const fetchPhaseHistory = async () => {
-          try {
-              const response = await fetch(`/api/agent_server/history?username=${encodeURIComponent(username)}&reservation_id=${encodeURIComponent(reservation_id)}&chat_id=${encodeURIComponent(activeChatId)}&agent_role=${encodeURIComponent(debugPhase)}`);
-              if (response.ok) {
-                  const data = await response.json();
+    if (!activeChatId || !isExpanded) return;
+    
+    const fetchPhaseHistory = async () => {
+      try {
+        const response = await fetch(`/api/agent_server/history?username=${encodeURIComponent(username)}&reservation_id=${encodeURIComponent(reservation_id)}&chat_id=${encodeURIComponent(activeChatId)}&agent_role=${encodeURIComponent(debugPhase)}`);
+        if (response.ok) {
+          const data = await response.json();
 
-                  const messagesWithIds = (data.messages || []).map((msg, idx) => ({
-                      ...msg,
-                      id: msg.id || `debug-${debugPhase}-${idx}`
-                  }));
+          const messagesWithIds = (data.messages || []).map((msg, idx) => ({
+              ...msg,
+              id: msg.id || `debug-${debugPhase}-${idx}`
+          }));
 
-                  setDebugMessages(messagesWithIds);
-              }
-          } catch (err) {
-              console.error("Error loading debug history:", err);
-          }
-      };
-      fetchPhaseHistory();
+          setDebugMessages(messagesWithIds);
+        }
+      } catch (err) {
+        console.error("Error loading debug history:", err);
+      }
+    };
+
+    fetchPhaseHistory();
+
   }, [debugPhase, activeChatId, isExpanded, username, reservation_id]);
   
   // cycles through the available phases (forward or backward) when the admin clicks the transition buttons.
@@ -111,7 +113,7 @@ const AdminReadOnlyDebugger = ({ username, reservation_id, activeChatId, phases,
   );
 };
 
-const LLMAgent = ({ username, reservation_id, isAdmin}) => {
+const LLMAgent = ({ username, reservation_id, isAdmin, activeReservationExpiration}) => {
   const chat = useAgentChat(username, reservation_id, "negotiation");
 
   const chatEndRef = useRef(null);
@@ -446,68 +448,55 @@ const LLMAgent = ({ username, reservation_id, isAdmin}) => {
 
   // core orchestrator for the multi-agent pipeline. It continuously connects to the SSE stream endpoint, manages phase transitions, and aggregates reasoning and final output
   const runExperimentPipeline = async (initialPayload, initialFiles) => {
-    let payload = { ...initialPayload };
-    let currentFiles = initialFiles;
     chat.setIsSending(true);
+    setActiveReasoning("");
+    setCurrentProgressPhase(initialPayload.current_phase);
+    let currentChatId = initialPayload.chat_id;
 
     try {
-      // loop continues as long as the backend returns a "next_phase" to proceed to
-      while (payload.current_phase) {
-        setCurrentProgressPhase(payload.current_phase);
-        setResumePhase(payload.current_phase);
-        setActiveReasoning("");
+      
+      // send the single HTTP request, backend will loop internally and stream everything
+      await sendChatRequestStream("/api/agent_server/experiment/stream", initialPayload, initialFiles,
+        (thoughtChunk) => {
+          // add current chucnk to the previous collected chunks
+          setActiveReasoning((prev) => prev + thoughtChunk);
+        },
         
-        // subscribes to the stream and captures tokens chunk by chunk
-        const data = await sendChatRequestStream("/api/agent_server/experiment/stream", payload, currentFiles,
-          (thoughtChunk) => {
-            // add current chucnk to the previous collected chunks
-            setActiveReasoning((prev) => prev + thoughtChunk);
+        (resultData) => {
+          // if it's a new chat, update the application state with the new chat_id
+          if (resultData.chat_id && !currentChatId) {
+            currentChatId = resultData.chat_id;
+            chat.setActiveChatId(resultData.chat_id);
+            chat.setSavedChats((prev) => [...new Set([resultData.chat_id, ...prev])]);
           }
-        );
-        // files are only sent during the first phase loop
-        currentFiles = []; 
-        
-        // if it's a new chat, update the application state with the new chat_id
-        if (data.chat_id && !payload.chat_id) {
-          payload.chat_id = data.chat_id;
-          chat.setActiveChatId(data.chat_id);
-          chat.setSavedChats((prev) => [...new Set([data.chat_id, ...prev])]);
-        }
 
-        // handle negotiation clarification questions
-        if (data.requires_answers) {
-          chat.appendMessage("assistant", data.reply);
-          setNegotiationQuestions(data.questions || []);
-          const initialAnswers = {};
-          (data.questions || []).forEach((_, i) => { initialAnswers[i] = ""; });
-          setNegotiationAnswers(initialAnswers);
-          chat.setIsSending(false);
-          return; 
+          // handle negotiation clarification questions
+          if (resultData.requires_answers) {
+            chat.appendMessage("assistant", resultData.reply);
+            setNegotiationQuestions(resultData.questions || []);
+            const initialAnswers = {};
+            (resultData.questions || []).forEach((_, i) => { initialAnswers[i] = ""; });
+            setNegotiationAnswers(initialAnswers);
+          } 
+          // after the execution the experimenti is not correct
+          else if (resultData.execution_rejected) {
+            setExecutionStatus("REJECTED");
+            chat.appendMessage("assistant", resultData.reply || "The plan failed to execute correctly.");
+          }
+          // standard flow: print the agent's finalized JSON payload to the chat
+          else if (resultData.reply) chat.appendMessage("assistant", resultData.reply);
+          
+          if (resultData.next_phase) {
+            setResumePhase(resultData.next_phase);
+            setCurrentProgressPhase(resultData.next_phase);
+            setActiveReasoning(""); 
+          } else { 
+            // if we arrive here, the pipeline is completed with success
+              setExecutionStatus("APPROVED");
+          }
         }
-
-        // after the execution the experimenti is not correct
-        if (data.execution_rejected) {
-          setExecutionStatus("REJECTED");
-          chat.appendMessage("assistant", data.reply || "The plan failed to execute correctly.");
-          chat.setIsSending(false);
-          return;
-        }
-        
-        // standard flow: print the agent's finalized JSON payload to the chat
-        if (data.reply) chat.appendMessage("assistant", data.reply);
-
-        // state machine transition
-        if (data.next_phase) {
-          payload.current_phase = data.next_phase;
-          if (data.context) payload.context = data.context;
-          // remove payload to avoid send to next phases
-          payload.message = "";
-        } else {
-          // if we arive here, the pipeline is complete
-          if (payload.current_phase === (LLMAgentPhases[LLMAgentPhases.length - 1] ||'execution')) setExecutionStatus("APPROVED");
-          payload.current_phase = null; 
-        }
-      }
+      );
+  
     } catch (err) {
       chat.setError(err.message || "Unexpected error");
     } finally {
@@ -521,6 +510,17 @@ const LLMAgent = ({ username, reservation_id, isAdmin}) => {
   const handleSubmit = async (e) => {
     if(e) e.preventDefault();
     chat.setError(null);
+
+    // check remaining time for new user requests
+    if (activeReservationExpiration) {
+      const expiresAt = new Date(activeReservationExpiration).getTime();
+      const minutesLeft = (expiresAt - Date.now()) / 60000;
+      
+      if (minutesLeft < chat.preventionThreshold) {
+        chat.setError(`Operation denied: less than ${chat.preventionThreshold} minutes remaining for this reservation.`);
+        return; // block the execution completely
+      }
+    }
 
     let textToSend = chat.inputValue.trim();
 
@@ -575,10 +575,11 @@ const LLMAgent = ({ username, reservation_id, isAdmin}) => {
   // recovers a failed execution state by requesting a new plan from the planning
   const handleRetryPlanning = async () => {
     setExecutionStatus(null);
+    console.log("retry planning from: ", resumePhase);
     const retryPayload = {
         message: "RETRY_PLANNING",
         username, reservation_id, chat_id: chat.activeChatId, 
-        llm_model: chat.selectedModel, current_phase: LLMAgentPhases.length > 1 ? LLMAgentPhases[1] : "planning", 
+        llm_model: chat.selectedModel, current_phase: LLMAgentPhases.length > 1 ? LLMAgentPhases[1] : "planning",
         execution_mode: executionMode
     };
     await runExperimentPipeline(retryPayload, []);

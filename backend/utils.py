@@ -1,6 +1,8 @@
-from .database.db import db, Reservation
 import os
 import yaml
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from .database.db import db, Reservation
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # define the path for the reservation devices inside the agent folder
@@ -179,3 +181,20 @@ def create_reserved_devices_yaml(reservation_id, devices):
         print(f"Created reserved devices YAML at {file_path}")
     except Exception as e:
         print(f"Error creating reserved devices YAML: {e}")
+
+def get_remaining_minutes(reservation_id):
+    # retrieves the reservation and calculates the remaining time in minutes.
+    
+    res = db.session.get(Reservation, reservation_id)
+    if not res:
+        return 0.0
+
+    # use the same timezone logic used in orchestrator.py
+    rome_tz = ZoneInfo("Europe/Rome")
+    now = datetime.now(rome_tz).replace(tzinfo=None)
+    
+    # combine date and time for the reservation end
+    end_dt = datetime.combine(res.endDate, res.endTime)
+    
+    diff_seconds = (end_dt - now).total_seconds()
+    return max(0.0, diff_seconds / 60.0)

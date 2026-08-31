@@ -1,7 +1,7 @@
 import { useState, useCallback } from "react";
 
 // Sends a POST request streams SSE from the backend. Calls onThought(chunk) for every "thought" delta to update the UI in real time, resolves with the final "result" payload when the stream ends
-export const sendChatRequestStream = async (url, payload, files = [], onThought) => {
+export const sendChatRequestStream = async (url, payload, files = [], onThought, onResult) => {
   // build FormData from the payload object, skipping null/undefined values
   const formData = new FormData();
   Object.keys(payload).forEach(key => {
@@ -49,6 +49,7 @@ export const sendChatRequestStream = async (url, payload, files = [], onThought)
             onThought(data.content);
           } else if (data.type === "result") {
             // capture the final structured result for the return value
+            if (onResult) onResult(data.data);
             finalResult = data.data;
           }
         } catch (e) { console.error("Errore parsing SSE:", e); }
@@ -72,6 +73,8 @@ export const useAgentChat = (username, reservation_id, defaultRole) => {
   // model selection
   const [availableModels, setAvailableModels] = useState([]);
   const [selectedModel, setSelectedModel] = useState("");
+  // prevention threshold from the backend
+  const [preventionThreshold, setPreventionThreshold] = useState(10);
 
   const handleFileChange = (e) => {
     const newFiles = Array.from(e.target.files || []);
@@ -118,6 +121,11 @@ export const useAgentChat = (username, reservation_id, defaultRole) => {
         // save the dynamic agent names mapping from backend
         if (data.agent_names) {
           setAgentNames(data.agent_names);
+        }
+
+        // update the threshold if provided by the backend
+        if (data.frontend_llm_prevention_minutes) {
+          setPreventionThreshold(data.frontend_llm_prevention_minutes);
         }
 
         return data;
@@ -199,12 +207,13 @@ export const useAgentChat = (username, reservation_id, defaultRole) => {
   return {
     messages, setMessages, appendMessage,
     inputValue, setInputValue,
-    selectedFiles, setSelectedFiles, handleFileChange, handleRemoveFile,
+    selectedFiles, setSelectedFiles, 
+    handleFileChange, handleRemoveFile,
     isSending, setIsSending,
     error, setError,
     savedChats, setSavedChats,
     activeChatId, setActiveChatId,
-    availableModels, selectedModel, setSelectedModel, agentNames,
+    availableModels, selectedModel, setSelectedModel, preventionThreshold, agentNames,
     resetBaseChat, fetchSessions, loadHistory, deleteChat, downloadChat
   };
 };
