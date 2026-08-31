@@ -136,7 +136,7 @@ const MarkdownMessageViewer = ({ message, username, isUser }) => {
   );
 };
 
-const DiagnosticAssistant = ({ username, reservation_id }) => {
+const DiagnosticAssistant = ({ username, reservation_id, activeReservationExpiration }) => {
   const chat = useAgentChat(username, reservation_id, "diagnostic_assistant_chat");
   const chatEndRef = useRef(null);
   const reasoningRef = useRef(null);
@@ -154,6 +154,8 @@ const DiagnosticAssistant = ({ username, reservation_id }) => {
   const [activeReasoning, setActiveReasoning] = useState("");
   // conditions to disable send button
   const isButtonDisabled = chat.isSending || (!chat.inputValue.trim() && chat.selectedFiles.length === 0);
+  // phase from which resume pipeline when commands approval is required
+  const [resumeDiagnosisPhase, setResumeDiagnosisPhase] = useState("diagnostic_intent");
 
   const phaseDescriptions = [
     "Request analysis and problem identification...",
@@ -213,53 +215,47 @@ const DiagnosticAssistant = ({ username, reservation_id }) => {
   };
 
   const runDiagnosticAssistantPipeline = async (initialPayload, initialFiles) => {
-    let payload = { ...initialPayload };
-    let currentFiles = initialFiles;
     chat.setIsSending(true);
+    setActiveReasoning("");
+    setCurrentProgressPhase(initialPayload.current_phase);
+    let currentChatId = initialPayload.chat_id;
 
     try {
-      while (payload.current_phase) {
-        setCurrentProgressPhase(payload.current_phase);
-        setActiveReasoning("");
-
-        const data = await sendChatRequestStream("/api/agent_server/diagnosticAssistant/chat", payload, currentFiles,
+      
+        await sendChatRequestStream("/api/agent_server/diagnosticAssistant/chat", initialPayload, initialFiles,
           (thoughtChunk) => {
             setActiveReasoning((prev) => prev + thoughtChunk); // collect reasoning tokens and append to the previous collected to recreate the entire reasoning
+          },
+          (resultData) => {
+            if (resultData.chat_id && !currentChatId) {
+              currentChatId = resultData.chat_id;
+              chat.setActiveChatId(resultData.chat_id);
+              chat.setSavedChats((prev) => [...new Set([resultData.chat_id, ...prev])]);
+            }
+
+            if (resultData.requires_approval) {
+              setPendingCommands(resultData.commands);
+              setSafeCommandsBuffer(resultData.safe_commands || []);
+              setCurrentContext(resultData.context || "");
+              setResumeDiagnosisPhase(resultData.next_phase || diagnosticAssistantPhases[2] || "execution");
+              setIsModalOpen(true);
+              setCommandDecisions({});
+              return; 
+            }
+
+            // show agent reply and execution log if are present (last iteration or intent request rejected)
+            if (resultData.execution_log) chat.appendMessage("execution_log", resultData.execution_log);
+
+            if (resultData.reply) chat.appendMessage("assistant", resultData.reply);
+
+            if (resultData.next_phase) {
+              setResumeDiagnosisPhase(resultData.next_phase);
+              setCurrentProgressPhase(resultData.next_phase);
+              setActiveReasoning(""); 
+            }
           }
         );
-        currentFiles = []; // files are sent only in the intent phase
 
-        if (data.chat_id && !payload.chat_id) {
-          payload.chat_id = data.chat_id;
-          chat.setActiveChatId(data.chat_id);
-
-          chat.setSavedChats((prev) => [...new Set([data.chat_id, ...prev])]);
-        }
-
-        if (data.requires_approval) {
-          setPendingCommands(data.commands);
-          setSafeCommandsBuffer(data.safe_commands || []);
-          setCurrentContext(data.context || "");
-          setIsModalOpen(true);
-          setCommandDecisions({});
-          chat.setIsSending(false); 
-          return; 
-        }
-
-        // show agent reply and execution log if are present (last iteration or intent request rejected)
-        if (data.execution_log) chat.appendMessage("execution_log", data.execution_log);
-        if (data.reply) chat.appendMessage("assistant", data.reply);
-
-        // payload for next step
-        if (data.next_phase) {
-          payload.current_phase = data.next_phase;
-          if (data.context) payload.context = data.context;
-          if (data.safe_commands) payload.safe_commands = JSON.stringify(data.safe_commands);
-          if (data.execution_report) payload.execution_report = data.execution_report;
-        } else {
-          payload.current_phase = null; // end of the cycle
-        }
-      }
     } catch (err) {
       chat.setError(err.message || "Unexpected error");
       setActiveReasoning("");
@@ -272,6 +268,17 @@ const DiagnosticAssistant = ({ username, reservation_id }) => {
 
   const handleSubmit = async (e) => {
     if (e) e.preventDefault();
+
+    // check remaining time for user request
+    if (activeReservationExpiration) {
+      const expiresAt = new Date(activeReservationExpiration).getTime();
+      const minutesLeft = (expiresAt - Date.now()) / 60000;
+      
+      if (minutesLeft < chat.preventionThreshold) {
+        chat.setError(`Operation denied: less than ${chat.preventionThreshold} minutes remaining for this reservation.`);
+        return; // block the execution completely
+      }
+    }
 
     const textToSend = chat.inputValue.trim();
     if (!textToSend && chat.selectedFiles.length === 0) return;
@@ -306,7 +313,7 @@ const DiagnosticAssistant = ({ username, reservation_id }) => {
     setIsModalOpen(false);
     chat.setIsSending(true);
     // restart execution from execution phase with approved commands
-    const execPhase = diagnosticAssistantPhases.length > 2 ? diagnosticAssistantPhases[2] : "execution";
+    const execPhase = resumeDiagnosisPhase || (diagnosticAssistantPhases.length > 2 ? diagnosticAssistantPhases[2] : "execution");
     setCurrentProgressPhase(execPhase);
 
     const userApprovedCommands = pendingCommands.filter((_, idx) => commandDecisions[idx] === "accepted");
