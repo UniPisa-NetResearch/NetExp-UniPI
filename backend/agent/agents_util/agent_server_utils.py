@@ -9,10 +9,12 @@ import paramiko
 import socket
 import threading
 import traceback
+import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from  ...app import app
 from ..llm_client import chat_with_llm, chat_with_llm_stream
 from .prompts import ALLOWED_DIAGNOSTIC_COMMANDS, DEVICE_KIND_RULES, READ_INTENTS, AGENT_PROMPTS, FORBIDDEN_RULES, DIAGNOSTIC_ASSISTANT_PROMPTS
-from ...config import REDIS_HOST, REDIS_PORT, REDIS_DB, CONTAINERLAB_HOST, CONTAINERLAB_HOST_USER, JSON_RETRIES, SAFETY_ITERATIONS, MAX_DIAGNOSTIC_ASSISTANT_MESSAGES, BACKEND_LLM_PREVENTION_MINUTES
+from ...config import REDIS_HOST, REDIS_PORT, REDIS_DB, CONTAINERLAB_HOST, CONTAINERLAB_HOST_USER, JSON_RETRIES, SAFETY_ITERATIONS, MAX_DIAGNOSTIC_ASSISTANT_MESSAGES, BACKEND_LLM_PREVENTION_MINUTES, PHASES_ORDER, DIAGNOSTIC_ASSISTANT_PHASES_ORDER, SAFETY_SUBAGENT_ROLES
 from ...utils import get_is_virtual_from_db, parse_complete_inventory_hosts, get_remaining_minutes
 
 # redis store for conversation history, keyed by username and reservation_id
@@ -31,8 +33,36 @@ except FileNotFoundError:
     testbed_topology = "# Topology file not found"
     print(f"Warning: Could not find {topology_file_path}")
 
-# lock for thread-safe logging
+# lock for thread-safe logging and for mutually exclusive LLM printing for parallel agents
 log_lock = threading.Lock()
+
+def log_agent_reasoning(agent_role, reasoning):
+    if not reasoning.strip():
+        return
+    
+    # go from backend/agent/agents_util to execution_logs
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    log_dir = os.path.abspath(os.path.join(base_dir, "..", "..", "..", "execution_logs"))
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, "log_agents_reasoning.txt")
+
+    log_entry = ""
+
+    # check if the agent is the forst of the pipeline, in that case print the timestamp
+    if agent_role == PHASES_ORDER[0] or agent_role == DIAGNOSTIC_ASSISTANT_PHASES_ORDER[0]:
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_entry += f"[{timestamp}]\n"
+        log_entry += f"==================================================\n"
+
+    # print always agent name and reasoning content
+    log_entry += f"Agent: {agent_role}\n"
+    log_entry += f"{reasoning.strip()}\n"
+    log_entry += f"==================================================\n\n"
+    
+    # use log_lock to avoid race conditions
+    with log_lock:
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(log_entry)
 
 # convert json lists in formatted text
 def format_as_string(val):
@@ -58,8 +88,8 @@ def is_command_whitelisted(command: str) -> bool:
     return False
 
 def get_dynamic_device_rules(agent_role: str) -> str:
-    # extracts device kinds from the topology and retrieve rules for the current agent
     
+    # extracts device kinds from the topology and retrieve rules for the current agent
     kinds_in_topo = set()
     try:
         # topology parsing
@@ -386,7 +416,8 @@ def validate_json_format(reply_text, agent_role):
             
             if not isinstance(data.get("verification"), list):
                 return False, "verification must be a JSON array"
-                 
+
+        """
         if agent_role == "safety":
             if not all(k in data for k in ["status", "issues", "topology_mapping_check", "executable_plan", "verification_plan", "clarifying_questions", "read_operations"]):
                 return False, "Missing keys. Required: status, issues, topology_mapping_check, executable_plan, clarifying_questions, read_operations"
@@ -406,6 +437,31 @@ def validate_json_format(reply_text, agent_role):
             if not isinstance(data.get("verification_plan"), list):
                 return False, "verification_plan must be a JSON array"
             
+            if not isinstance(data.get("clarifying_questions"), list):
+                return False, "clarifying_questions must be a JSON array"
+        """
+
+        if agent_role == "safety_agent_1":
+            if not all(k in data for k in ["status", "read_operations", "clarifying_questions", "additional_context"]):
+                return False, "Missing keys. Required: status, read_operations, clarifying_questions, additional_context"
+            if not isinstance(data.get("read_operations"), list):
+                return False, "read_operations must be a JSON array"
+            if not isinstance(data.get("clarifying_questions"), list):
+                return False, "clarifying_questions must be a JSON array"
+                
+        if agent_role in ["safety_agent_2", "safety_agent_3", "safety_agent_4"]:
+            if not all(k in data for k in ["status", "issues"]):
+                return False, "Missing keys. Required: status, issues"
+            if not isinstance(data.get("issues"), list):
+                return False, "issues must be a JSON array"
+
+        if agent_role == "safety_agent_5":
+            if not all(k in data for k in ["status", "executable_plan", "verification_plan", "clarifying_questions"]):
+                return False, "Missing keys. Required: status, executable_plan, verification_plan, clarifying_questions"
+            if not isinstance(data.get("executable_plan"), list):
+                return False, "executable_plan must be a JSON array"
+            if not isinstance(data.get("verification_plan"), list):
+                return False, "verification_plan must be a JSON array"
             if not isinstance(data.get("clarifying_questions"), list):
                 return False, "clarifying_questions must be a JSON array"
             
@@ -496,7 +552,7 @@ def get_validated_llm_reply(history, agent_role, llm_model, reservation_id):
 
     return False, None, {"error_type": "llm_validation_failure", "reason": last_failure_reason}
 
-
+"""
 def handle_safety_loop(history, system_msg, latest_user_msg, reservation_id, agent_role, llm_model, is_manual_chat=False):
     reasoning_steps = []
     reply = {}
@@ -693,12 +749,327 @@ def handle_safety_loop(history, system_msg, latest_user_msg, reservation_id, age
         current_turn_safety_history.append({"role": "user", "content": correction_prompt})    
 
     return reply
+"""
 
+def extract_xml_tag(text, tag):
+    # helper to extract content from XML-like tags in the user message
+    match = re.search(f'<{tag}>(.*?)</{tag}>', text, flags=re.DOTALL | re.IGNORECASE)
+    return match.group(1).strip() if match else ""
+
+def delete_agent_history_keys(username, reservation_id, chat_id=None, role_prefix="*"):
+    # removes every Redis key matching the agent_history pattern
+    user_part = username if username else "*"
+    chat_part = chat_id if chat_id else "*"
+    pattern = f"agent_history:{role_prefix}:{user_part}:{reservation_id}:{chat_part}"
+
+    keys = redis_client.keys(pattern)
+    if keys:
+        redis_client.delete(*keys) # remove all keys matching the pattern
+        
+    return len(keys)
+
+def drain_generator(gen):
+    # generic adapter: fully drives ANY generator to completion, discarding every value it yields, and returns its final return value 
+    try:
+        while True:
+            next(gen)
+    except StopIteration as e:
+        return e.value
+
+    
+def handle_safety_loop(username, chat_id, latest_user_msg, reservation_id, llm_model, is_manual_chat=False):
+    # orchestrates the 5 specialized safety sub-agents
+    user_content = latest_user_msg["content"] if latest_user_msg else ""
+    
+    # state of the current turn of safety persisted in redis
+    turn_state_key = f"agent_history:safety_turn_state:{username}:{reservation_id}:{chat_id}"
+    turn_state_str = redis_client.get(turn_state_key)
+
+    # if there is a saved state, we use the saved fields
+    if turn_state_str:
+        turn_state = json.loads(turn_state_str)
+        exp_context = turn_state["exp_context"]
+        exit_conds = turn_state["exit_conds"]
+        current_exec_plan = turn_state["exec_plan"]
+        current_verif_cmds = turn_state["verif_cmds"]
+        device_report = turn_state["device_report"]
+    else:
+        # if there is not saved state, parse the incoming context from the orchestrator string, first time we enter in safety phase from planning
+        exp_context = extract_xml_tag(user_content, "experiment_context")
+        exit_conds = extract_xml_tag(user_content, "exit_conditions")
+        current_exec_plan = extract_xml_tag(user_content, "execution_plan")
+        current_verif_cmds = extract_xml_tag(user_content, "verification_commands")
+        device_report = extract_xml_tag(user_content, "device_report")
+    
+    def save_turn_state():
+        # called every time any of the turn's fields legitimately changes to save the state in redis
+        redis_client.set(turn_state_key, json.dumps({"exp_context": exp_context, "exit_conds": exit_conds, "exec_plan": current_exec_plan, "verif_cmds": current_verif_cmds, "device_report": device_report}), ex=432000)
+
+    save_turn_state()
+
+    # base context shared among agents
+    base_prompt = (
+        f"<experiment_context>\n{exp_context}\n</experiment_context>\n\n"
+        f"<exit_conditions>\n{exit_conds}\n</exit_conditions>\n\n"
+    )
+    
+    # Redis keys for agents that interact directly with user queries
+    key_agent1 = f"agent_history:safety_agent_1:{username}:{reservation_id}:{chat_id}"
+    key_agent5 = f"agent_history:safety_agent_5:{username}:{reservation_id}:{chat_id}"
+
+    # manual instruction flow
+    if is_manual_chat:
+        manual_instruction = f"The user has provided this priority correction instruction: {user_content}. Modify the plan by applying this request."
+        
+        sys_prompt_5 = AGENT_PROMPTS["safety_agent_5"] + f"\n<topology>\n{testbed_topology}\n</topology>\n" + get_dynamic_device_rules("safety")
+        
+        agent5_prompt = base_prompt + (
+            f"<execution_plan>\n{current_exec_plan}\n</execution_plan>\n\n"
+            f"<verification_commands>\n{current_verif_cmds}\n</verification_commands>\n\n"
+            f"<device_report>\n{device_report}\n</device_report>\n\n"
+            f"<issues>\n{manual_instruction}\n</issues>"
+        )
+        
+        # stateless call for the current correction attempt, the request does not include previous iterations data
+        call_history = [{"role": "system", "content": sys_prompt_5}, {"role": "user", "content": agent5_prompt}]
+        
+        yield f"data: {json.dumps({'type': 'thought', 'content': f'\n\n[System: Agent 5 applying manual instruction...]\n\n'})}\n\n"
+        
+        valid_output, reply5 = yield from consume_llm_stream_with_retries(call_history, "safety_agent_5", llm_model, reservation_id)
+        if not valid_output: raise Exception("Agent 5 failed.")
+        
+        # update plans with agent 5 output before entering the validation loop
+        current_exec_plan = "\n".join(reply5.get("executable_plan", []))
+        current_verif_cmds = "\n".join(reply5.get("verification_plan", []))
+        save_turn_state()
+        
+        # save agent 5 history
+        prior_hist5_str = redis_client.get(key_agent5)
+        # get previous history of agent 5 if exists
+        prior_hist5 = json.loads(prior_hist5_str) if prior_hist5_str else []
+        # append to the existing history the current cal messages and the response from agent file, then save in redis
+        debug_hist5 = prior_hist5 + call_history + [{"role": "assistant", "content": json.dumps(reply5)}]
+        redis_client.set(key_agent5, json.dumps(debug_hist5), ex=432000)
+
+    else:
+        # agent 1: context and state reader
+        hist1_str = redis_client.get(key_agent1)
+        hist1 = json.loads(hist1_str) if hist1_str else []
+
+        # look only at the very last message to see if we are answering a clarification
+        is_answering_agent1 = False
+        if hist1 and hist1[-1].get("role") == "assistant":
+            try:
+                last_parsed = json.loads(hist1[-1]["content"])
+                if "AWAITING_CLARIFICATIONS" in str(last_parsed.get("status", "")).upper():
+                    is_answering_agent1 = True
+            except Exception: pass
+
+        if is_answering_agent1:
+            # continue agent 1's short local exchange with the user's answer, add the latest user message to the history
+            hist1.append(latest_user_msg)
+        else:
+            # create a new conversation for agent 1
+            sys_prompt_1 = AGENT_PROMPTS["safety_agent_1"] + f"\n<topology>\n{testbed_topology}\n</topology>\n"
+            agent1_prompt = base_prompt + f"<execution_plan>\n{current_exec_plan}\n</execution_plan>\n\n<verification_commands>\n{current_verif_cmds}\n</verification_commands>"
+            hist1 = [{"role": "system", "content": sys_prompt_1}, {"role": "user", "content": agent1_prompt}]
+
+        valid_output, reply1 = yield from consume_llm_stream_with_retries(hist1, "safety_agent_1", llm_model, reservation_id)
+        if not valid_output: raise Exception("Agent 1 failed.")
+        
+        # add agent 1 response to the history
+        hist1.append({"role": "assistant", "content": json.dumps(reply1)})
+        redis_client.set(key_agent1, json.dumps(hist1), ex=432000)
+
+        if "AWAITING_CLARIFICATIONS" in str(reply1.get("status", "")).upper():
+            return reply1 # pause and ask user if the agent ask for clarifications
+            
+        # update experiment context if agent 1 derived new insights from user's answers
+        add_ctx = reply1.get("additional_context", "").strip()
+        if add_ctx:
+            exp_context += f"\n\n[Additional Context]: {add_ctx}"
+            base_prompt = f"<experiment_context>\n{exp_context}\n</experiment_context>\n\n<exit_conditions>\n{exit_conds}\n</exit_conditions>\n\n"
+            save_turn_state()
+
+        # if coming from planning, report is null and we execute agent 1's read operations
+        if device_report.strip().lower() == "null":
+            read_ops = reply1.get("read_operations", [])
+            yield f"data: {json.dumps({'type': 'thought', 'content': f'\n\n[System: Reading data from testbed devices...]\n\n'})}\n\n"
+            
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            inventory_path = os.path.abspath(os.path.join(base_dir, "..", "..", "controller", "inventories", f"res-{reservation_id}-inventory.ini"))
+            
+            # run commands on devices and replace the local "null" with actual live data for agents 2-5
+            device_report = run_parallel_commands(inventory_path, read_ops, reservation_id, is_intent=True)
+            save_turn_state()
+
+    # validation loop (AGENTS 2, 3, 4 -> 5)
+    all_issues = []
+    for iteration in range(SAFETY_ITERATIONS):
+        minutes_left = get_remaining_minutes(reservation_id)
+        if minutes_left < BACKEND_LLM_PREVENTION_MINUTES:
+            raise Exception(f"Operation stopped: Less than {BACKEND_LLM_PREVENTION_MINUTES} minutes remaining.")
+
+        yield f"data: {json.dumps({'type': 'thought', 'content': f'\n\n[System: Agents 2, 3 and 4 are parallelly evaluating the plan (Iteration {iteration+1})...]\n\n'})}\n\n"
+
+        # format forbidden rules
+        rules_formatted = "\n".join([f"- {rule}" for rule in FORBIDDEN_RULES])
+
+        # create system prompt for the three agents
+        sys2 = AGENT_PROMPTS["safety_agent_2"] + f"\n<topology>\n{testbed_topology}\n</topology>\n" + get_reserved_devices(reservation_id)
+        sys3 = AGENT_PROMPTS["safety_agent_3"] + f"\n<topology>\n{testbed_topology}\n</topology>\n" + get_dynamic_device_rules("safety")
+        sys4 = AGENT_PROMPTS["safety_agent_4"] + f"\n<topology>\n{testbed_topology}\n</topology>\n" + f"\n<forbidden_rules>\n{rules_formatted}\n</forbidden_rules>"
+
+        common_plan_prompt = base_prompt + f"<execution_plan>\n{current_exec_plan}\n</execution_plan>\n\n<verification_commands>\n{current_verif_cmds}\n</verification_commands>\n\n"
+
+        # add reserved devices to the prompt of agent 2 and device report to the prompt of agent 3
+        user_prompt2 = common_plan_prompt + f"<reserved_devices>\n{get_reserved_devices(reservation_id)}\n</reserved_devices>"
+        user_prompt3 = common_plan_prompt + f"<device_report>\n{device_report}\n</device_report>"
+        user_prompt4 = common_plan_prompt + f"<device_report>\n{device_report}\n</device_report>"
+
+        def run_auditor(role, sys_prompt, user_content_str):
+            # runs an auditor sequentially in its thread to avoid SSE/log mixing 
+            # the actual call sent to the LLM is a 2-message array (system + user): agents 2/3/4 must never see previous iterations' attempts, to stay stateless and small 
+            # the redis debug log keeps growing across iterations for admin visibility, and is written under a lock so parallel agents never interleave their reasoning in the shared log output
+            with app.app_context():
+                call_history = [{"role": "system", "content": sys_prompt}, {"role": "user", "content": user_content_str}]
+                is_valid, parsed = drain_generator(consume_llm_stream_with_retries(call_history, role, llm_model, reservation_id))
+
+                with log_lock:
+                    print(f"\n[DEBUG SAFETY] Starting {role} reasoning...")
+                    
+                    # fetch history for admin debugger continuity
+                    redis_key = f"agent_history:{role}:{username}:{reservation_id}:{chat_id}"
+                    # get history of agents 2, 3, 4, if it does not exist, create a new one
+                    hist_str = redis_client.get(redis_key)
+                    debug_hist = json.loads(hist_str) if hist_str else []
+                    # append current iteration prompt
+                    debug_hist += call_history
+                    # append current iteration agent response and save in redis
+                    debug_hist.append({"role": "assistant", "content": json.dumps(parsed) if is_valid else str(parsed)})
+                    redis_client.set(redis_key, json.dumps(debug_hist), ex=432000)
+                
+                # return found issues if present
+                return parsed.get("issues", []) if is_valid and parsed else []
+
+        # execute Agents 2, 3, 4 in parallel
+        iteration_issues = []
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {
+                executor.submit(run_auditor, "safety_agent_2", sys2, user_prompt2): "safety_agent_2",
+                executor.submit(run_auditor, "safety_agent_3", sys3, user_prompt3): "safety_agent_3",
+                executor.submit(run_auditor, "safety_agent_4", sys4, user_prompt4): "safety_agent_4",
+            }
+            
+            for future in as_completed(futures):
+                issues = future.result()
+                if isinstance(issues, list):
+                    iteration_issues.extend(issues)
+
+        # get all unified issues from agent 2, 3, 4
+        all_issues = iteration_issues
+
+        # if no issues found by any auditor, the plan is perfectly safe
+        if len(all_issues) == 0:
+            # remove redis key for the current turn state
+            redis_client.delete(turn_state_key)
+            # return APPROVED status
+            return {
+                "status": "APPROVED",
+                "issues": [],
+                "clarifying_questions": [],
+                "executable_plan": [line.strip() for line in current_exec_plan.split('\n') if line.strip()],
+                "verification_plan": [line.strip() for line in current_verif_cmds.split('\n') if line.strip()]
+            }
+
+        # if there are issues proceed with agent 5: plan modificator
+        yield f"data: {json.dumps({'type': 'thought', 'content': f'\n\n[System: Issues found. Agent 5 is fixing the plan...]\n\n'})}\n\n"
+
+        issues_formatted = "\n".join([f"- {issue}" for issue in all_issues])
+        # get history of agent 5
+        prior_hist5_str = redis_client.get(key_agent5)
+        prior_hist5 = json.loads(prior_hist5_str) if prior_hist5_str else []
+
+        # look only at the very last message for clarifications
+        is_answering_agent5 = False
+        if prior_hist5 and prior_hist5[-1].get("role") == "assistant":
+            try:
+                last_parsed = json.loads(prior_hist5[-1]["content"])
+                if "AWAITING_CLARIFICATIONS" in str(last_parsed.get("status", "")).upper():
+                    is_answering_agent5 = True
+            except Exception: pass
+
+        # create system prompt and user prompt for agent 5
+        sys_prompt_5 = AGENT_PROMPTS["safety_agent_5"] + f"\n<topology>\n{testbed_topology}\n</topology>\n" + get_dynamic_device_rules("safety")
+        agent5_prompt = common_plan_prompt + f"<device_report>\n{device_report}\n</device_report>\n\n<issues>\n{issues_formatted}\n</issues>"
+        
+        if is_answering_agent5:
+            # continue agent 5 local exchange with user answer
+            call_history = prior_hist5 + [latest_user_msg]
+        else:
+            # new correction attempt without previous iteration messages, every correction attemot is stateless
+            call_history = [{"role": "system", "content": sys_prompt_5}, {"role": "user", "content": agent5_prompt}]
+
+        valid_output, reply5 = yield from consume_llm_stream_with_retries(call_history, "safety_agent_5", llm_model, reservation_id)
+        if not valid_output: raise Exception("Agent 5 failed.")
+        
+        # update the debug log with the saved history + the user response if is_answering_agent5 is true, otherwise add current call history to the previous history
+        debug_hist5 = call_history if is_answering_agent5 else (prior_hist5 + call_history)
+
+        # save the agent 5 response in redis
+        debug_hist5.append({"role": "assistant", "content": json.dumps(reply5)})
+        redis_client.set(key_agent5, json.dumps(debug_hist5), ex=432000)
+
+        status5 = str(reply5.get("status", "")).upper()
+        
+        if "AWAITING_CLARIFICATIONS" in status5:
+            return reply5 # pause and ask user
+            
+        # update current plans with agent 5's fixes and loop back to Agents 2, 3, 4
+        current_exec_plan = "\n".join(reply5.get("executable_plan", []))
+        current_verif_cmds = "\n".join(reply5.get("verification_plan", []))
+        save_turn_state()
+
+    # if loop ends without approval
+    return {
+        "status": "REJECTED",
+        "issues": all_issues,
+        "clarifying_questions": [],
+        "executable_plan": [line.strip() for line in current_exec_plan.split('\n') if line.strip()],
+        "verification_plan": [line.strip() for line in current_verif_cmds.split('\n') if line.strip()]
+    }
 
 def handle_chat_logic(username, reservation_id, chat_id, agent_role, message, llm_model, files=None, is_manual_chat=False):
     # if there is no chat_id, it means the user is starting a new chat. We generate one.
     if not chat_id:
         chat_id = f"{int(time.time())}_{uuid.uuid4().hex[:8]}"          # added timestamp to guarantee chronological order of messages
+
+    # route to the multi-agent safety orchestrator
+    if agent_role == "safety":
+        latest_user_msg = {"role": "user", "content": message} if message.strip() else None
+        
+        # run the multi-agent safety loop
+        reply = yield from handle_safety_loop(username, chat_id, latest_user_msg, reservation_id, llm_model, is_manual_chat)
+        
+        # we save a fake entry for the main 'safety' key to maintain compatibility  with the React frontend history parser (so it shows the approved plan seamlessly)
+        session_key_main = f"agent_history:safety:{username}:{reservation_id}:{chat_id}"
+        hist_main_str = redis_client.get(session_key_main)
+        hist_main = json.loads(hist_main_str) if hist_main_str else []
+        
+        if latest_user_msg: 
+            hist_main.append(latest_user_msg)
+        hist_main.append({"role": "assistant", "content": json.dumps(reply)})
+
+        # add timestamps to safety messages to guarantee correct sorting in the frontend history
+        current_time = time.time()
+        for msg in hist_main:
+            if "timestamp" not in msg:
+                msg["timestamp"] = current_time
+                current_time += 0.001
+        
+        redis_client.set(session_key_main, json.dumps(hist_main), ex=432000)
+        
+        return reply, chat_id
 
     session_key = f"agent_history:{agent_role}:{username}:{reservation_id}:{chat_id}"
 
@@ -720,10 +1091,12 @@ def handle_chat_logic(username, reservation_id, chat_id, agent_role, message, ll
         system_prompt += get_reserved_devices(reservation_id)
 
         # add fobidden rules instructions for safety agent
+        """
         if agent_role == "safety":
             rules_formatted = "\n".join([f"- {rule}" for rule in FORBIDDEN_RULES])
             system_prompt += f"\n\n<forbidden_rules>\n{rules_formatted}\n</forbidden_rules>\n"
-        
+        """
+
         # initialize history if it doesn't exist
         history = [{"role": "system", "content": system_prompt}]
 
@@ -751,28 +1124,30 @@ def handle_chat_logic(username, reservation_id, chat_id, agent_role, message, ll
         system_msg = history[0] 
         latest_user_msg = {"role": "user", "content": user_content} if user_content.strip() else None
 
+        """
         if agent_role == "safety":
             # for safety start the autocorrection loop (hisotry is a list passed by reference by default, the content of the list is updated in the loop function)
             reply = yield from handle_safety_loop(history, system_msg, latest_user_msg, reservation_id, agent_role, llm_model, is_manual_chat)
 
         else:
-            # for planning and execution we use a minimal array. Negotiation use all the history.
-            if agent_role in ["planning", "execution"]:
-                llm_history = [system_msg]
-                if latest_user_msg:
-                    llm_history.append(latest_user_msg)
-            else:
-                llm_history = history 
+        """
+        # for planning and execution we use a minimal array. Negotiation use all the history.
+        if agent_role in ["planning", "execution"]:
+            llm_history = [system_msg]
+            if latest_user_msg:
+                llm_history.append(latest_user_msg)
+        else:
+            llm_history = history 
 
-            # send request to the LLM
-            valid_output, reply = yield from consume_llm_stream_with_retries(llm_history, agent_role, llm_model, reservation_id)
-            
-            if not valid_output:
-                print(f"[DEBUG SERVER] FINAL FAILURE DETAILS (safety): {reply}")
-                raise Exception("LLM failed to produce valid JSON after retries")
-           
-            # add response to history and save it back to Redis
-            history.append({"role": "assistant", "content": json.dumps(reply)})    
+        # send request to the LLM
+        valid_output, reply = yield from consume_llm_stream_with_retries(llm_history, agent_role, llm_model, reservation_id)
+        
+        if not valid_output:
+            print(f"[DEBUG SERVER] FINAL FAILURE DETAILS (safety): {reply}")
+            raise Exception("LLM failed to produce valid JSON after retries")
+        
+        # add response to history and save it back to Redis
+        history.append({"role": "assistant", "content": json.dumps(reply)})    
 
         current_time = time.time()
         for msg in history:
@@ -789,6 +1164,7 @@ def handle_chat_logic(username, reservation_id, chat_id, agent_role, message, ll
     except Exception as e:
         raise e
 
+        
 # call client function to send request to the llm and receive the reasoning in stream mode and the real output
 def consume_llm_stream_with_retries(llm_history, role, llm_model, reservation_id):
         print(f"[DEBUG SSE] Start stream for: {role} (Max Retries: {JSON_RETRIES})")
@@ -804,6 +1180,7 @@ def consume_llm_stream_with_retries(llm_history, role, llm_model, reservation_id
             
             print(f"[DEBUG SSE] --- Attempt {attempt + 1}/{JSON_RETRIES} ---")
             full_json_str = ""
+            full_thought_str = ""
             stream_error = None
         
             try:
@@ -811,6 +1188,7 @@ def consume_llm_stream_with_retries(llm_history, role, llm_model, reservation_id
                 for chunk in chat_with_llm_stream(local_history, llm_model):
                     
                     if chunk["type"] == "thought":
+                        full_thought_str += chunk["content"]
                         # instantly send the reasoning to show in the user interface
                         yield f"data: {json.dumps({'type': 'thought', 'content': chunk['content']})}\n\n"
                     
@@ -820,6 +1198,19 @@ def consume_llm_stream_with_retries(llm_history, role, llm_model, reservation_id
 
                     elif chunk["type"] == "error":
                         stream_error = chunk["content"]
+
+                if full_thought_str.strip():
+                    log_agent_reasoning(role, full_thought_str)
+
+                with log_lock:
+                    print("\n" + "=" * 70)
+                    print(f"Agent: {role} (attempt {attempt + 1}/{JSON_RETRIES})")
+                    print(f"\n[DEBUG LLM] RAW OUTPUT:\n{full_json_str}")
+
+                    if stream_error:
+                        print(f"[DEBUG LLM] STREAM ERROR: {stream_error}")
+
+                    print("=" * 70 + "\n")
 
                 # when the response is processed, get the entire json and remove possible characters like ```json between curly brackets
                 clean_json_str = full_json_str
@@ -852,17 +1243,25 @@ def consume_llm_stream_with_retries(llm_history, role, llm_model, reservation_id
                     return (True, parsed_data_or_error)
 
                 print(f"[DEBUG SSE] Failed validation at attempt {attempt + 1}. Error: {parsed_data_or_error}")
+
+                # check for length error
+                is_length_error = bool(stream_error) and any(kw in str(stream_error).lower() for kw in ("length", "max_tokens", "max token"))
                 
                 if attempt < JSON_RETRIES - 1:
                     # inform the user that the model will think again for the same phase due to an error
-                    yield f"data: {json.dumps({'type': 'thought', 'content': f'\n\n[System: JSON validation faled. Autocorrection attempt {attempt+2}/{JSON_RETRIES} in progress...]\n\n'})}\n\n"
-                    
+                    yield f"data: {json.dumps({'type': 'thought', 'content': f'\n\n[System: JSON validation failed. Autocorrection attempt {attempt+2}/{JSON_RETRIES} in progress...]\n\n'})}\n\n"
+
                     # update local history so that the LLM can autocorrect in the next loop iteration
                     local_history.append({"role": "assistant", "content": full_json_str})
-                    local_history.append({
-                        "role": "user", 
-                        "content": f"Your previous response failed because of an error: {parsed_data_or_error}. You MUST NOT return an empty or truncated response. Please generate a new complete response in valid JSON following the mandatory structure."
-                    })
+
+                    if is_length_error:
+                        # restart with the following context: system prompt + last user message
+                        correction_content = "Your previous response ran out of tokens during reasoning before producing any JSON output. Answer directly and concisely: do not enumerate optional or already-covered checks, and output the required JSON object now."
+                        
+                    else:
+                        correction_content = f"Your previous response failed because of an error: {parsed_data_or_error}. You MUST NOT return an empty or truncated response. Please generate a new complete response in valid JSON following the mandatory structure."
+                        
+                    local_history.append({"role": "user", "content": correction_content})
 
             except Exception as stream_err:
                 print(f"[DEBUG SSE] Error during stream process: {stream_err}")

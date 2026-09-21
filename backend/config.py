@@ -65,19 +65,35 @@ NFS_OPTS = "rw,sync,hard,intr,timeo=600,retrans=2"
 USER_QUOTA_BYTES =536870912
 
 # LLM parameters
-LLM_MODEL = "deepseek-v4-flash:cloud"                           
-AVAILABLE_MODELS = ["gemini-3.1-flash-lite", "glm-5.1:cloud", "deepseek-v4-flash:cloud", "qwen3.5:397b-cloud", "deepseek-v4-pro:cloud", "gemma4:cloud"]
-OPENAI_API_KEY = os.getenv("GEMINI_API_KEY")        
-AVAILABLE_BASE_URLS = ["https://generativelanguage.googleapis.com/v1beta/openai/", "http://localhost:11434/v1"]
+LLM_MODEL = "deepseek-v4-flash:cloud"
+MODEL_PROVIDERS = {
+    "gemini-3.1-flash-lite": "gemini",
+    "glm-5.1:cloud": "ollama",
+    "deepseek-v4-flash:cloud": "ollama",
+    "qwen3.5:397b-cloud": "ollama",
+    "deepseek-v4-pro:cloud": "ollama",
+    "gemma4:cloud": "ollama"
+}                           
+AVAILABLE_MODELS = list(MODEL_PROVIDERS.keys())
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")        
+AVAILABLE_BASE_URLS = ["https://generativelanguage.googleapis.com/v1beta/openai/", "http://localhost:11434/v1", "https://api.openai.com/v1"]
 SAFETY_ITERATIONS = 3
 JSON_RETRIES = 3
-PHASES_ORDER = ['negotiation', 'planning', 'safety', 'execution']
+PHASES_ORDER = ['negotiation', 'planning', 'safety', 'testbed_execution', 'execution']
 AGENT_NAMES = {
     "negotiation": "Intent Analyst",
     "planning": "Action Planner",
     "safety": "Compliance Auditor",
+    "safety_agent_1": "Network State Analyst",
+    "safety_agent_2": "Topology Validator",
+    "safety_agent_3": "Syntax & Redundancy Checker",
+    "safety_agent_4": "Security & Semantic Auditor",
+    "safety_agent_5": "Auto-Correction Engine",
+    "testbed_execution": "Testbed Execution",
     "execution": "Execution Reporter"
 }
+SAFETY_SUBAGENT_ROLES = ["safety_agent_1", "safety_agent_2", "safety_agent_3", "safety_agent_4", "safety_agent_5"]
 DIAGNOSTIC_ASSISTANT_PHASES_ORDER = ["diagnostic_intent", "diagnostic_planner", "execution", "diagnostic_reporter"]
 LLM_TIMEOUT_SECONDS = 300
 LLM_MAX_OUTPUT_TOKENS = 16384                                   #16384 - 32768

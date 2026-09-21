@@ -5,10 +5,14 @@ import { UniversalPipelineChat } from "./LLMAgents/SharedChatComponents";
 import { useAgentChat, sendChatRequestStream } from "./LLMAgents/useAgentChat";
 
 // component exclusively for Admins: read-only view of historical JSON messages
-const AdminReadOnlyDebugger = ({ username, reservation_id, activeChatId, phases, renderMessage, agentNames }) => {
+const AdminReadOnlyDebugger = ({ username, reservation_id, activeChatId, phases, renderMessage, agentNames, safetySubagents }) => {
   const [debugPhase, setDebugPhase] = useState(phases.length > 0 ? phases[0] : 'negotiation');
+  // state for safety sub-agents, initialized to the generic 'safety' key
+  const [safetySubPhase, setSafetySubPhase] = useState('safety');
   const [debugMessages, setDebugMessages] = useState([]);
   const [isExpanded, setIsExpanded] = useState(false);
+  // determine the exact role to fetch based on the selected main tab
+  const activeFetchRole = debugPhase === 'safety' ? safetySubPhase : debugPhase;
 
   // synchronizes the debug view phase if the available phases change
   useEffect(() => {
@@ -17,19 +21,27 @@ const AdminReadOnlyDebugger = ({ username, reservation_id, activeChatId, phases,
     }
   }, [phases]);
 
+  const handlePhaseSelect = (phase) => {
+    setDebugPhase(phase);
+    // opening the safety tab selects safety view
+    if (phase === 'safety') {
+          setSafetySubPhase('safety');
+      }
+  };
+
   // fetches the unfiltered historical messages for the selected phase directly from the backend whenever the chat ID, phase, or expanded state changes
   useEffect(() => {
     if (!activeChatId || !isExpanded) return;
     
     const fetchPhaseHistory = async () => {
       try {
-        const response = await fetch(`/api/agent_server/history?username=${encodeURIComponent(username)}&reservation_id=${encodeURIComponent(reservation_id)}&chat_id=${encodeURIComponent(activeChatId)}&agent_role=${encodeURIComponent(debugPhase)}`);
+        const response = await fetch(`/api/agent_server/history?username=${encodeURIComponent(username)}&reservation_id=${encodeURIComponent(reservation_id)}&chat_id=${encodeURIComponent(activeChatId)}&agent_role=${encodeURIComponent(activeFetchRole)}`);
         if (response.ok) {
           const data = await response.json();
 
           const messagesWithIds = (data.messages || []).map((msg, idx) => ({
               ...msg,
-              id: msg.id || `debug-${debugPhase}-${idx}`
+              id: msg.id || `debug-${activeFetchRole}-${idx}`
           }));
 
           setDebugMessages(messagesWithIds);
@@ -41,17 +53,20 @@ const AdminReadOnlyDebugger = ({ username, reservation_id, activeChatId, phases,
 
     fetchPhaseHistory();
 
-  }, [debugPhase, activeChatId, isExpanded, username, reservation_id]);
+  }, [activeFetchRole, activeChatId, isExpanded, username, reservation_id]);
   
   // cycles through the available phases (forward or backward) when the admin clicks the transition buttons.
   const handlePhaseChange = (direction) => {
       const currentIndex = phases.indexOf(debugPhase);
       if (direction === 'next' && currentIndex < phases.length - 1) {
-          setDebugPhase(phases[currentIndex + 1]);
+          handlePhaseSelect(phases[currentIndex + 1]);
       } else if (direction === 'prev' && currentIndex > 0) {
-          setDebugPhase(phases[currentIndex - 1]);
+          handlePhaseSelect(phases[currentIndex - 1]);
       }
   };
+
+  // dynamic list for the sub-menu: the main 'safety' key followed by the sub-agents list sent by the backend
+  const safetySubAgentsList = ["safety", ...(safetySubagents || [])];
 
   return (
     <div className="admin-debugger-container">
@@ -70,16 +85,32 @@ const AdminReadOnlyDebugger = ({ username, reservation_id, activeChatId, phases,
                         <div 
                             key={phase} 
                             className={`en-step ${debugPhase === phase ? 'active' : ''} clickable`}
-                            onClick={() => setDebugPhase(phase)}
+                            onClick={() => handlePhaseSelect(phase)}
                         >
                             {(agentNames[phase] || phase).toUpperCase()}
                         </div>
                     ))}
                 </div>
 
+                {debugPhase === 'safety' && (
+                  <div className="admin-debugger-sub-stepper">
+                    {safetySubAgentsList.map((sub) => (
+                      <button
+                        key={sub}
+                        // highlight the sub-menu button based on safetySubPhase
+                        className={`en-btn-accept admin-sub-stepper-btn ${safetySubPhase === sub ? 'active' : ''}`}
+                        onClick={() => setSafetySubPhase(sub)}
+                      >
+                        {/* extracts the UI name directly from the agentNames mapping */}
+                        {agentNames[sub] || sub}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
                 <div className="experiment-negotiation-chat admin-debugger-chat">
                     {debugMessages.length === 0 ? (
-                        <p className="admin-debugger-empty">No history found for {agentNames[debugPhase] || debugPhase.toUpperCase()} phase.</p>
+                        <p className="admin-debugger-empty">No history found for {agentNames[activeFetchRole] || activeFetchRole.toUpperCase()} phase.</p>
                     ) : (
                         debugMessages.map(renderMessage)
                     )}
@@ -441,6 +472,7 @@ const LLMAgent = ({ username, reservation_id, isAdmin, activeReservationExpirati
         "Negotiating experiment details...",
         "Planning network configuration...",
         "Validating plan safety...",
+        "Executing verified plan on testbed...",
         "Generationg report after commands execution on testbed..."
     ];
     return descriptions[index] || chat.agentNames[phaseString] || phaseString.toUpperCase();
@@ -778,6 +810,7 @@ const LLMAgent = ({ username, reservation_id, isAdmin, activeReservationExpirati
             phases={LLMAgentPhases}
             renderMessage={renderMessage}
             agentNames={chat.agentNames}
+            safetySubagents={chat.safetySubagents}
         />
       )}
       {/*rollback confirmation window*/}
