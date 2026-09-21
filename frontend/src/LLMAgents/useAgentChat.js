@@ -70,6 +70,7 @@ export const useAgentChat = (username, reservation_id, defaultRole) => {
   const [savedChats, setSavedChats] = useState([]);
   const [activeChatId, setActiveChatId] = useState(null);
   const [agentNames, setAgentNames] = useState({});
+  const [safetySubagents, setSafetySubagents] = useState([]);
   // model selection
   const [availableModels, setAvailableModels] = useState([]);
   const [selectedModel, setSelectedModel] = useState("");
@@ -126,6 +127,11 @@ export const useAgentChat = (username, reservation_id, defaultRole) => {
         // update the threshold if provided by the backend
         if (data.frontend_llm_prevention_minutes) {
           setPreventionThreshold(data.frontend_llm_prevention_minutes);
+        }
+
+        // save the safety subagents names from the backend
+        if (data.safety_subagents) {
+          setSafetySubagents(data.safety_subagents);
         }
 
         return data;
@@ -213,7 +219,8 @@ export const useAgentChat = (username, reservation_id, defaultRole) => {
     error, setError,
     savedChats, setSavedChats,
     activeChatId, setActiveChatId,
-    availableModels, selectedModel, setSelectedModel, preventionThreshold, agentNames,
+    availableModels, selectedModel, setSelectedModel, preventionThreshold,
+    agentNames, safetySubagents,
     resetBaseChat, fetchSessions, loadHistory, deleteChat, downloadChat
   };
 };

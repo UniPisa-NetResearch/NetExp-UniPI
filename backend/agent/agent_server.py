@@ -9,11 +9,11 @@ from flask import request, jsonify, send_file, Response
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from ..app import app
 from ..utils import parse_complete_inventory_hosts, get_remaining_minutes
-from ..config import PHASES_ORDER, AVAILABLE_MODELS, LLM_MODEL, DIAGNOSTIC_ASSISTANT_PHASES_ORDER, SAFETY_ITERATIONS, AGENT_NAMES, FRONTEND_LLM_PREVENTION_MINUTES, BACKEND_LLM_PREVENTION_MINUTES
+from ..config import PHASES_ORDER, AVAILABLE_MODELS, LLM_MODEL, DIAGNOSTIC_ASSISTANT_PHASES_ORDER, SAFETY_ITERATIONS, AGENT_NAMES, FRONTEND_LLM_PREVENTION_MINUTES, BACKEND_LLM_PREVENTION_MINUTES, SAFETY_SUBAGENT_ROLES
 from .agents_util.prompts import ROLLBACK_BASE_CMD, DIAGNOSTIC_ASSISTANT_PROMPTS
 from .agents_util.agent_server_workers import run_experiment_pipeline_worker, run_diagnostic_pipeline_worker
 from .agents_util.agent_server_utils import (redis_client, testbed_topology, open_ssh_connections, close_ssh_connections, 
-                                             execute_single_ssh_command, get_reserved_devices, redis_stream_generator)
+                                             execute_single_ssh_command, get_reserved_devices, redis_stream_generator, delete_agent_history_keys)
 
 
 @app.route("/api/agent_server/experiment/stream", methods=["POST"])
@@ -77,7 +77,7 @@ def get_sessions():
     # order chat_ids in descendent order
     chat_ids.sort(reverse=True)
     
-    return jsonify({"chat_ids": chat_ids, "phases_order": PHASES_ORDER, "diagnostic_assistant_phases_order": DIAGNOSTIC_ASSISTANT_PHASES_ORDER, "available_models": AVAILABLE_MODELS, "default_model": LLM_MODEL, "safety_iterations": SAFETY_ITERATIONS, "agent_names": AGENT_NAMES, "frontend_llm_prevention_minutes": FRONTEND_LLM_PREVENTION_MINUTES})
+    return jsonify({"chat_ids": chat_ids, "phases_order": PHASES_ORDER, "diagnostic_assistant_phases_order": DIAGNOSTIC_ASSISTANT_PHASES_ORDER, "available_models": AVAILABLE_MODELS, "default_model": LLM_MODEL, "safety_iterations": SAFETY_ITERATIONS, "agent_names": AGENT_NAMES, "frontend_llm_prevention_minutes": FRONTEND_LLM_PREVENTION_MINUTES, "safety_subagents": SAFETY_SUBAGENT_ROLES})
 
 @app.route("/api/agent_server/history", methods=["GET"])
 def get_history():
@@ -141,6 +141,9 @@ def terminate_experiment():
             "timestamp": time.time()
         })
         redis_client.set(session_key, json.dumps(history), ex=432000)
+
+    # delete safety temporary context for the previous turn
+    delete_agent_history_keys(username=username, reservation_id=reservation_id, chat_id=chat_id, role_prefix="safety_turn_state")
         
     return jsonify({"status": "success"}), 200
 
@@ -156,16 +159,9 @@ def delete_history():
     if not username or not reservation_id:
         return jsonify({"error": "Missing parameters"}), 400
     
-    if not chat_id:
-        pattern = f"agent_history:*:{username}:{reservation_id}:*"
-    else:
-        pattern = f"agent_history:*:{username}:{reservation_id}:{chat_id}"
-        
-    keys = redis_client.keys(pattern)
-    if keys:
-        redis_client.delete(*keys) # remove all keys matching the pattern
+    deleted = delete_agent_history_keys(username, reservation_id, chat_id)
     
-    return jsonify({"status": "success", "message": f"Deleted {len(keys)} chats"})
+    return jsonify({"status": "success", "message": f"Deleted {deleted} chats"})
 
 
 @app.route("/api/agent_server/download", methods=["GET"])

@@ -5,18 +5,25 @@ import ollama
 from google import genai
 from google.genai import types
 from openai import OpenAI, APITimeoutError, APIConnectionError, APIStatusError
-from ..config import OPENAI_API_KEY, LLM_TIMEOUT_SECONDS, LLM_MAX_OUTPUT_TOKENS, AVAILABLE_BASE_URLS
+from ..config import GEMINI_API_KEY, OPENAI_API_KEY, MODEL_PROVIDERS, LLM_TIMEOUT_SECONDS, LLM_MAX_OUTPUT_TOKENS, AVAILABLE_BASE_URLS
 
 
 def chat_with_llm(messages: list, model_name: str) -> str:
+    # extract the provider from the model name using MODEL_PROVIDERS dictionary
+    provider = MODEL_PROVIDERS.get(model_name, "openai")
 
-    if "gemini" in model_name.lower():
+    if provider == "gemini":
         dynamic_base_url = AVAILABLE_BASE_URLS[0]
+        api_key = GEMINI_API_KEY
+    elif provider == "ollama":
+        dynamic_base_url = AVAILABLE_BASE_URLS[1]
+        api_key = "ollama"  # placeholder to instanciate the client
     else:
-         dynamic_base_url = AVAILABLE_BASE_URLS[1]
+         dynamic_base_url = AVAILABLE_BASE_URLS[2]
+         api_key = OPENAI_API_KEY
 
     client = OpenAI(
-        api_key=OPENAI_API_KEY,
+        api_key=api_key,
         base_url=dynamic_base_url,
         max_retries=0               # to avoid wasting requests with automatic retries when the server is not reachable
     )
@@ -96,6 +103,8 @@ def chat_with_llm(messages: list, model_name: str) -> str:
 # stream mode to send reasoning content to the client in real time
 def chat_with_llm_stream(messages: list, model_name: str):
 
+    provider = MODEL_PROVIDERS.get(model_name, "openai")
+
     print("\n" + "="*70)
     print(f"[DEBUG LLM] NATIVE LLM CALL TO MODEL (STREAMING): {model_name}")
     payload_length = sum(len(str(m.get("content", ""))) for m in messages)
@@ -109,8 +118,8 @@ def chat_with_llm_stream(messages: list, model_name: str):
 
     try:
         # use gemini API for gemini models
-        if "gemini" in model_name.lower():
-            client = genai.Client(api_key=OPENAI_API_KEY)
+        if provider == "gemini":
+            client = genai.Client(api_key=GEMINI_API_KEY)
             
             gemini_messages = []
             # variable that contains system prompt
@@ -157,7 +166,7 @@ def chat_with_llm_stream(messages: list, model_name: str):
                         yield {"type": "error", "content": "finish_reason: length (Max token limit reached)"}
 
         # use ollama api (DeepSeek, Qwen, GLM, Gemma)
-        else:
+        elif provider == "ollama":
             # use native Ollama client
             ollama_base_url = AVAILABLE_BASE_URLS[1].rstrip("/v1")
             ollama_client = ollama.Client(host=ollama_base_url, timeout= LLM_TIMEOUT_SECONDS)
@@ -167,7 +176,7 @@ def chat_with_llm_stream(messages: list, model_name: str):
                 messages=messages,
                 stream=True,
                 think=True,                                                                                         # activate thinking
-                options={"temperature": 0.2, "num_predict": LLM_MAX_OUTPUT_TOKENS}
+                options={"temperature": 0.2, "num_predict": LLM_MAX_OUTPUT_TOKENS, "repeat_penalty": 1.3, "repeat_last_n": 256}
             )
             
             for chunk in response:
@@ -187,11 +196,38 @@ def chat_with_llm_stream(messages: list, model_name: str):
                     json_output_only += content
                     yield {"type": "content", "content": content}
 
-                # get reason for which the LLM stop genrating the response
+                # get reason for which the LLM stop generating the response
                 if chunk.get("done"):
                     done_reason = chunk.get("done_reason", "")
                     if done_reason and done_reason.lower() in ["length", "max_tokens"]:
                         yield {"type": "error", "content": f"finish_reason: {done_reason} (Max token limit reached)"}
+
+        else:
+            client = OpenAI(
+                api_key=OPENAI_API_KEY,
+                base_url=AVAILABLE_BASE_URLS[2]
+            )
+            
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                temperature=0.2,
+                stream=True,
+                max_tokens=LLM_MAX_OUTPUT_TOKENS
+            )
+            
+            for chunk in response:
+                # extract text if exists
+                content = chunk.choices[0].delta.content if chunk.choices else None
+                
+                if content:
+                    json_output_only += content
+                    # generate only "content"
+                    yield {"type": "content", "content": content}
+
+                finish_reason = chunk.choices[0].finish_reason if chunk.choices else None
+                if finish_reason == "length":
+                    yield {"type": "error", "content": "finish_reason: length (Max token limit reached)"}    
 
         elapsed_time = time.time() - start_time
         print(f"\n[DEBUG LLM] --- NATIVE STREAM COMPLETED IN {elapsed_time:.2f} SECONDS ---")

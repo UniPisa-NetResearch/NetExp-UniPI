@@ -4,7 +4,7 @@ LOG_DIR="execution_logs"
 
 mkdir -p "$LOG_DIR"
 
-for log in log_authentication log_orchestrator log_controller log_validator log_experimenter log_evaluator log_scheduler_runner log_agent_server log_rq_worker log_frontend; do
+for log in log_authentication log_orchestrator log_controller log_validator log_experimenter log_evaluator log_scheduler_runner log_agent_server log_rq_worker log_frontend log_agents_reasoning; do
     : > "$LOG_DIR/${log}.txt"
 done
 
