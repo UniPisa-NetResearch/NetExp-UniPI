@@ -1353,7 +1353,7 @@ def generate_diagnostic_assistant_sse(history, request_data):
             next_context = intent_json.get("context", "")
             print(f"[DEBUG SSE] Intent Status: {status}")
 
-            if status in ["REJECTED", "PROMPT_GENERATED"]:
+            if status == "REJECTED":
                 history.append({"role": "assistant", "content": response_msg})
                 redis_client.set(session_key, json.dumps(history), ex=432000)
                 yield f"data: {json.dumps({'type': 'result', 'data': {'reply': response_msg, 'chat_id': chat_id, 'requires_approval': False, 'next_phase': None}})}\n\n"

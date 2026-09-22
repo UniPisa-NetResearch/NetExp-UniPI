@@ -1,7 +1,5 @@
 #!/bin/bash
 
-source backend-venv/bin/activate
-
 LOG_DIR="execution_logs"
 
 mkdir -p "$LOG_DIR"
