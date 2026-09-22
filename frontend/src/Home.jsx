@@ -851,7 +851,8 @@ const AdminReservationManager = () => {
 
 const AdminContainerlabManager = () => {
     const [output, setOutput] = useState('');
-    const [isProcessing, setIsProcessing] = useState(false);
+    const [processingAction, setProcessingAction] = useState(null);
+    const [selectedFile, setSelectedFile] = useState(null);
     // reference applied to the scrollable container
     const terminalContainerRef = useRef(null);
 
@@ -867,7 +868,7 @@ const AdminContainerlabManager = () => {
             return;
         }
 
-        setIsProcessing(true);
+        setProcessingAction('redeploy');
         setOutput('');
 
         try {
@@ -899,22 +900,107 @@ const AdminContainerlabManager = () => {
         } catch (error) {
             setOutput(prev => prev + `\n[CONNECTION ERROR] ${error.message}\n`);
         } finally {
-            setIsProcessing(false);
+            setProcessingAction(null);
         }
     };
+
+    // handle file selection for upload
+    const handleFileChange = (event) => {
+        if (event.target.files && event.target.files[0]) {
+            setSelectedFile(event.target.files[0]);
+        }
+    };
+
+    const handleUploadAndDeploy = async () => {
+        if (!selectedFile) {
+            alert("Please select a YAML file first.");
+            return;
+        }
+        
+        if (!window.confirm("Are you sure you want to upload and deploy this topology?")) {
+            return;
+        }
+
+        setProcessingAction('upload');
+        setOutput(''); // reset output
+
+        const formData = new FormData();
+        formData.append('file', selectedFile);
+
+        try {
+            // call the endpoint for upload and deployment
+            const response = await fetch('/api/auth/admin/uploadTopology', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder('utf-8');
+
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+
+                // decode the Uint8Array chunk into a string and append it
+                let chunk = decoder.decode(value, { stream: true });
+                // regex to strip ANSI escape sequences (terminal color codes)
+                chunk = chunk.replace(/\x1B\[\d*(;\d+)*[a-zA-Z]/g, '');
+                // remove terminal query codes (OSC) like ESC]10;?ESC\
+                chunk = chunk.replace(/\x1B\]\d+;\?[^\x1B]*\x1B\\/g, '');
+                setOutput(prev => prev + chunk);
+            }
+        } catch (error) {
+            setOutput(prev => prev + `\n[CONNECTION ERROR] ${error.message}\n`);
+        } finally {
+            setProcessingAction(null);
+            // Reset file input if needed
+            setSelectedFile(null);
+            document.getElementById('topology-file-upload').value = '';
+        }
+    };
+
 
     return (
         <div className="card admin-manager-card containerlab-manager-card">
             <h2 className="title">Admin Panel - Containerlab Redeployment</h2>
+            <div className="containerlab-action-row topology-action-row">
+                <p>Upload new topology (YAML) and deploy:</p>
+                <input 
+                    className="topology-file-input"
+                    id="topology-file-upload"
+                    type="file" 
+                    accept=".yaml,.yml" 
+                    onChange={handleFileChange} 
+                    disabled={processingAction !== null}
+                />
+                <label 
+                    htmlFor="topology-file-upload" 
+                    className={`custom-file-upload ${processingAction !== null ? 'disabled' : ''}`}
+                >
+                    Choose File
+                </label>
+                <span className="file-name-display">
+                    {selectedFile ? selectedFile.name : 'No file selected'}
+                </span>
+                <button 
+                    onClick={handleUploadAndDeploy} 
+                    className="submit-button delete-btn containerlab-manager-button topology-upload-btn" 
+                    disabled={processingAction !== null || !selectedFile}
+                >
+                    {processingAction === 'upload' ? 'Processing...' : 'Upload & Deploy'}
+                </button>
+            </div>
             <div className="containerlab-action-row">
                 <p>Destroy and recreate the virtual testbed on the Containerlab device:</p>
                 
                 <button 
                     onClick={handleRedeploy} 
                     className="submit-button delete-btn containerlab-manager-button" 
-                    disabled={isProcessing}
+                    disabled={processingAction !== null}
                 >
-                    {isProcessing ? 'Processing...' : 'Destroy & Deploy Containerlab'}
+                    {processingAction === 'redeploy' ? 'Processing...' : 'Destroy & Deploy Containerlab'}
                 </button>
             </div>
 

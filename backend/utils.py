@@ -168,16 +168,11 @@ def create_reserved_devices_yaml(reservation_id, devices):
     for d in devices:
         # add only valid devices with an ID/Name and their role
         if d.get("id_device"):
-            device_list.append({
-                "name": d.get("id_device"),
-                "role": d.get("role", "unknown")
-            })
-    
-    data = {"reserved_devices": device_list}
+            device_list.append(d.get("id_device"))
     
     try:
         with open(file_path, 'w', encoding='utf-8') as f:
-            yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+            yaml.dump(device_list, f, default_flow_style=False, sort_keys=False)
         print(f"Created reserved devices YAML at {file_path}")
     except Exception as e:
         print(f"Error creating reserved devices YAML: {e}")

@@ -1,0 +1,420 @@
+
+PLAY [Grant SSH access - containerlab virtual devices] *************************
+
+TASK [Set device type facts] ***************************************************
+ok: [ch1]
+ok: [ch2]
+ok: [csw1]
+ok: [csw2]
+ok: [csw5]
+
+TASK [Write management interface to /etc/res_mgmt_iface] ***********************
+changed: [ch2]
+changed: [csw2]
+changed: [csw1]
+changed: [csw5]
+changed: [ch1]
+
+TASK [Deploy res_ip wrapper] ***************************************************
+changed: [csw5]
+changed: [csw1]
+changed: [csw2]
+changed: [ch2]
+changed: [ch1]
+
+TASK [Deploy res_tc wrapper] ***************************************************
+changed: [csw1]
+changed: [csw5]
+changed: [csw2]
+changed: [ch1]
+changed: [ch2]
+
+TASK [Deploy res_vtysh wrapper (only on SONiC)] ********************************
+skipping: [ch1]
+skipping: [ch2]
+
+TASK [Deploy res_config wrapper (only on SONiC)] *******************************
+skipping: [ch1]
+skipping: [ch2]
+
+TASK [Set wrapper existence facts] *********************************************
+ok: [ch1]
+ok: [ch2]
+
+TASK [Create reservation users group] ******************************************
+changed: [ch1]
+changed: [ch2]
+
+TASK [Deploy res_vtysh wrapper (only on SONiC)] ********************************
+changed: [csw1]
+changed: [csw2]
+changed: [csw5]
+
+TASK [Remove existing user] ****************************************************
+ok: [ch2]
+ok: [ch1]
+
+TASK [Remove existing sudoers file] ********************************************
+ok: [ch2]
+ok: [ch1]
+
+TASK [Deploy res_config wrapper (only on SONiC)] *******************************
+changed: [csw2]
+changed: [csw1]
+changed: [csw5]
+
+TASK [Set wrapper existence facts] *********************************************
+ok: [csw2]
+ok: [csw1]
+ok: [csw5]
+
+TASK [Remove existing SSH Match block] *****************************************
+ok: [ch2]
+ok: [ch1]
+
+TASK [Create reservation users group] ******************************************
+changed: [csw5]
+changed: [csw2]
+changed: [csw1]
+
+TASK [Create reservation user account] *****************************************
+changed: [ch1]
+changed: [ch2]
+
+TASK [Remove existing user] ****************************************************
+ok: [csw5]
+ok: [csw2]
+ok: [csw1]
+
+TASK [Detect available candidate commands] *************************************
+ok: [ch2]
+ok: [ch1]
+
+TASK [Build command -> path mapping] *******************************************
+ok: [ch2] => (item=ip /usr/sbin/ip)
+ok: [ch2] => (item=ping /usr/bin/ping)
+ok: [ch2] => (item=tc /usr/sbin/tc)
+ok: [ch1] => (item=ip /usr/sbin/ip)
+ok: [ch1] => (item=ping /usr/bin/ping)
+ok: [ch1] => (item=tc /usr/sbin/tc)
+
+TASK [Build list of missing candidate commands (exclude vtysh and config)] *****
+ok: [ch2]
+ok: [ch1]
+
+TASK [Remove existing sudoers file] ********************************************
+ok: [csw5]
+ok: [csw2]
+ok: [csw1]
+
+TASK [Remove existing SSH Match block] *****************************************
+ok: [csw2]
+ok: [csw5]
+ok: [csw1]
+
+TASK [Create reservation user account] *****************************************
+changed: [csw2]
+changed: [csw5]
+changed: [csw1]
+
+TASK [Run apt update only if cache is old (ignore failure of update_cache)] ****
+ok: [ch2]
+
+TASK [Define mapping command -> apt package name] ******************************
+ok: [ch2]
+
+TASK [Create list of packages to install] **************************************
+ok: [ch2]
+
+TASK [Run apt update only if cache is old (ignore failure of update_cache)] ****
+ok: [ch1]
+
+TASK [Define mapping command -> apt package name] ******************************
+ok: [ch1]
+
+TASK [Create list of packages to install] **************************************
+ok: [ch1]
+
+TASK [Detect available candidate commands] *************************************
+ok: [csw2]
+
+TASK [Build command -> path mapping] *******************************************
+ok: [csw2] => (item=ip /usr/sbin/ip)
+ok: [csw2] => (item=ping /usr/bin/ping)
+ok: [csw2] => (item=tc /usr/sbin/tc)
+ok: [csw2] => (item=config /usr/local/bin/config)
+ok: [csw2] => (item=vtysh /usr/bin/vtysh)
+ok: [csw2] => (item=scapy /usr/bin/scapy)
+ok: [csw2] => (item=tcpdump /usr/bin/tcpdump)
+
+TASK [Build list of missing candidate commands (exclude vtysh and config)] *****
+ok: [csw2]
+
+TASK [Detect available candidate commands] *************************************
+ok: [csw5]
+
+TASK [Build command -> path mapping] *******************************************
+ok: [csw5] => (item=ip /usr/sbin/ip)
+ok: [csw5] => (item=ping /usr/bin/ping)
+ok: [csw5] => (item=tc /usr/sbin/tc)
+ok: [csw5] => (item=config /usr/local/bin/config)
+ok: [csw5] => (item=vtysh /usr/bin/vtysh)
+ok: [csw5] => (item=scapy /usr/bin/scapy)
+ok: [csw5] => (item=tcpdump /usr/bin/tcpdump)
+
+TASK [Build list of missing candidate commands (exclude vtysh and config)] *****
+ok: [csw5]
+
+TASK [Detect available candidate commands] *************************************
+ok: [csw1]
+
+TASK [Build command -> path mapping] *******************************************
+ok: [csw1] => (item=ip /usr/sbin/ip)
+ok: [csw1] => (item=ping /usr/bin/ping)
+ok: [csw1] => (item=tc /usr/sbin/tc)
+ok: [csw1] => (item=config /usr/local/bin/config)
+ok: [csw1] => (item=vtysh /usr/bin/vtysh)
+ok: [csw1] => (item=scapy /usr/bin/scapy)
+ok: [csw1] => (item=tcpdump /usr/bin/tcpdump)
+
+TASK [Build list of missing candidate commands (exclude vtysh and config)] *****
+ok: [csw1]
+
+TASK [Run apt update only if cache is old (ignore failure of update_cache)] ****
+ok: [csw2]
+
+TASK [Define mapping command -> apt package name] ******************************
+ok: [csw2]
+
+TASK [Create list of packages to install] **************************************
+ok: [csw2]
+
+TASK [Run apt update only if cache is old (ignore failure of update_cache)] ****
+ok: [csw5]
+
+TASK [Define mapping command -> apt package name] ******************************
+ok: [csw5]
+
+TASK [Create list of packages to install] **************************************
+ok: [csw5]
+
+TASK [Run apt update only if cache is old (ignore failure of update_cache)] ****
+ok: [csw1]
+
+TASK [Define mapping command -> apt package name] ******************************
+ok: [csw1]
+
+TASK [Create list of packages to install] **************************************
+ok: [csw1]
+
+TASK [Install packages for missing commands (batch)] ***************************
+changed: [csw2]
+
+TASK [Override found_cmd_paths to use wrappers] ********************************
+ok: [csw2]
+
+TASK [Keep original paths for full_user] ***************************************
+skipping: [csw2]
+
+TASK [Build allowed_bins list] *************************************************
+ok: [csw2]
+
+TASK [Compose sudo alias lists] ************************************************
+ok: [csw2]
+
+TASK [Install packages for missing commands (batch)] ***************************
+changed: [csw1]
+
+TASK [Override found_cmd_paths to use wrappers] ********************************
+ok: [csw1]
+
+TASK [Keep original paths for full_user] ***************************************
+skipping: [csw1]
+
+TASK [Build allowed_bins list] *************************************************
+ok: [csw1]
+
+TASK [Compose sudo alias lists] ************************************************
+ok: [csw1]
+
+TASK [Install packages for missing commands (batch)] ***************************
+changed: [csw5]
+
+TASK [Override found_cmd_paths to use wrappers] ********************************
+ok: [csw5]
+
+TASK [Keep original paths for full_user] ***************************************
+skipping: [csw5]
+
+TASK [Build allowed_bins list] *************************************************
+ok: [csw5]
+
+TASK [Compose sudo alias lists] ************************************************
+ok: [csw5]
+
+TASK [Install sudoers file for reservation user] *******************************
+changed: [csw2]
+changed: [csw1]
+changed: [csw5]
+
+TASK [Ensure .ssh directory exists] ********************************************
+changed: [csw2]
+changed: [csw1]
+changed: [csw5]
+
+TASK [Add public SSH key to authorized_keys] ***********************************
+changed: [csw2]
+changed: [csw1]
+changed: [csw5]
+
+TASK [Set correct permissions on authorized_keys] ******************************
+ok: [csw2]
+ok: [csw1]
+ok: [csw5]
+
+TASK [Add SSHd Match block to disable password auth for user] ******************
+changed: [csw2]
+changed: [csw1]
+changed: [csw5]
+
+TASK [Get management interface IP] *********************************************
+ok: [csw2]
+
+TASK [Calculate dynamic gateway IP] ********************************************
+ok: [csw2]
+
+TASK [Get management interface IP] *********************************************
+ok: [csw1]
+
+TASK [Calculate dynamic gateway IP] ********************************************
+ok: [csw1]
+
+TASK [Get management interface IP] *********************************************
+ok: [csw5]
+
+TASK [Calculate dynamic gateway IP] ********************************************
+ok: [csw5]
+
+TASK [Check if default route via 172.20.20.1 exists] ***************************
+ok: [csw2]
+ok: [csw1]
+ok: [csw5]
+
+TASK [Remove default route via 172.20.20.1] ************************************
+changed: [csw2]
+changed: [csw1]
+changed: [csw5]
+
+RUNNING HANDLER [validate sudoers] *********************************************
+changed: [csw2]
+changed: [csw1]
+changed: [csw5]
+
+RUNNING HANDLER [restart sshd] *************************************************
+ok: [csw2]
+ok: [csw1]
+ok: [csw5]
+
+TASK [Install packages for missing commands (batch)] ***************************
+changed: [ch1]
+
+TASK [Override found_cmd_paths to use wrappers] ********************************
+ok: [ch1]
+
+TASK [Keep original paths for full_user] ***************************************
+skipping: [ch1]
+
+TASK [Build allowed_bins list] *************************************************
+ok: [ch1]
+
+TASK [Compose sudo alias lists] ************************************************
+ok: [ch1]
+
+TASK [Install packages for missing commands (batch)] ***************************
+changed: [ch2]
+
+TASK [Override found_cmd_paths to use wrappers] ********************************
+ok: [ch2]
+
+TASK [Keep original paths for full_user] ***************************************
+skipping: [ch2]
+
+TASK [Build allowed_bins list] *************************************************
+ok: [ch2]
+
+TASK [Compose sudo alias lists] ************************************************
+ok: [ch2]
+
+TASK [Install sudoers file for reservation user] *******************************
+changed: [ch1]
+
+TASK [Ensure .ssh directory exists] ********************************************
+changed: [ch1]
+
+TASK [Install sudoers file for reservation user] *******************************
+changed: [ch2]
+
+TASK [Add public SSH key to authorized_keys] ***********************************
+changed: [ch1]
+
+TASK [Ensure .ssh directory exists] ********************************************
+changed: [ch2]
+
+TASK [Set correct permissions on authorized_keys] ******************************
+ok: [ch1]
+
+TASK [Add public SSH key to authorized_keys] ***********************************
+changed: [ch2]
+
+TASK [Add SSHd Match block to disable password auth for user] ******************
+changed: [ch1]
+
+TASK [Set correct permissions on authorized_keys] ******************************
+ok: [ch2]
+
+TASK [Get management interface IP] *********************************************
+ok: [ch1]
+
+TASK [Calculate dynamic gateway IP] ********************************************
+ok: [ch1]
+
+TASK [Add SSHd Match block to disable password auth for user] ******************
+changed: [ch2]
+
+TASK [Check if default route via 172.20.20.1 exists] ***************************
+ok: [ch1]
+
+TASK [Get management interface IP] *********************************************
+ok: [ch2]
+
+TASK [Calculate dynamic gateway IP] ********************************************
+ok: [ch2]
+
+TASK [Remove default route via 172.20.20.1] ************************************
+changed: [ch1]
+
+TASK [Check if default route via 172.20.20.1 exists] ***************************
+ok: [ch2]
+
+RUNNING HANDLER [validate sudoers] *********************************************
+changed: [ch1]
+
+TASK [Remove default route via 172.20.20.1] ************************************
+changed: [ch2]
+
+RUNNING HANDLER [restart sshd] *************************************************
+ok: [ch1]
+
+RUNNING HANDLER [validate sudoers] *********************************************
+changed: [ch2]
+
+RUNNING HANDLER [restart sshd] *************************************************
+ok: [ch2]
+
+PLAY RECAP *********************************************************************
+ch1                        : ok=31   changed=12   unreachable=0    failed=0    skipped=3    rescued=0    ignored=0   
+ch2                        : ok=31   changed=12   unreachable=0    failed=0    skipped=3    rescued=0    ignored=0   
+csw1                       : ok=33   changed=14   unreachable=0    failed=0    skipped=1    rescued=0    ignored=0   
+csw2                       : ok=33   changed=14   unreachable=0    failed=0    skipped=1    rescued=0    ignored=0   
+csw5                       : ok=33   changed=14   unreachable=0    failed=0    skipped=1    rescued=0    ignored=0   
+

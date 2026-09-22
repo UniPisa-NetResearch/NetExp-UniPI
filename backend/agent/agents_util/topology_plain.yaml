@@ -1,58 +1,46 @@
 name: virtualTopology
-
 topology:
   nodes:
     ch1:
       kind: linux (ubuntu:22.04)
       mgmt-ipv4: 172.20.20.161
-
     ch2:
       kind: linux (ubuntu:22.04)
       mgmt-ipv4: 172.20.20.162
-
     ch3:
       kind: linux (ubuntu:22.04)
       mgmt-ipv4: 172.20.20.163
-
     ch4:
       kind: linux (ubuntu:22.04)
       mgmt-ipv4: 172.20.20.164
-
     csw5:
-      kind: sonic-vs
+      kind: sonic-vs (docker-sonic-vs:latest)
       mgmt-ipv4: 172.20.20.155
-
     csw6:
-      kind: sonic-vs
+      kind: sonic-vs (docker-sonic-vs:latest)
       mgmt-ipv4: 172.20.20.156
-
     csw1:
-      kind: sonic-vs
+      kind: sonic-vs (docker-sonic-vs:latest)
       mgmt-ipv4: 172.20.20.151
-
     csw2:
-      kind: sonic-vs
+      kind: sonic-vs (docker-sonic-vs:latest)
       mgmt-ipv4: 172.20.20.152
-
     csw3:
-      kind: sonic-vs
+      kind: sonic-vs (docker-sonic-vs:latest)
       mgmt-ipv4: 172.20.20.153
-
     csw4:
-      kind: sonic-vs
+      kind: sonic-vs (docker-sonic-vs:latest)
       mgmt-ipv4: 172.20.20.154
-
   links:
-    - endpoints: ["csw5:eth1", "csw1:eth1"]
-    - endpoints: ["csw6:eth1", "csw1:eth2"]
-    - endpoints: ["csw5:eth2", "csw2:eth1"]
-    - endpoints: ["csw6:eth2", "csw2:eth2"]
-    - endpoints: ["csw5:eth3", "csw3:eth1"]
-    - endpoints: ["csw6:eth3", "csw3:eth2"]
-    - endpoints: ["csw5:eth4", "csw4:eth1"]
-    - endpoints: ["csw6:eth4", "csw4:eth2"]
-    - endpoints: ["ch1:eth1", "csw1:eth3"]
-    - endpoints: ["ch2:eth1", "csw2:eth3"]
-    - endpoints: ["ch3:eth1", "csw3:eth3"]
-    - endpoints: ["ch4:eth1", "csw4:eth3"]
-  
+  - endpoints: ['csw5:eth1', 'csw1:eth1']
+  - endpoints: ['csw6:eth1', 'csw1:eth2']
+  - endpoints: ['csw5:eth2', 'csw2:eth1']
+  - endpoints: ['csw6:eth2', 'csw2:eth2']
+  - endpoints: ['csw5:eth3', 'csw3:eth1']
+  - endpoints: ['csw6:eth3', 'csw3:eth2']
+  - endpoints: ['csw5:eth4', 'csw4:eth1']
+  - endpoints: ['csw6:eth4', 'csw4:eth2']
+  - endpoints: ['ch1:eth1', 'csw1:eth3']
+  - endpoints: ['ch2:eth1', 'csw2:eth3']
+  - endpoints: ['ch3:eth1', 'csw3:eth3']
+  - endpoints: ['ch4:eth1', 'csw4:eth3']
