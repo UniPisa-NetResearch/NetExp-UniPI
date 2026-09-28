@@ -65,11 +65,12 @@ NFS_OPTS = "rw,sync,hard,intr,timeo=600,retrans=2"
 USER_QUOTA_BYTES =536870912
 
 # LLM parameters
-LLM_MODEL = "deepseek-v4-flash:cloud"
+LLM_MODEL = "deepseek-v4.1-flash:cloud"
 MODEL_PROVIDERS = {
     "gemini-3.1-flash-lite": "gemini",
     "glm-5.1:cloud": "ollama",
     "deepseek-v4-flash:cloud": "ollama",
+    "deepseek-v4.1-flash:cloud": "ollama",
     "qwen3.5:397b-cloud": "ollama",
     "deepseek-v4-pro:cloud": "ollama",
     "gemma4:cloud": "ollama"
@@ -101,3 +102,10 @@ MAX_DIAGNOSTIC_ASSISTANT_MESSAGES = 10
 # constants for LLM prevention mechanisms
 FRONTEND_LLM_PREVENTION_MINUTES = 10
 BACKEND_LLM_PREVENTION_MINUTES = 5
+# execution modes of safety agent:
+# 1: Unified Safety (single agent)
+# 2: Decomposed (agent 5 stateless)
+# 3: Decomposed (agent 5 stateful)
+# 4: Hybrid (python + agent 5 stateless)
+# 5: Hybrid (python + agent 5 stateful)
+SAFETY_EXECUTION_MODE = 2

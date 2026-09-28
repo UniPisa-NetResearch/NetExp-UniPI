@@ -1,10 +1,115 @@
 import json
 import os
 import time
+import uuid
 from ...app import app
-from .agent_server_utils import (redis_client, get_last_agent_message, format_as_string, handle_chat_logic,
-                                 parse_plan, open_ssh_connections, run_parallel_commands, close_ssh_connections, 
-                                 run_agent_execution_plan, generate_diagnostic_assistant_sse, delete_agent_history_keys)
+from .prompts import AGENT_PROMPTS
+from .safety_logic import execute_safety_phase
+from .agent_server_utils import (redis_client, get_last_agent_message, format_as_string, parse_plan, 
+                                open_ssh_connections, run_parallel_commands, close_ssh_connections, 
+                                run_agent_execution_plan, generate_diagnostic_assistant_sse, delete_agent_history_keys, 
+                                consume_llm_stream_with_retries, get_dynamic_device_rules, get_reserved_devices, get_testbed_topology, extract_xml_tag)
+
+
+def handle_chat_logic(username, reservation_id, chat_id, agent_role, message, llm_model, files=None, is_manual_chat=False):
+    # if there is no chat_id, it means the user is starting a new chat. We generate one.
+    if not chat_id:
+        chat_id = f"{int(time.time())}_{uuid.uuid4().hex[:8]}"          # added timestamp to guarantee chronological order of messages
+
+    # route to the multi-agent safety orchestrator
+    if agent_role == "safety":
+        latest_user_msg = {"role": "user", "content": message} if message.strip() else None
+        
+        # run the multi-agent safety loop
+        reply = yield from execute_safety_phase(username, chat_id, latest_user_msg, reservation_id, llm_model, is_manual_chat)
+        
+        return reply, chat_id
+
+    session_key = f"agent_history:{agent_role}:{username}:{reservation_id}:{chat_id}"
+
+    # retrieve history from Redis
+    history_str = redis_client.get(session_key)
+    if history_str:
+        history = json.loads(history_str)
+    else:
+        # create first message that includes the system prompt, dynamic rules for device kinds if present and the topology
+        testbed_topology = get_testbed_topology(reservation_id)
+        system_prompt = AGENT_PROMPTS.get(agent_role)
+
+        dynamic_rules = get_dynamic_device_rules(agent_role, reservation_id)
+        if dynamic_rules:
+            system_prompt += f"\n<device_specific_rules>\n{dynamic_rules}\n</device_specific_rules>\n"
+
+        system_prompt += f"\n\n<topology>\n```yaml\n{testbed_topology}\n```\n</topology>\n"
+
+        # add reserved devices constraint list to the system prompt
+        system_prompt += get_reserved_devices(reservation_id)
+
+        # initialize history if it doesn't exist
+        history = [{"role": "system", "content": system_prompt}]
+
+    # add user message and file info to conversation history
+    user_content = message
+    if files:
+       for f in files:
+            if f.filename != '':
+                try:
+                    # read the content of the file and append it to the user message in a structured way
+                    file_content = f.read().decode('utf-8')
+                    user_content += f"\n\n<attached_file name=\"{f.filename}\">\n{file_content}\n</attached_file>\n"
+                    
+                except UnicodeDecodeError:
+                    # message if the file is not a text file or cannot be decoded
+                    user_content += f"\n\n<attached_file name=\"{f.filename}\">\n[Note: The file was ignored because it is not a readable text file.]\n</attached_file>\n"
+
+    # add user message if present
+    if user_content.strip():
+        history.append({"role": "user", "content": user_content})
+
+    try:
+        
+        # extract system prompt (index 0) from the history and last user message
+        system_msg = history[0] 
+        latest_user_msg = {"role": "user", "content": user_content} if user_content.strip() else None
+
+        # for planning and execution we use a minimal array. Negotiation use all the history.
+        if agent_role in ["planning", "execution"]:
+            llm_history = [system_msg]
+            if latest_user_msg:
+                llm_history.append(latest_user_msg)
+        else:
+            llm_history = history 
+
+        # send request to the LLM
+        valid_output, reply = yield from consume_llm_stream_with_retries(llm_history, agent_role, llm_model, reservation_id)
+        
+        if not valid_output:
+            print(f"[DEBUG SERVER] FINAL FAILURE DETAILS (safety): {reply}")
+            raise Exception("LLM failed to produce valid JSON after retries")
+
+        # add "MODE: DIRECT COMMAND EXECUTION" string to the context for the current configuration loop, if execution mode is DIRECT_COMMANDS
+        if agent_role == "negotiation" and "APPROVED" in str(reply.get("status", "")).upper():
+            if str(reply.get("execution_mode", "")).upper() == "DIRECT_COMMANDS":
+                original_context = reply.get("context_for_planning", "")
+                reply["context_for_planning"] = "MODE: DIRECT COMMAND EXECUTION\n\n" + str(original_context)
+        
+        # add response to history and save it back to Redis
+        history.append({"role": "assistant", "content": json.dumps(reply)})    
+
+        current_time = time.time()
+        for msg in history:
+            # assign timestamp to a message
+            if "timestamp" not in msg:
+                msg["timestamp"] = current_time
+                # add a millisecond to guarantee that messages created in the same time are sequentially ordered
+                current_time += 0.001       
+
+        # save updated history to Redis (expiration set to 5 days as security, when the reservation ends, the key is automatically removed)
+        redis_client.set(session_key, json.dumps(history), ex=432000)
+        
+        return reply, chat_id
+    except Exception as e:
+        raise e
 
 def run_experiment_pipeline_worker(username, reservation_id, chat_id, starting_phase, initial_message, llm_model, execution_mode, files, is_manual_chat, context_payload):
     # background worker that runs the while loop. Evaluates agents sequentially and publishes SSE strings to Redis
@@ -58,12 +163,12 @@ def run_experiment_pipeline_worker(username, reservation_id, chat_id, starting_p
                     # publish the message to show the experiemtn execution
                     redis_client.publish(channel, f"data: {json.dumps({'type': 'thought', 'content': f'\n\n[System: Executing verified plan on testbed...]\n\n'})}\n\n")
 
-                    # retrieve the approved experiment plan from the safety agent
-                    is_parsed_safety_valid, parsed_safety = get_last_agent_message(username, reservation_id, chat_id, "safety")
-
-                    # execute physical SSH commands
-                    plan = parsed_safety.get("executable_plan", "[]") if is_parsed_safety_valid else []
-                    v_plan = parsed_safety.get("verification_plan", []) if is_parsed_safety_valid else []
+                    # retrieve the approved experiment plan and verification commands from the safety agent
+                    plan_str = extract_xml_tag(context_payload, "approved_exec_plan")
+                    v_plan_str = extract_xml_tag(context_payload, "approved_verif_plan")
+                    
+                    plan = [line.strip() for line in plan_str.split('\n') if line.strip()]
+                    v_plan = [line.strip() for line in v_plan_str.split('\n') if line.strip()]
 
                     base_dir = os.path.dirname(os.path.abspath(__file__))
                     inventory_path = os.path.abspath(os.path.join(base_dir, "..", "..", "controller", "inventories", f"res-{reservation_id}-inventory.ini"))
@@ -185,8 +290,12 @@ def run_experiment_pipeline_worker(username, reservation_id, chat_id, starting_p
 
                 elif current_phase == "safety":
                     if "APPROVED" in status:
-                            
-                        result_data.update({"next_phase": "testbed_execution"})
+                        # extract plan and verification commands from safety final response
+                        safe_exec_plan = format_as_string(parsed.get("executable_plan", []))
+                        safe_verif_plan = format_as_string(parsed.get("verification_plan", []))
+                        # send the extracted fields to the testbed execution phase
+                        safe_context = f"<approved_exec_plan>\n{safe_exec_plan}\n</approved_exec_plan>\n\n<approved_verif_plan>\n{safe_verif_plan}\n</approved_verif_plan>"    
+                        result_data.update({"context": safe_context, "next_phase": "testbed_execution"})
                     else:
                         result_data.update({"next_phase": "safety"})
 

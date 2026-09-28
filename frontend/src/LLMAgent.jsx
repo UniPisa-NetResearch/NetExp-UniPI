@@ -302,7 +302,7 @@ const LLMAgent = ({ username, reservation_id, isAdmin, activeReservationExpirati
                   
                 rejectedCount++;
                   
-                  // if we reached N rejected messages, we show the message generated in teh last turn
+                  // if we reached N rejected messages, we show the message generated in the last turn
                   if (rejectedCount === safetyIterations) {
                       rejectedCount = 0; 
                       return true;
@@ -807,7 +807,7 @@ const LLMAgent = ({ username, reservation_id, isAdmin, activeReservationExpirati
             username={username}
             reservation_id={reservation_id}
             activeChatId={chat.activeChatId}
-            phases={LLMAgentPhases}
+            phases={LLMAgentPhases.filter(p => p !== 'testbed_execution')}
             renderMessage={renderMessage}
             agentNames={chat.agentNames}
             safetySubagents={chat.safetySubagents}
