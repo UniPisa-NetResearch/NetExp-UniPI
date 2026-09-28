@@ -1,0 +1,46 @@
+name: physicalTopology
+topology:
+  nodes:
+    h1:
+      kind: linux (ubuntu:18.04)
+      mgmt-ipv4: 192.168.1.161
+    h2:
+      kind: linux (ubuntu:18.04)
+      mgmt-ipv4: 192.168.1.162
+    h3:
+      kind: linux (ubuntu:18.04)
+      mgmt-ipv4: 192.168.1.163
+    h4:
+      kind: linux (ubuntu:18.04)
+      mgmt-ipv4: 192.168.1.164
+    sw5:
+      kind: sonic-edgecore (Accton-AS5835-54X)
+      mgmt-ipv4: 192.168.1.155
+    sw6:
+      kind: sonic-edgecore (Accton-AS5835-54X)
+      mgmt-ipv4: 192.168.1.156
+    sw1:
+      kind: sonic-edgecore (Accton-AS4625-54T)
+      mgmt-ipv4: 192.168.1.151
+    sw2:
+      kind: sonic-edgecore (Accton-AS4625-54T)
+      mgmt-ipv4: 192.168.1.152
+    sw3:
+      kind: sonic-edgecore (Accton-AS4625-54T)
+      mgmt-ipv4: 192.168.1.153
+    sw4:
+      kind: sonic-edgecore (Accton-AS4625-54T)
+      mgmt-ipv4: 192.168.1.154
+  links:
+  - endpoints: ['sw5:Ethernet46', 'sw1:Ethernet50']
+  - endpoints: ['sw6:Ethernet40', 'sw1:Ethernet48']
+  - endpoints: ['sw5:Ethernet44', 'sw2:Ethernet50']
+  - endpoints: ['sw6:Ethernet42', 'sw2:Ethernet48']
+  - endpoints: ['sw5:Ethernet42', 'sw3:Ethernet50']
+  - endpoints: ['sw6:Ethernet44', 'sw3:Ethernet48']
+  - endpoints: ['sw5:Ethernet40', 'sw4:Ethernet50']
+  - endpoints: ['sw6:Ethernet46', 'sw4:Ethernet48']
+  - endpoints: ['h1:enp4s0', 'sw1:Ethernet0']
+  - endpoints: ['h2:enp4s0', 'sw2:Ethernet0']
+  - endpoints: ['h3:enp4s0', 'sw3:Ethernet0']
+  - endpoints: ['h4:enp4s0', 'sw4:Ethernet0']

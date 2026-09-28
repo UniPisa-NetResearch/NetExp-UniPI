@@ -511,7 +511,7 @@ def upload_topology():
             agents_util_dir = os.path.join(base_dir, "..", "agent", "agents_util")
             os.makedirs(agents_util_dir, exist_ok=True)
 
-            plain_yaml_path = os.path.join(agents_util_dir, "topology_plain.yaml")
+            plain_yaml_path = os.path.join(agents_util_dir, "containerlab_topology_plain.yaml")
             
             with open(plain_yaml_path, 'w') as plain_file:
                 yaml.safe_dump(plain_topology, plain_file, default_flow_style=False, sort_keys=False)

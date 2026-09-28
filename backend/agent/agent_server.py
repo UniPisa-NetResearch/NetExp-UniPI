@@ -12,7 +12,7 @@ from ..utils import parse_complete_inventory_hosts, get_remaining_minutes
 from ..config import PHASES_ORDER, AVAILABLE_MODELS, LLM_MODEL, DIAGNOSTIC_ASSISTANT_PHASES_ORDER, SAFETY_ITERATIONS, AGENT_NAMES, FRONTEND_LLM_PREVENTION_MINUTES, BACKEND_LLM_PREVENTION_MINUTES, SAFETY_SUBAGENT_ROLES
 from .agents_util.prompts import ROLLBACK_BASE_CMD, DIAGNOSTIC_ASSISTANT_PROMPTS
 from .agents_util.agent_server_workers import run_experiment_pipeline_worker, run_diagnostic_pipeline_worker
-from .agents_util.agent_server_utils import (redis_client, testbed_topology, open_ssh_connections, close_ssh_connections, 
+from .agents_util.agent_server_utils import (redis_client, get_testbed_topology, open_ssh_connections, close_ssh_connections, 
                                              execute_single_ssh_command, get_reserved_devices, redis_stream_generator, delete_agent_history_keys)
 
 
@@ -328,6 +328,7 @@ def diagnostic_assistant_chat():
         history = json.loads(history_str)
     else:
         # add system prompt to the history
+        testbed_topology=get_testbed_topology(request_data["reservation_id"])
         system_prompt = DIAGNOSTIC_ASSISTANT_PROMPTS["diagnostic_intent"]
         system_prompt += f"\n\n<topology>\n```yaml\n{testbed_topology}\n```\n</topology>\n"
         # add reserved devices constraint list

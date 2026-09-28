@@ -1,7 +1,5 @@
 import json
 import redis
-import uuid
-import time
 import os
 import re
 import yaml
@@ -11,10 +9,9 @@ import threading
 import traceback
 import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from  ...app import app
 from ..llm_client import chat_with_llm, chat_with_llm_stream
-from .prompts import ALLOWED_DIAGNOSTIC_COMMANDS, DEVICE_KIND_RULES, READ_INTENTS, AGENT_PROMPTS, FORBIDDEN_RULES, DIAGNOSTIC_ASSISTANT_PROMPTS
-from ...config import REDIS_HOST, REDIS_PORT, REDIS_DB, CONTAINERLAB_HOST, CONTAINERLAB_HOST_USER, JSON_RETRIES, SAFETY_ITERATIONS, MAX_DIAGNOSTIC_ASSISTANT_MESSAGES, BACKEND_LLM_PREVENTION_MINUTES, PHASES_ORDER, DIAGNOSTIC_ASSISTANT_PHASES_ORDER, SAFETY_SUBAGENT_ROLES
+from .prompts import ALLOWED_DIAGNOSTIC_COMMANDS, DEVICE_KIND_RULES, READ_INTENTS, DIAGNOSTIC_ASSISTANT_PROMPTS
+from ...config import REDIS_HOST, REDIS_PORT, REDIS_DB, CONTAINERLAB_HOST, CONTAINERLAB_HOST_USER, JSON_RETRIES, MAX_DIAGNOSTIC_ASSISTANT_MESSAGES, BACKEND_LLM_PREVENTION_MINUTES, PHASES_ORDER, DIAGNOSTIC_ASSISTANT_PHASES_ORDER
 from ...utils import get_is_virtual_from_db, parse_complete_inventory_hosts, get_remaining_minutes
 
 # redis store for conversation history, keyed by username and reservation_id
@@ -25,13 +22,24 @@ redis_client = redis.Redis(
     decode_responses=True   # automatically decodes bytes in strings
 )
 
-topology_file_path = os.path.join(os.path.dirname(__file__), "topology_plain.yaml")
-try:
-    with open(topology_file_path, "r") as topo_file:
-        testbed_topology = topo_file.read()
-except FileNotFoundError:
-    testbed_topology = "# Topology file not found"
-    print(f"Warning: Could not find {topology_file_path}")
+def get_testbed_topology(reservation_id=None) -> str:
+    base_dir = os.path.dirname(__file__)
+    
+    if reservation_id:
+        is_virtual = get_is_virtual_from_db(reservation_id)
+    else:
+        # if reservation_id not exists use virtual topology
+        is_virtual = True
+        
+    filename = "containerlab_topology_plain.yaml" if is_virtual else "physical_topology_plain.yaml"
+    topology_file_path = os.path.join(base_dir, filename)
+    
+    try:
+        with open(topology_file_path, "r") as topo_file:
+            return topo_file.read()
+    except FileNotFoundError:
+        print(f"Warning: Could not find {topology_file_path}")
+        return "# Topology file not found"
 
 # lock for thread-safe logging and for mutually exclusive LLM printing for parallel agents
 log_lock = threading.Lock()
@@ -87,8 +95,9 @@ def is_command_whitelisted(command: str) -> bool:
             return True
     return False
 
-def get_dynamic_device_rules(agent_role: str) -> str:
+def get_dynamic_device_rules(agent_role: str, reservation_id: str = None) -> str:
     
+    testbed_topology = get_testbed_topology(reservation_id)
     # extracts device kinds from the topology and retrieve rules for the current agent
     kinds_in_topo = set()
     try:
@@ -99,7 +108,11 @@ def get_dynamic_device_rules(agent_role: str) -> str:
         # extract unique nodes
         for node_info in nodes.values():
             if isinstance(node_info, dict) and "kind" in node_info:
-                kinds_in_topo.add(node_info["kind"])
+                # extract only the base kind before any spaces or parentheses
+                raw_kind = str(node_info["kind"])
+                base_kind = raw_kind.split()[0].strip()
+                kinds_in_topo.add(base_kind)
+
     except yaml.YAMLError as e:
         print(f"Error parsing yaml topology: {e}")
         return ""
@@ -315,6 +328,7 @@ def run_parallel_commands(inventory_path: str, ops_list: list, reservation_id: s
     if not ops_list:
         return "No commands to run"
 
+    testbed_topology = get_testbed_topology(reservation_id)
     topo_dict = yaml.safe_load(testbed_topology) or {}
     nodes = topo_dict.get("topology", {}).get("nodes", {})
 
@@ -369,6 +383,110 @@ def run_parallel_commands(inventory_path: str, ops_list: list, reservation_id: s
         if owns_connections:
             close_ssh_connections(connections)
 
+
+def run_deterministic_safety_checks(exec_plan, verif_plan, topology_yaml, reserved_devices_xml):
+    # executes deterministic safety checks on the proposed execution and verification plans
+   
+    issues = []
+    
+    # parse the YAML topology to map device names to their specific kinds (e.g., "sonic-vs", "linux")
+    try:
+        topo_dict = yaml.safe_load(topology_yaml) or {}
+        nodes = topo_dict.get("topology", {}).get("nodes", {})
+        node_kinds = {}
+        for node, data in nodes.items():
+            raw_kind = str(data.get("kind", "")).lower()
+            base_kind = re.split(r'[\s\(]', raw_kind)[0].strip()
+            node_kinds[str(node)] = base_kind
+    except Exception as e:
+        print(f"[ERROR] Failed to parse topology for deterministic checks: {e}")
+        node_kinds = {}
+
+    # extract the raw list of reserved devices from the formatted XML/YAML string
+    try:
+        # strip XML tags and markdown blocks to parse the raw YAML
+        clean_yaml = re.sub(r'<[^>]+>|```yaml|```', '', reserved_devices_xml).strip()
+        reserved_devs = yaml.safe_load(clean_yaml) or {}
+        if isinstance(reserved_devs, dict):
+            reserved_list = list(reserved_devs.keys())
+        elif isinstance(reserved_devs, list):
+            reserved_list = reserved_devs
+        else:
+            reserved_list = []
+    except Exception as e:
+        print(f"[ERROR] Failed to parse reserved devices: {e}")
+        reserved_list = []
+
+    # combine both plans, keeping track of whether a command is a verification command
+    all_cmds = [(cmd, False) for cmd in exec_plan] + [(cmd, True) for cmd in verif_plan]
+    
+    has_routing_config = False
+    has_sleep = False
+
+    for item_str, is_verif in all_cmds:
+        if ":" not in item_str:
+            continue
+        
+        device, cmd = item_str.split(":", 1)
+        device = device.strip()
+        cmd = cmd.strip()
+        kind = node_kinds.get(device, "")
+
+        # RESERVATION BOUNDARY & TOPOLOGY MAPPING
+        if device not in node_kinds:
+            issues.append(f"[{device}]: Hallucinated device. This device does not exist in the topology.")
+            continue
+        if reserved_list and device not in reserved_list:
+            issues.append(f"[{device}]: Target device is NOT in the reserved_devices list. Access is forbidden.")
+            
+        # BOUNDED PROCESSES CHECK (Time Limits & Counts)
+        # check ping without -c flag
+        if re.search(r'\bping\b', cmd) and not re.search(r'-c\s+\d+', cmd):
+            issues.append(f"[{device}]: Command '{cmd}' runs indefinitely. Add '-c' flag to limit ping count.")
+        #cCheck iperf without time (-t) or bytes (-n) limits
+        if re.search(r'\biperf3?\b', cmd) and not re.search(r'-[tn]\s+\d+', cmd):
+            issues.append(f"[{device}]: Command '{cmd}' runs indefinitely. Add '-t' or '-n' flag to iperf.")
+        # check tcpdump without timeout wrapper or native limit flags (-G, -W, -c)
+        if re.search(r'\btcpdump\b', cmd) and not (cmd.startswith('timeout') or re.search(r'-[GWc]', cmd)):
+            issues.append(f"[{device}]: Command '{cmd}' runs indefinitely. Wrap the command with 'timeout X'.")
+            
+        # track routing protocols and sleep commands for Convergence Check
+        if re.search(r'\brouter\s+(ospf|bgp)\b', cmd):
+            has_routing_config = True
+        if re.search(r'\bsleep\s+\d+', cmd):
+            has_sleep = True
+
+        # FORBIDDEN_RULES CHECK
+        if re.search(r'\beth0\b', cmd):
+            issues.append(f"[{device}]: Modifying the management interface (eth0) is strictly forbidden. Command: '{cmd}'.")
+        if "erase startup-config" in cmd or "write erase" in cmd:
+            issues.append(f"[{device}]: Factory reset commands are forbidden.")
+        if re.search(r'\b(passwd|useradd|usermod|deluser)\b', cmd):
+            issues.append(f"[{device}]: Modifying system users or passwords is forbidden.")
+        if "docker exec" in cmd:
+            issues.append(f"[{device}]: Host-level docker management commands are forbidden.")
+
+        # DEVICE_KIND_RULES SPECIFIC (for sonic-vs)
+        if kind == "sonic-vs":
+            # forbid sonic-cli usage
+            if re.search(r'\bsonic-cli\b', cmd):
+                issues.append(f"[{device}]: The 'sonic-cli' command is forbidden in this container. Use native Linux or vtysh.")
+            # forbid alias names like Ethernet0, Ethernet4
+            if re.search(r'\bEthernet\d+\b', cmd, re.IGNORECASE):
+                issues.append(f"[{device}]: Invalid interface name in '{cmd}'. Use native Linux names (e.g., eth1) exactly as in the topology.")
+            # configuration split: forbid IP or Link state changes inside vtysh
+            if "vtysh" in cmd and re.search(r"-c\s+['\"].*(ip\s+address|shutdown|no\s+shutdown)", cmd, re.IGNORECASE):
+                issues.append(f"[{device}]: Critical violation. IP assignment and link state toggling MUST be done using native Linux bash commands, NOT inside vtysh.")
+            # verification: prevent empty outputs by forcing address family in BGP show commands
+            if is_verif and "vtysh" in cmd and re.search(r"show\s+(ip\s+)?bgp\b", cmd) and not re.search(r"ipv[46]", cmd):
+                issues.append(f"[{device}]: Generic 'show bgp' is not allowed in verification. Use specific address family (e.g., 'show bgp ipv4 unicast').")
+
+    # TIMING & CONVERGENCE CHECK (Global)
+    if has_routing_config and not has_sleep:
+        issues.append("[Global]: Routing protocols (BGP/OSPF) are being configured, but a 'sleep' command is missing before verification. Please inject a 'device: sleep X' command.")
+
+    return issues
+
 # validate response from LLM, check if it is a valid json and contains required fields of the current agent role
 def validate_json_format(reply_text, agent_role):
     # remove characters added by some models
@@ -401,8 +519,8 @@ def validate_json_format(reply_text, agent_role):
     try:
         data = json.loads(reply_text)
         if agent_role == "negotiation": 
-            if not all(k in data for k in ["summary", "topology_diagram", "clarifying_questions", "status", "context_for_planning"]):
-                return False, "Missing keys. Required: summary, topology_diagram, clarifying_questions, status, context_for_planning"
+            if not all(k in data for k in ["summary", "topology_diagram", "clarifying_questions", "status", "context_for_planning", "execution_mode"]):
+                return False, "Missing keys. Required: summary, topology_diagram, clarifying_questions, status, context_for_planning, execution_mode"
             
             if not isinstance(data.get("exit_conditions"), list):
                 return False, "exit_conditions must be a JSON array"
@@ -410,44 +528,26 @@ def validate_json_format(reply_text, agent_role):
         if agent_role == "planning":
             if not all(k in data for k in ["execution_plan", "verification", "status"]):
                 return False, "Missing keys. Required: execution_plan, verification, status"
-            
-            if not isinstance(data.get("execution_plan"), list):
-                return False, "execution_plan must be a JSON array"
-            
-            if not isinstance(data.get("verification"), list):
-                return False, "verification must be a JSON array"
 
-        """
+            for list_key in ["execution_plan", "verification"]:
+                if not isinstance(data.get(list_key), list):
+                    return False, f"{list_key} must be a JSON array"
+        
         if agent_role == "safety":
             if not all(k in data for k in ["status", "issues", "topology_mapping_check", "executable_plan", "verification_plan", "clarifying_questions", "read_operations"]):
                 return False, "Missing keys. Required: status, issues, topology_mapping_check, executable_plan, clarifying_questions, read_operations"
             
-            if not isinstance(data.get("read_operations"), list):
-                return False, "read_operations must be a JSON array"
-            
-            if not isinstance(data.get("issues"), list):
-                return False, "issues must be a JSON array"
-            
-            if not isinstance(data.get("topology_mapping_check"), list):
-                return False, "topology_mapping_check must be a JSON array"
-            
-            if not isinstance(data.get("executable_plan"), list):
-                return False, "executable_plan must be a JSON array"
-
-            if not isinstance(data.get("verification_plan"), list):
-                return False, "verification_plan must be a JSON array"
-            
-            if not isinstance(data.get("clarifying_questions"), list):
-                return False, "clarifying_questions must be a JSON array"
-        """
-
+            for list_key in ["read_operations", "issues", "topology_mapping_check", "executable_plan", "verification_plan", "clarifying_questions"]:
+                if not isinstance(data.get(list_key), list):
+                    return False, f"{list_key} must be a JSON array"
+        
         if agent_role == "safety_agent_1":
             if not all(k in data for k in ["status", "read_operations", "clarifying_questions", "additional_context"]):
                 return False, "Missing keys. Required: status, read_operations, clarifying_questions, additional_context"
-            if not isinstance(data.get("read_operations"), list):
-                return False, "read_operations must be a JSON array"
-            if not isinstance(data.get("clarifying_questions"), list):
-                return False, "clarifying_questions must be a JSON array"
+            
+            for list_key in ["read_operations", "clarifying_questions"]:
+                if not isinstance(data.get(list_key), list):
+                    return False, f"{list_key} must be a JSON array"
                 
         if agent_role in ["safety_agent_2", "safety_agent_3", "safety_agent_4"]:
             if not all(k in data for k in ["status", "issues"]):
@@ -458,12 +558,10 @@ def validate_json_format(reply_text, agent_role):
         if agent_role == "safety_agent_5":
             if not all(k in data for k in ["status", "executable_plan", "verification_plan", "clarifying_questions"]):
                 return False, "Missing keys. Required: status, executable_plan, verification_plan, clarifying_questions"
-            if not isinstance(data.get("executable_plan"), list):
-                return False, "executable_plan must be a JSON array"
-            if not isinstance(data.get("verification_plan"), list):
-                return False, "verification_plan must be a JSON array"
-            if not isinstance(data.get("clarifying_questions"), list):
-                return False, "clarifying_questions must be a JSON array"
+            
+            for list_key in ["executable_plan", "verification_plan", "clarifying_questions"]:
+                if not isinstance(data.get(list_key), list):
+                    return False, f"{list_key} must be a JSON array"
             
         if agent_role == "execution":
             if not all(k in data for k in ["status", "report"]):
@@ -552,205 +650,6 @@ def get_validated_llm_reply(history, agent_role, llm_model, reservation_id):
 
     return False, None, {"error_type": "llm_validation_failure", "reason": last_failure_reason}
 
-"""
-def handle_safety_loop(history, system_msg, latest_user_msg, reservation_id, agent_role, llm_model, is_manual_chat=False):
-    reasoning_steps = []
-    reply = {}
-
-    if is_manual_chat:
-        # retrieve first message in history for the context when every iteration is rejected and user send a manual message
-        real_context = ""
-        for msg in history:
-            content = msg.get("content", "")
-            if msg.get("role") == "user" and "<experiment_context>" in content and not re.search(r'<device_report>\s*null\s*</device_report>', content, flags=re.IGNORECASE):
-                real_context = content
-                break
-                    
-        # remove original <execution_plan> and <verification_commands> of the first context
-        if real_context:
-            real_context = re.sub(r'<execution_plan>.*?</execution_plan>', '', real_context, flags=re.DOTALL)
-            real_context = re.sub(r'<verification_commands>.*?</verification_commands>', '', real_context, flags=re.DOTALL)
-            # remove double spaces that remains after removal
-            real_context = re.sub(r'\n{3,}', '\n\n', real_context).strip()
-        
-        # extract the last failed plan proposed by the agent and its issues
-        last_failed_plan = ""
-        last_issues = ""
-        for msg in reversed(history):
-            if msg.get("role") == "assistant":
-                try:
-                    parsed = json.loads(msg.get("content", ""))
-                    if "REJECTED" in str(parsed.get("status", "")).upper():
-                        plan_arr = parsed.get("executable_plan", [])
-                        last_failed_plan = "\n".join(plan_arr) if isinstance(plan_arr, list) else str(plan_arr)
-                        issues_arr = parsed.get("issues", [])
-                        last_issues = "\n".join(issues_arr) if isinstance(issues_arr, list) else str(issues_arr)
-                        break
-                except:
-                    pass
-        
-        # creation of the prompt with the user message and the experiment context
-        manual_text = latest_user_msg["content"] if latest_user_msg else ""
-        
-        combined_content = (f"MANUAL INSTRUCTION FROM USER:\n{manual_text}\n\n" "--- REFERENCE DATA ---\n" f"{real_context}\n\n")
-
-        # create a combined prompt which includes the last failed plan and the issues of the failed plan
-        if last_failed_plan:
-            combined_content += ("--- IMPORTANT CONTEXT ---\n"
-                "The auto-correction loop is finished. Below is the <last_failed_execution_plan>.\n"
-                "Note that this plan ALREADY INCLUDES both the execution operations and the verification commands.\n"
-                f"<last_failed_execution_plan>\n{last_failed_plan}\n</last_failed_execution_plan>\n"
-                f"<last_identified_issues>\n{last_issues}\n</last_identified_issues>\n"
-            )
-            
-        combined_content += ("\nYou MUST treat <last_failed_execution_plan> as the target plan to be evaluated. "
-            "Please apply the manual instruction to fix this failed plan, ensure there are no redundant commands, "
-            "and generate a completely NEW, corrected JSON response.")
-        
-        # LLM will receive the system prompt and the combined prompt
-        current_turn_safety_history = [system_msg, {"role": "user", "content": combined_content}]
-    
-    else:
-        # if we arrive here, is_manual is false but we are outside the loop due to AWAIT_CLARIFICATIONS message and the user has answered to the questions or it is the first time in this phase we enter in safety phase
-        # find last user message with <device_report>
-        last_context_idx = -1
-        for i in range(len(history) - 1, -1, -1):
-            if history[i].get("role") == "user" and "<experiment_context>" in history[i].get("content", ""):
-                last_context_idx = i
-                break
-        
-        if last_context_idx != -1:
-            raw_turn_history = history[last_context_idx:]
-            clean_turn_history = []
-            skip_next_user = False
-
-            # management of consecutive agent messages with status respectively REJECTED - REJECTED - AWAITING_CLARIFICATIONS (REJECTED messages must be removed, the agent will receive only AWAITING_CLARIFICATIONS message and user response)
-            for msg in raw_turn_history:
-                # if previous message was REJECTED, drop the current automatic user message
-                if skip_next_user and msg.get("role") == "user":
-                    skip_next_user = False
-                    continue
-                
-                # reset the safety flag if the message was not user
-                skip_next_user = False
-
-                # if the assistant message is REJECTED, we drop it and set the flag for indicating to drop the next user message (the automatic message sent after a REJECTED message)
-                if msg.get("role") == "assistant":
-                    try:
-                        parsed = json.loads(msg.get("content", ""))
-                        if "REJECTED" in str(parsed.get("status", "")).upper():
-                            skip_next_user = True
-                            continue 
-                    except Exception:
-                        pass
-
-                # all other messages are preserved
-                clean_turn_history.append(msg)
-
-            # merge system prompt (history[0]) with filtered current turn messages
-            current_turn_safety_history = [system_msg] + clean_turn_history
-
-    last_msg_content = current_turn_safety_history[-1]["content"] if current_turn_safety_history else ""    
-
-    # if the device report contains null, we start the readings on devices
-    if re.search(r'<device_report>\s*null\s*</device_report>', last_msg_content, flags=re.IGNORECASE):
-        payload_length = sum(len(str(m.get("content", ""))) for m in current_turn_safety_history)
-        print(f"[DEBUG SAFETY] messages={len(current_turn_safety_history)} | payload_chars~={payload_length}")
-
-        # send first request to the LLM, with <device_report> that contains null
-        is_valid, reply = yield from consume_llm_stream_with_retries(current_turn_safety_history, agent_role, llm_model, reservation_id)
-        reply_text = json.dumps(reply) if is_valid else str(reply)
-
-        status = str(reply.get("status", "")).strip().upper() if is_valid and reply else ""
-
-        # the repsonse contains AWAITING_DEVICE_READ, in this case start readings
-        if "AWAITING_DEVICE_READ" in status:
-            history.append({"role": "assistant", "content": reply_text})
-            current_turn_safety_history.append({"role": "assistant", "content": reply_text})
-
-            # update real time streaming message to inform about the reading phase
-            read_ops = reply.get("read_operations", [])
-            yield f"data: {json.dumps({'type': 'thought', 'content': f'\n\n[System: Reading data from testbed devices...]\n\n'})}\n\n"
-
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            inventory_path = os.path.abspath(os.path.join(base_dir, "..", "..", "controller", "inventories", f"res-{reservation_id}-inventory.ini"))
-                
-            device_report = run_parallel_commands(inventory_path, read_ops, reservation_id, is_intent=True)
-
-            print(f"[DEBUG SAFETY] read_operations_count={len(read_ops)}")
-            print(f"[DEBUG SAFETY] device_report_chars={len(device_report)}")
-
-            # create new user message with read real data, replace null with real data
-            new_content = re.sub(r'<device_report>\s*null\s*</device_report>', f"<device_report>\n{device_report}\n</device_report>", latest_user_msg["content"], flags=re.IGNORECASE)
-            new_user_msg = {"role": "user", "content": new_content}
-
-            # add new user message to the global history
-            history.append(new_user_msg)
-                
-            # update local history, send system message with real data and the latest user message
-            current_turn_safety_history = [system_msg, new_user_msg]
-           
-    # autocorrection loop for Safety Check (max N iterations)
-    for iteration in range(SAFETY_ITERATIONS):
-        minutes_left = get_remaining_minutes(reservation_id)
-        if minutes_left < BACKEND_LLM_PREVENTION_MINUTES:
-            print("Operation stopped in safety loop")
-            raise Exception(f"Operation stopped: during the safety loop, the remaining time dropped below {BACKEND_LLM_PREVENTION_MINUTES} minutes")
-
-        len_before = len(current_turn_safety_history)
-        valid_output, reply = yield from consume_llm_stream_with_retries(current_turn_safety_history, agent_role, llm_model, reservation_id)
-        reply_text = json.dumps(reply) if valid_output else str(reply)
-
-        # synchronize failed validation tries in the main history
-        for msg in current_turn_safety_history[len_before:]:
-            if msg not in history:
-                history.append(msg)
-
-        if not valid_output:
-            print(f"[DEBUG SERVER] FINAL FAILURE DETAILS (safety): {reply}")
-            raise Exception("LLM failed to produce valid JSON after retries")
-
-        history.append({"role": "assistant", "content": reply_text})
-
-        # add LLM response in local memory of the loop
-        current_turn_safety_history.append({"role": "assistant", "content": reply_text})
-
-        # check if there are questions or if the plan is aproved o rejected
-        status = str(reply.get("status", "")).upper()
-        questions = reply.get("clarifying_questions", [])
-        issues_found = reply.get("issues", [])
-        issues_text = "\n".join([f"- {issue}" for issue in issues_found])
-
-        is_approved = "APPROVED" in status
-        is_awaiting_info = "AWAITING_CLARIFICATIONS" in status
-
-        has_questions = isinstance(questions, list) and len(questions) > 0
-    
-        # exit the loop if approved or has questions for the user or iterations are completed
-        if is_approved or is_awaiting_info or has_questions or iteration == SAFETY_ITERATIONS - 1:
-            return reply
-
-        # if the plan is not approved and the iterations are not ended, send an update of the current iteration to show in the frontend
-        yield f"data: {json.dumps({'type': 'thought', 'content': f'\n\n[System: Auto-correcting plan, iteration {iteration+1}...]\n\n'})}\n\n"
-        
-        # if rejected, we instruct the LLM for the next iteration
-        correction_prompt = (f"In your previous response, you identified the following issues:\n{issues_text}\n\n"
-            "Please review the NEW `executable_plan` you just generated."
-            "If your newly generated plan successfully fixes all the issues, is safe, matches the topology, and has NO redundant commands, "
-            "you MUST now output 'status': 'APPROVED' and provide the final clean plan. "
-            "If your newly generated plan still contains errors, output 'status': 'REJECTED', list the remaining issues, and fix the plan again."
-            "You MUST respond EXCLUSIVELY with a valid JSON object. Do not output empty text."
-        )
-
-        reasoning_steps.append({"iteration": iteration + 1, "role": "user", "content": correction_prompt})
-        
-        # insert correction in the two arrays
-        history.append({"role": "user", "content": correction_prompt})
-        current_turn_safety_history.append({"role": "user", "content": correction_prompt})    
-
-    return reply
-"""
-
 def extract_xml_tag(text, tag):
     # helper to extract content from XML-like tags in the user message
     match = re.search(f'<{tag}>(.*?)</{tag}>', text, flags=re.DOTALL | re.IGNORECASE)
@@ -776,395 +675,6 @@ def drain_generator(gen):
     except StopIteration as e:
         return e.value
 
-    
-def handle_safety_loop(username, chat_id, latest_user_msg, reservation_id, llm_model, is_manual_chat=False):
-    # orchestrates the 5 specialized safety sub-agents
-    user_content = latest_user_msg["content"] if latest_user_msg else ""
-    
-    # state of the current turn of safety persisted in redis
-    turn_state_key = f"agent_history:safety_turn_state:{username}:{reservation_id}:{chat_id}"
-    turn_state_str = redis_client.get(turn_state_key)
-
-    # if there is a saved state, we use the saved fields
-    if turn_state_str:
-        turn_state = json.loads(turn_state_str)
-        exp_context = turn_state["exp_context"]
-        exit_conds = turn_state["exit_conds"]
-        current_exec_plan = turn_state["exec_plan"]
-        current_verif_cmds = turn_state["verif_cmds"]
-        device_report = turn_state["device_report"]
-    else:
-        # if there is not saved state, parse the incoming context from the orchestrator string, first time we enter in safety phase from planning
-        exp_context = extract_xml_tag(user_content, "experiment_context")
-        exit_conds = extract_xml_tag(user_content, "exit_conditions")
-        current_exec_plan = extract_xml_tag(user_content, "execution_plan")
-        current_verif_cmds = extract_xml_tag(user_content, "verification_commands")
-        device_report = extract_xml_tag(user_content, "device_report")
-    
-    def save_turn_state():
-        # called every time any of the turn's fields legitimately changes to save the state in redis
-        redis_client.set(turn_state_key, json.dumps({"exp_context": exp_context, "exit_conds": exit_conds, "exec_plan": current_exec_plan, "verif_cmds": current_verif_cmds, "device_report": device_report}), ex=432000)
-
-    save_turn_state()
-
-    # base context shared among agents
-    base_prompt = (
-        f"<experiment_context>\n{exp_context}\n</experiment_context>\n\n"
-        f"<exit_conditions>\n{exit_conds}\n</exit_conditions>\n\n"
-    )
-    
-    # Redis keys for agents that interact directly with user queries
-    key_agent1 = f"agent_history:safety_agent_1:{username}:{reservation_id}:{chat_id}"
-    key_agent5 = f"agent_history:safety_agent_5:{username}:{reservation_id}:{chat_id}"
-
-    # manual instruction flow
-    if is_manual_chat:
-        manual_instruction = f"The user has provided this priority correction instruction: {user_content}. Modify the plan by applying this request."
-        
-        sys_prompt_5 = AGENT_PROMPTS["safety_agent_5"] + f"\n<topology>\n{testbed_topology}\n</topology>\n" + get_dynamic_device_rules("safety")
-        
-        agent5_prompt = base_prompt + (
-            f"<execution_plan>\n{current_exec_plan}\n</execution_plan>\n\n"
-            f"<verification_commands>\n{current_verif_cmds}\n</verification_commands>\n\n"
-            f"<device_report>\n{device_report}\n</device_report>\n\n"
-            f"<issues>\n{manual_instruction}\n</issues>"
-        )
-        
-        # stateless call for the current correction attempt, the request does not include previous iterations data
-        call_history = [{"role": "system", "content": sys_prompt_5}, {"role": "user", "content": agent5_prompt}]
-        
-        yield f"data: {json.dumps({'type': 'thought', 'content': f'\n\n[System: Agent 5 applying manual instruction...]\n\n'})}\n\n"
-        
-        valid_output, reply5 = yield from consume_llm_stream_with_retries(call_history, "safety_agent_5", llm_model, reservation_id)
-        if not valid_output: raise Exception("Agent 5 failed.")
-        
-        # update plans with agent 5 output before entering the validation loop
-        current_exec_plan = "\n".join(reply5.get("executable_plan", []))
-        current_verif_cmds = "\n".join(reply5.get("verification_plan", []))
-        save_turn_state()
-        
-        # save agent 5 history
-        prior_hist5_str = redis_client.get(key_agent5)
-        # get previous history of agent 5 if exists
-        prior_hist5 = json.loads(prior_hist5_str) if prior_hist5_str else []
-        # append to the existing history the current cal messages and the response from agent file, then save in redis
-        debug_hist5 = prior_hist5 + call_history + [{"role": "assistant", "content": json.dumps(reply5)}]
-        redis_client.set(key_agent5, json.dumps(debug_hist5), ex=432000)
-
-    else:
-        # agent 1: context and state reader
-        hist1_str = redis_client.get(key_agent1)
-        hist1 = json.loads(hist1_str) if hist1_str else []
-
-        # look only at the very last message to see if we are answering a clarification
-        is_answering_agent1 = False
-        if hist1 and hist1[-1].get("role") == "assistant":
-            try:
-                last_parsed = json.loads(hist1[-1]["content"])
-                if "AWAITING_CLARIFICATIONS" in str(last_parsed.get("status", "")).upper():
-                    is_answering_agent1 = True
-            except Exception: pass
-
-        if is_answering_agent1:
-            # continue agent 1's short local exchange with the user's answer, add the latest user message to the history
-            hist1.append(latest_user_msg)
-        else:
-            # create a new conversation for agent 1
-            sys_prompt_1 = AGENT_PROMPTS["safety_agent_1"] + f"\n<topology>\n{testbed_topology}\n</topology>\n"
-            agent1_prompt = base_prompt + f"<execution_plan>\n{current_exec_plan}\n</execution_plan>\n\n<verification_commands>\n{current_verif_cmds}\n</verification_commands>"
-            hist1 = [{"role": "system", "content": sys_prompt_1}, {"role": "user", "content": agent1_prompt}]
-
-        valid_output, reply1 = yield from consume_llm_stream_with_retries(hist1, "safety_agent_1", llm_model, reservation_id)
-        if not valid_output: raise Exception("Agent 1 failed.")
-        
-        # add agent 1 response to the history
-        hist1.append({"role": "assistant", "content": json.dumps(reply1)})
-        redis_client.set(key_agent1, json.dumps(hist1), ex=432000)
-
-        if "AWAITING_CLARIFICATIONS" in str(reply1.get("status", "")).upper():
-            return reply1 # pause and ask user if the agent ask for clarifications
-            
-        # update experiment context if agent 1 derived new insights from user's answers
-        add_ctx = reply1.get("additional_context", "").strip()
-        if add_ctx:
-            exp_context += f"\n\n[Additional Context]: {add_ctx}"
-            base_prompt = f"<experiment_context>\n{exp_context}\n</experiment_context>\n\n<exit_conditions>\n{exit_conds}\n</exit_conditions>\n\n"
-            save_turn_state()
-
-        # if coming from planning, report is null and we execute agent 1's read operations
-        if device_report.strip().lower() == "null":
-            read_ops = reply1.get("read_operations", [])
-            yield f"data: {json.dumps({'type': 'thought', 'content': f'\n\n[System: Reading data from testbed devices...]\n\n'})}\n\n"
-            
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            inventory_path = os.path.abspath(os.path.join(base_dir, "..", "..", "controller", "inventories", f"res-{reservation_id}-inventory.ini"))
-            
-            # run commands on devices and replace the local "null" with actual live data for agents 2-5
-            device_report = run_parallel_commands(inventory_path, read_ops, reservation_id, is_intent=True)
-            save_turn_state()
-
-    # validation loop (AGENTS 2, 3, 4 -> 5)
-    all_issues = []
-    for iteration in range(SAFETY_ITERATIONS):
-        minutes_left = get_remaining_minutes(reservation_id)
-        if minutes_left < BACKEND_LLM_PREVENTION_MINUTES:
-            raise Exception(f"Operation stopped: Less than {BACKEND_LLM_PREVENTION_MINUTES} minutes remaining.")
-
-        yield f"data: {json.dumps({'type': 'thought', 'content': f'\n\n[System: Agents 2, 3 and 4 are parallelly evaluating the plan (Iteration {iteration+1})...]\n\n'})}\n\n"
-
-        # format forbidden rules
-        rules_formatted = "\n".join([f"- {rule}" for rule in FORBIDDEN_RULES])
-
-        # create system prompt for the three agents
-        sys2 = AGENT_PROMPTS["safety_agent_2"] + f"\n<topology>\n{testbed_topology}\n</topology>\n" + get_reserved_devices(reservation_id)
-        sys3 = AGENT_PROMPTS["safety_agent_3"] + f"\n<topology>\n{testbed_topology}\n</topology>\n" + get_dynamic_device_rules("safety")
-        sys4 = AGENT_PROMPTS["safety_agent_4"] + f"\n<topology>\n{testbed_topology}\n</topology>\n" + f"\n<forbidden_rules>\n{rules_formatted}\n</forbidden_rules>"
-
-        common_plan_prompt = base_prompt + f"<execution_plan>\n{current_exec_plan}\n</execution_plan>\n\n<verification_commands>\n{current_verif_cmds}\n</verification_commands>\n\n"
-
-        # add reserved devices to the prompt of agent 2 and device report to the prompt of agent 3
-        user_prompt2 = common_plan_prompt + f"<reserved_devices>\n{get_reserved_devices(reservation_id)}\n</reserved_devices>"
-        user_prompt3 = common_plan_prompt + f"<device_report>\n{device_report}\n</device_report>"
-        user_prompt4 = common_plan_prompt + f"<device_report>\n{device_report}\n</device_report>"
-
-        def run_auditor(role, sys_prompt, user_content_str):
-            # runs an auditor sequentially in its thread to avoid SSE/log mixing 
-            # the actual call sent to the LLM is a 2-message array (system + user): agents 2/3/4 must never see previous iterations' attempts, to stay stateless and small 
-            # the redis debug log keeps growing across iterations for admin visibility, and is written under a lock so parallel agents never interleave their reasoning in the shared log output
-            with app.app_context():
-                call_history = [{"role": "system", "content": sys_prompt}, {"role": "user", "content": user_content_str}]
-                is_valid, parsed = drain_generator(consume_llm_stream_with_retries(call_history, role, llm_model, reservation_id))
-
-                with log_lock:
-                    print(f"\n[DEBUG SAFETY] Starting {role} reasoning...")
-                    
-                    # fetch history for admin debugger continuity
-                    redis_key = f"agent_history:{role}:{username}:{reservation_id}:{chat_id}"
-                    # get history of agents 2, 3, 4, if it does not exist, create a new one
-                    hist_str = redis_client.get(redis_key)
-                    debug_hist = json.loads(hist_str) if hist_str else []
-                    # append current iteration prompt
-                    debug_hist += call_history
-                    # append current iteration agent response and save in redis
-                    debug_hist.append({"role": "assistant", "content": json.dumps(parsed) if is_valid else str(parsed)})
-                    redis_client.set(redis_key, json.dumps(debug_hist), ex=432000)
-                
-                # return found issues if present
-                return parsed.get("issues", []) if is_valid and parsed else []
-
-        # execute Agents 2, 3, 4 in parallel
-        iteration_issues = []
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            futures = {
-                executor.submit(run_auditor, "safety_agent_2", sys2, user_prompt2): "safety_agent_2",
-                executor.submit(run_auditor, "safety_agent_3", sys3, user_prompt3): "safety_agent_3",
-                executor.submit(run_auditor, "safety_agent_4", sys4, user_prompt4): "safety_agent_4",
-            }
-            
-            for future in as_completed(futures):
-                issues = future.result()
-                if isinstance(issues, list):
-                    iteration_issues.extend(issues)
-
-        # get all unified issues from agent 2, 3, 4
-        all_issues = iteration_issues
-
-        # if no issues found by any auditor, the plan is perfectly safe
-        if len(all_issues) == 0:
-            # remove redis key for the current turn state
-            redis_client.delete(turn_state_key)
-            # return APPROVED status
-            return {
-                "status": "APPROVED",
-                "issues": [],
-                "clarifying_questions": [],
-                "executable_plan": [line.strip() for line in current_exec_plan.split('\n') if line.strip()],
-                "verification_plan": [line.strip() for line in current_verif_cmds.split('\n') if line.strip()]
-            }
-
-        # if there are issues proceed with agent 5: plan modificator
-        yield f"data: {json.dumps({'type': 'thought', 'content': f'\n\n[System: Issues found. Agent 5 is fixing the plan...]\n\n'})}\n\n"
-
-        issues_formatted = "\n".join([f"- {issue}" for issue in all_issues])
-        # get history of agent 5
-        prior_hist5_str = redis_client.get(key_agent5)
-        prior_hist5 = json.loads(prior_hist5_str) if prior_hist5_str else []
-
-        # look only at the very last message for clarifications
-        is_answering_agent5 = False
-        if prior_hist5 and prior_hist5[-1].get("role") == "assistant":
-            try:
-                last_parsed = json.loads(prior_hist5[-1]["content"])
-                if "AWAITING_CLARIFICATIONS" in str(last_parsed.get("status", "")).upper():
-                    is_answering_agent5 = True
-            except Exception: pass
-
-        # create system prompt and user prompt for agent 5
-        sys_prompt_5 = AGENT_PROMPTS["safety_agent_5"] + f"\n<topology>\n{testbed_topology}\n</topology>\n" + get_dynamic_device_rules("safety")
-        agent5_prompt = common_plan_prompt + f"<device_report>\n{device_report}\n</device_report>\n\n<issues>\n{issues_formatted}\n</issues>"
-        
-        if is_answering_agent5:
-            # continue agent 5 local exchange with user answer
-            call_history = prior_hist5 + [latest_user_msg]
-        else:
-            # new correction attempt without previous iteration messages, every correction attemot is stateless
-            call_history = [{"role": "system", "content": sys_prompt_5}, {"role": "user", "content": agent5_prompt}]
-
-        valid_output, reply5 = yield from consume_llm_stream_with_retries(call_history, "safety_agent_5", llm_model, reservation_id)
-        if not valid_output: raise Exception("Agent 5 failed.")
-        
-        # update the debug log with the saved history + the user response if is_answering_agent5 is true, otherwise add current call history to the previous history
-        debug_hist5 = call_history if is_answering_agent5 else (prior_hist5 + call_history)
-
-        # save the agent 5 response in redis
-        debug_hist5.append({"role": "assistant", "content": json.dumps(reply5)})
-        redis_client.set(key_agent5, json.dumps(debug_hist5), ex=432000)
-
-        status5 = str(reply5.get("status", "")).upper()
-        
-        if "AWAITING_CLARIFICATIONS" in status5:
-            return reply5 # pause and ask user
-            
-        # update current plans with agent 5's fixes and loop back to Agents 2, 3, 4
-        current_exec_plan = "\n".join(reply5.get("executable_plan", []))
-        current_verif_cmds = "\n".join(reply5.get("verification_plan", []))
-        save_turn_state()
-
-    # if loop ends without approval
-    return {
-        "status": "REJECTED",
-        "issues": all_issues,
-        "clarifying_questions": [],
-        "executable_plan": [line.strip() for line in current_exec_plan.split('\n') if line.strip()],
-        "verification_plan": [line.strip() for line in current_verif_cmds.split('\n') if line.strip()]
-    }
-
-def handle_chat_logic(username, reservation_id, chat_id, agent_role, message, llm_model, files=None, is_manual_chat=False):
-    # if there is no chat_id, it means the user is starting a new chat. We generate one.
-    if not chat_id:
-        chat_id = f"{int(time.time())}_{uuid.uuid4().hex[:8]}"          # added timestamp to guarantee chronological order of messages
-
-    # route to the multi-agent safety orchestrator
-    if agent_role == "safety":
-        latest_user_msg = {"role": "user", "content": message} if message.strip() else None
-        
-        # run the multi-agent safety loop
-        reply = yield from handle_safety_loop(username, chat_id, latest_user_msg, reservation_id, llm_model, is_manual_chat)
-        
-        # we save a fake entry for the main 'safety' key to maintain compatibility  with the React frontend history parser (so it shows the approved plan seamlessly)
-        session_key_main = f"agent_history:safety:{username}:{reservation_id}:{chat_id}"
-        hist_main_str = redis_client.get(session_key_main)
-        hist_main = json.loads(hist_main_str) if hist_main_str else []
-        
-        if latest_user_msg: 
-            hist_main.append(latest_user_msg)
-        hist_main.append({"role": "assistant", "content": json.dumps(reply)})
-
-        # add timestamps to safety messages to guarantee correct sorting in the frontend history
-        current_time = time.time()
-        for msg in hist_main:
-            if "timestamp" not in msg:
-                msg["timestamp"] = current_time
-                current_time += 0.001
-        
-        redis_client.set(session_key_main, json.dumps(hist_main), ex=432000)
-        
-        return reply, chat_id
-
-    session_key = f"agent_history:{agent_role}:{username}:{reservation_id}:{chat_id}"
-
-    # retrieve history from Redis
-    history_str = redis_client.get(session_key)
-    if history_str:
-        history = json.loads(history_str)
-    else:
-        # create first message that includes the system prompt, dynamic rules for device kinds if present and the topology
-        system_prompt = AGENT_PROMPTS.get(agent_role)
-
-        dynamic_rules = get_dynamic_device_rules(agent_role)
-        if dynamic_rules:
-            system_prompt += f"\n<device_specific_rules>\n{dynamic_rules}\n</device_specific_rules>\n"
-
-        system_prompt += f"\n\n<topology>\n```yaml\n{testbed_topology}\n```\n</topology>\n"
-
-        # add reserved devices constraint list to the system prompt
-        system_prompt += get_reserved_devices(reservation_id)
-
-        # add fobidden rules instructions for safety agent
-        """
-        if agent_role == "safety":
-            rules_formatted = "\n".join([f"- {rule}" for rule in FORBIDDEN_RULES])
-            system_prompt += f"\n\n<forbidden_rules>\n{rules_formatted}\n</forbidden_rules>\n"
-        """
-
-        # initialize history if it doesn't exist
-        history = [{"role": "system", "content": system_prompt}]
-
-    # add user message and file info to conversation history
-    user_content = message
-    if files:
-       for f in files:
-            if f.filename != '':
-                try:
-                    # read the content of the file and append it to the user message in a structured way
-                    file_content = f.read().decode('utf-8')
-                    user_content += f"\n\n<attached_file name=\"{f.filename}\">\n{file_content}\n</attached_file>\n"
-                    
-                except UnicodeDecodeError:
-                    # message if the file is not a text file or cannot be decoded
-                    user_content += f"\n\n<attached_file name=\"{f.filename}\">\n[Note: The file was ignored because it is not a readable text file.]\n</attached_file>\n"
-
-    # add user message if present
-    if user_content.strip():
-        history.append({"role": "user", "content": user_content})
-
-    try:
-        
-        # extract system prompt (index 0) from the history and last user message
-        system_msg = history[0] 
-        latest_user_msg = {"role": "user", "content": user_content} if user_content.strip() else None
-
-        """
-        if agent_role == "safety":
-            # for safety start the autocorrection loop (hisotry is a list passed by reference by default, the content of the list is updated in the loop function)
-            reply = yield from handle_safety_loop(history, system_msg, latest_user_msg, reservation_id, agent_role, llm_model, is_manual_chat)
-
-        else:
-        """
-        # for planning and execution we use a minimal array. Negotiation use all the history.
-        if agent_role in ["planning", "execution"]:
-            llm_history = [system_msg]
-            if latest_user_msg:
-                llm_history.append(latest_user_msg)
-        else:
-            llm_history = history 
-
-        # send request to the LLM
-        valid_output, reply = yield from consume_llm_stream_with_retries(llm_history, agent_role, llm_model, reservation_id)
-        
-        if not valid_output:
-            print(f"[DEBUG SERVER] FINAL FAILURE DETAILS (safety): {reply}")
-            raise Exception("LLM failed to produce valid JSON after retries")
-        
-        # add response to history and save it back to Redis
-        history.append({"role": "assistant", "content": json.dumps(reply)})    
-
-        current_time = time.time()
-        for msg in history:
-            # assign timestamp to a message
-            if "timestamp" not in msg:
-                msg["timestamp"] = current_time
-                # add a millisecond to guarantee that messages created in the same time are sequentially ordered
-                current_time += 0.001       
-
-        # save updated history to Redis (expiration set to 5 days as security, when the reservation ends, the key is automatically removed)
-        redis_client.set(session_key, json.dumps(history), ex=432000)
-        
-        return reply, chat_id
-    except Exception as e:
-        raise e
-
-        
 # call client function to send request to the llm and receive the reasoning in stream mode and the real output
 def consume_llm_stream_with_retries(llm_history, role, llm_model, reservation_id):
         print(f"[DEBUG SSE] Start stream for: {role} (Max Retries: {JSON_RETRIES})")
@@ -1362,8 +872,9 @@ def generate_diagnostic_assistant_sse(history, request_data):
                 yield f"data: {json.dumps({'type': 'result', 'data': {'chat_id': chat_id, 'requires_approval': False, 'context': next_context, 'next_phase': 'diagnostic_planner'}})}\n\n"
 
         elif current_phase == "diagnostic_planner":
+            testbed_topology = get_testbed_topology(reservation_id)
             planner_sys_prompt = DIAGNOSTIC_ASSISTANT_PROMPTS["diagnostic_planner"]
-            dynamic_rules = get_dynamic_device_rules("diagnostic_planner")
+            dynamic_rules = get_dynamic_device_rules("diagnostic_planner", reservation_id)
 
             if dynamic_rules: 
                 planner_sys_prompt += f"\n<device_specific_rules>\n{dynamic_rules}\n</device_specific_rules>\n"
@@ -1433,7 +944,13 @@ def generate_diagnostic_assistant_sse(history, request_data):
             yield f"data: {json.dumps({'type': 'result', 'data': {'chat_id': chat_id, 'requires_approval': False, 'execution_report': exec_report, 'context': context, 'next_phase': 'diagnostic_reporter'}})}\n\n"
 
         elif current_phase == "diagnostic_reporter":
+            testbed_topology = get_testbed_topology(reservation_id)
             reporter_sys_prompt = DIAGNOSTIC_ASSISTANT_PROMPTS["diagnostic_reporter"]
+            
+            dynamic_rules = get_dynamic_device_rules("diagnostic_reporter", reservation_id)
+            if dynamic_rules:
+                reporter_sys_prompt += f"\n<device_specific_rules>\n{dynamic_rules}\n</device_specific_rules>\n"
+
             reporter_sys_prompt += f"\n\n<topology>\n```yaml\n{testbed_topology}\n```\n</topology>\n"
             
             # Reporter agent
