@@ -16,11 +16,11 @@ def handle_chat_logic(username, reservation_id, chat_id, agent_role, message, ll
     if not chat_id:
         chat_id = f"{int(time.time())}_{uuid.uuid4().hex[:8]}"          # added timestamp to guarantee chronological order of messages
 
-    # route to the multi-agent safety orchestrator
+    # route to the safety orchestrator
     if agent_role == "safety":
         latest_user_msg = {"role": "user", "content": message} if message.strip() else None
         
-        # run the multi-agent safety loop
+        # run the safety loop
         reply = yield from execute_safety_phase(username, chat_id, latest_user_msg, reservation_id, llm_model, is_manual_chat)
         
         return reply, chat_id
@@ -155,7 +155,7 @@ def run_experiment_pipeline_worker(username, reservation_id, chat_id, starting_p
 
                     message = f"Please analyze the errors below and generate a NEW corrected execution plan. You MUST respond in a valid JSON object.\n\n<experiment_context>\n{experiment_context}\n</experiment_context>\n\n<exit_conditions>\n{exit_conditions}\n</exit_conditions>\n\n<failed_execution_plan>\n{old_plan}\n</failed_execution_plan>\n\n<execution_report>\n{execution_report}\n</execution_report>"
 
-                # add user message to the context resturned by the client if the current phase is not negotiation and we are not in a retry in planning phase    
+                # add user message to the context returned by the client if the current phase is not negotiation and we are not in a retry in planning phase    
                 elif current_phase != "negotiation" and context_payload:
                     message = context_payload + ("\n\n" + message if message.strip() else "")
 
@@ -311,7 +311,7 @@ def run_experiment_pipeline_worker(username, reservation_id, chat_id, starting_p
                 # get next phase from current phase data
                 next_phase = result_data.get("next_phase")
 
-                # check for stop conditions in in safety
+                # check for stop conditions in the safety
                 is_safety_stopped = (current_phase == "safety" and "APPROVED" not in status)
 
                 # check if we need pause to let user decide to continue the loop (if the execution produced rejected results), pause for human (if there are questions), or end experiment (there is not a next phase, there are not questions and execution plan is not rejected)

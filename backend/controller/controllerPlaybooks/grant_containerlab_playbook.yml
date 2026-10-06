@@ -300,6 +300,12 @@
       ansible.builtin.command: "ip route del default via {{ dynamic_gw }}"
       when: check_default_route.rc == 0
 
+    - name: Flush handlers to force SSH restart immediately
+      ansible.builtin.meta: flush_handlers
+
+    - name: Reset SSH connection to clear stale multiplexing sockets
+      ansible.builtin.meta: reset_connection
+
   handlers:
     - name: validate sudoers
       ansible.builtin.command:

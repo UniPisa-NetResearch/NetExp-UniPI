@@ -377,6 +377,12 @@
       run_once: true
       ignore_errors: yes
       ignore_unreachable: yes
+  
+    - name: Flush handlers to force SSH restart immediately
+      ansible.builtin.meta: flush_handlers
+
+    - name: Reset SSH connection to clear stale multiplexing sockets
+      ansible.builtin.meta: reset_connection
 
   handlers:
     - name: restart sshd

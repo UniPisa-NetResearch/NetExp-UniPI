@@ -72,6 +72,12 @@
         state: absent
       ignore_errors: yes
 
+    - name: Flush handlers to force SSH restart immediately
+      ansible.builtin.meta: flush_handlers
+
+    - name: Reset SSH connection to clear stale multiplexing sockets
+      ansible.builtin.meta: reset_connection
+      
   handlers:
     # Use 'service' instead of systemctl (not available on container sonic-vs)
     - name: restart sshd

@@ -193,3 +193,20 @@ def get_remaining_minutes(reservation_id):
     
     diff_seconds = (end_dt - now).total_seconds()
     return max(0.0, diff_seconds / 60.0)
+
+def get_virtual_topology_name() -> str:
+    # read field 'name' from the current virtual topology file, return 'containerlab' as fallback
+    fallback_name = "containerlab"
+    
+    path_to_check = os.path.join(BASE_DIR, "agent", "agents_util", "containerlab_topology_plain.yaml")
+    
+    if os.path.exists(path_to_check):
+        try:
+            with open(path_to_check, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+                if isinstance(data, dict) and "name" in data:
+                    return str(data["name"])
+        except Exception as e:
+            print(f"Error during reading of virtual topology from {path_to_check}: {e}")
+                
+    return fallback_name

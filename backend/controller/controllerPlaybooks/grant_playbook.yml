@@ -444,6 +444,12 @@
               PasswordAuthentication no
       notify: restart sshd
 
+    - name: Flush handlers to force SSH restart immediately
+      ansible.builtin.meta: flush_handlers
+
+    - name: Reset SSH connection to clear stale multiplexing sockets
+      ansible.builtin.meta: reset_connection
+
   handlers:
     # validate the generated sudoers fragment to avoid locking out sudo
     - name: validate sudoers
