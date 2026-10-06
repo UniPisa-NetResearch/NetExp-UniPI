@@ -95,10 +95,31 @@ def stream_containerlab_deployment(file_content=None):
 
         # clean known_hosts locally
         yield "\n>>> Cleaning known hosts locally...\n"
-        proc = subprocess.Popen(["./clean_known_hosts.sh"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-        for line in iter(proc.stdout.readline, ""):
-            yield line
-        proc.wait()
+        
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        plain_yaml_path = os.path.join(base_dir, "..", "agent", "agents_util", "containerlab_topology_plain.yaml")
+        
+        if os.path.exists(plain_yaml_path):
+            try:
+                with open(plain_yaml_path, 'r', encoding='utf-8') as f:
+                    topo = yaml.safe_load(f)
+                
+                nodes = topo.get("topology", {}).get("nodes", {})
+                known_hosts_file = os.path.expanduser("~/.ssh/known_hosts")
+                
+                # remove keys for every IP of the topolgy
+                for node_name, attrs in nodes.items():
+                    ip = attrs.get("mgmt-ipv4")
+                    if ip:
+                        yield f"Removing identifier for node '{node_name}' IP: {ip}...\n"
+                        subprocess.run(["ssh-keygen", "-f", known_hosts_file, "-R", ip], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                
+                yield "All identifiers removed!\n"
+            
+            except Exception as e:
+                yield f"\n[WARNING] Error dynamically cleaning known_hosts: {e}\n"
+        else:
+            yield "\n[WARNING] topology_plain.yaml not found. Cannot clean known_hosts dynamically.\n"
 
         yield "\n--- Deployment Completed Successfully! ---\n"
 
@@ -446,18 +467,27 @@ def upload_topology():
                 yield f"\n[ERROR] Failed to initialize NetBox client: {e}\n"
                 return
 
+            topology_name = topology_data.get("name", "containerlab")
+            try:
+                site = nb.dcim.sites.get(name=topology_name)
+                if not site:
+                    site = nb.dcim.sites.get(slug=topology_name)
+                site_slug = site.slug if site else topology_name
+            except Exception:
+                site_slug = topology_name
+
             # validate each node
             for node_name, values in nodes.items():
                 yaml_ip = values.get('mgmt-ipv4')
 
-                dev = nb.dcim.devices.get(name=node_name)
+                dev = nb.dcim.devices.get(name=node_name, site=site_slug)
                 netbox_obj = None
 
                 # if not found return error
                 if dev:
                     netbox_obj = dev
                 else:
-                    yield f"\n[ERROR] Validation Failed: Node '{node_name}' does not exist in NetBox inventory.\n"
+                    yield f"\n[ERROR] Validation Failed: Node '{node_name}' does not exist in NetBox inventory for site '{topology_name}'.\n"
                     yield "Deployment aborted.\n"
                     return
 

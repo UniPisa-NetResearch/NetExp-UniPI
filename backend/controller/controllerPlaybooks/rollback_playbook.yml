@@ -10,7 +10,7 @@
     delay_seconds: 5
     containerlab_test: false
     ansible_ssh_common_args: >-
-      {{ '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' if containerlab_test else omit }}
+      {{ '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' if containerlab_test else '' }}
     frr_conf_path: >-
       {{ '/etc/frr/frr.conf' if containerlab_test else '/etc/sonic/frr/frr.conf' }}
 

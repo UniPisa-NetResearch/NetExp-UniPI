@@ -174,6 +174,12 @@ def get_dynamic_total_tasks(reservation_id, is_virtual):
         play_headers = out.count("play #")
         total_tasks = total_tags - play_headers
         
+        # remove silent meta task from total tasks, since they d not show output
+        meta_flush = out.count("Flush handlers to force SSH restart immediately")
+        meta_reset = out.count("Reset SSH connection to clear stale multiplexing sockets")
+        
+        total_tasks = total_tasks - meta_flush - meta_reset
+
         # save the result in the cache for future polling requests
         playbook_tasks_cache[reservation_id] = total_tasks
 
@@ -646,8 +652,11 @@ def revoke_access():
         print(f"User {username} removed from active_reservations")
 
     # remove the cached total tasks for this reservation
-    if reservation_id in playbook_tasks_cache:
-        del playbook_tasks_cache[reservation_id]
+    playbook_tasks_cache.pop(str(reservation_id), None)
+    try:
+        playbook_tasks_cache.pop(int(reservation_id), None)
+    except (ValueError, TypeError):
+        pass
 
     if run_rollback:
         return jsonify({"ok": True, "message": "Revoke with rollback executed", "stdout": out, "stderr": err}), 200
@@ -710,8 +719,11 @@ def cleanup_reservation():
             pass
 
     # remove the cached total tasks for this reservation
-    if reservation_id in playbook_tasks_cache:
-        del playbook_tasks_cache[reservation_id]
+    playbook_tasks_cache.pop(str(reservation_id), None)
+    try:
+        playbook_tasks_cache.pop(int(reservation_id), None)
+    except (ValueError, TypeError):
+        pass
 
     # remove file if exists
     file_path = f"res{reservation_id}"
@@ -1206,20 +1218,26 @@ def get_setup_progress():
             match = re.match(r'^(ok|changed|skipping|fatal):\s*\[([^\]]+)\]', line)
             
             if match:
-                device = match.group(2)         # extract the device hostname (e.g., 'ch1')
-                
+                ansible_device = match.group(2)         # extract the device hostname (e.g., 'ch1')
+
+                # remove destination device in delegated task (ex. h4 -> 192.168.1.10 becomes h4)
+                device = ansible_device.split('->')[0].strip()
+
                 if device not in device_tasks_done:
                     device_tasks_done[device] = 0
                 device_tasks_done[device] += 1
 
     # dynamically retrieve the total number of tasks defined in the playbook
     is_virtual = get_is_virtual_from_db(reservation_id)
-    # if the ttal is already computed, use the cached value, otherwise compute it
-    if reservation_id in playbook_tasks_cache:
-        total_tasks = playbook_tasks_cache[reservation_id]
+    # if the total is already computed, use the cached value, otherwise compute it
+    res_id_str = str(reservation_id)
+    if  res_id_str in playbook_tasks_cache:
+        total_tasks = playbook_tasks_cache[res_id_str]
     else:
         total_tasks = get_dynamic_total_tasks(reservation_id, is_virtual)
+        playbook_tasks_cache[res_id_str] = total_tasks
     
+    print(f"DEBUG: total tasks for reservation {reservation_id}: {playbook_tasks_cache[res_id_str]}")
     # calculate the percentage for each device
     progress_data = {}
     for dev, done in device_tasks_done.items():

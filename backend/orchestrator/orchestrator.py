@@ -5,7 +5,7 @@ from flask import jsonify, request
 from backend.orchestrator.socketio_instance import socketio
 from backend.orchestrator.orchestrator_jobs import reservation_start_job, reservation_end_job
 from ..database.db import db, User, Reservation, ReservationDevice
-from ..utils import get_next_available_id, resolve_netbox_device
+from ..utils import get_next_available_id, resolve_netbox_device, get_virtual_topology_name
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from sqlalchemy import tuple_, and_
@@ -21,9 +21,8 @@ import subprocess
 import ipaddress
 from ..app import app
 from ..config import (
-    NETBOX_URL, NETBOX_TOKEN, NETBOX_SITE_PHYSICAL, NETBOX_SITE_VIRTUAL, 
-    REDIS_URL, REDIS_QUEUE_NAME, CONTROLLER_URL, FRONTEND_URL, LOCAL_TEST, 
-    CONTAINERLAB_HOST, CONTAINERLAB_HOST_USER, TEST_MODE, TEST_DOUBLE_RES, EXPERIMENT_DURATION, MAX_HOURS
+    NETBOX_URL, NETBOX_TOKEN, NETBOX_SITE_PHYSICAL, NETBOX_SITE_VIRTUAL, REDIS_URL, REDIS_QUEUE_NAME, CONTROLLER_URL, 
+    FRONTEND_URL, LOCAL_TEST, CONTAINERLAB_HOST, CONTAINERLAB_HOST_USER, TEST_MODE, TEST_DOUBLE_RES, EXPERIMENT_DURATION, MAX_HOURS
 )
 
 nb = pynetbox.api(NETBOX_URL, token=NETBOX_TOKEN)
@@ -32,9 +31,30 @@ redis = Redis.from_url(REDIS_URL)
 
 # return the correct netbox site
 def get_netbox_site(is_virtual: bool) -> str:
-    return NETBOX_SITE_VIRTUAL if is_virtual else NETBOX_SITE_PHYSICAL
+    
+    if is_virtual:
+        topology_name = get_virtual_topology_name()
+        print("Current virtual topology:", topology_name)
+        try:
+            site = nb.dcim.sites.get(name=topology_name)
+            
+            if not site:
+                site = nb.dcim.sites.get(slug=topology_name)
+            
+            if site:
+                return site.slug
+                
+            print(f"The site '{topology_name}' is not present on NetBox. Using fallback")
+            
+        except Exception as e:
+            print(f"Error during site verification '{topology_name}' on NetBox: {e}. Using fallback")
+        
+        return NETBOX_SITE_VIRTUAL
+    
+    else:
+        return NETBOX_SITE_PHYSICAL
 
-#function to send reservation data to the controller
+# function to send reservation data to the controller
 def send_to_controller(msg_type, user_id, reservation_id, job_data):
     lock_key = "controller_playbook_execution_lock"
     lock_timeout = 600  # 10 minuti max per playbook execution (revoke + rollback può durare)
@@ -99,12 +119,12 @@ def send_to_controller(msg_type, user_id, reservation_id, job_data):
                     for at in asset_tags:
                         info = {"ip": None, "role": None, "interface": None}
                         try:
-                            # try to fetch device by asset_tag first
-                            dev = nb.dcim.devices.get(site=netbox_site, asset_tag=at)
+                            # try to fetch device by name first
+                            dev = nb.dcim.devices.get(name=at, site=netbox_site)
+                        
                             if not dev:
-                                # fallback: try by name
-                                devs = nb.dcim.devices.filter(site=netbox_site, name=at)
-                                dev = devs[0] if devs else None
+                                # fallback: try by asset_tag
+                                dev = nb.dcim.devices.get(asset_tag=at, site=netbox_site)
 
                             if dev:
                                 info = resolve_netbox_device(dev, nb=nb, fetch_interface=True)

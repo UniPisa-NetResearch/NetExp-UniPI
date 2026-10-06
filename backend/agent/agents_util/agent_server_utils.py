@@ -710,6 +710,7 @@ def consume_llm_stream_with_retries(llm_history, role, llm_model, reservation_id
                         stream_error = chunk["content"]
 
                 if full_thought_str.strip():
+                    # write the entire reasoning in the log file
                     log_agent_reasoning(role, full_thought_str)
 
                 with log_lock:
@@ -730,7 +731,7 @@ def consume_llm_stream_with_retries(llm_history, role, llm_model, reservation_id
                 if json_match:
                     clean_json_str = json_match.group(1)
                 else:
-                    # manually retried json content frmnthe output if it does not match
+                    # manually retried json content from the output if it does not match
                     start = full_json_str.find('{')
                     end = full_json_str.rfind('}')
                     if start != -1 and end != -1 and end > start:
@@ -818,7 +819,7 @@ def generate_diagnostic_assistant_sse(history, request_data):
                 if last_summary_idx != -1:
                     summarizer_history.append({"role": "system", "content": f"<previous_chat_summary>\n{history[last_summary_idx]['content']}\n</previous_chat_summary>"})
 
-                    # add every message after the last summary, except execution_log type messages
+                # add every message after the last summary, except execution_log type messages (messages with the output of reading commands)
                 for m in history[start_idx:]:
                     if m.get("role") != "execution_log":
                         summarizer_history.append(m)
