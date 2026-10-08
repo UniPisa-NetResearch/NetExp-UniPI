@@ -65,7 +65,8 @@ NFS_OPTS = "rw,sync,hard,intr,timeo=600,retrans=2"
 USER_QUOTA_BYTES =536870912
 
 # LLM parameters
-LLM_MODEL = "deepseek-v4.1-flash:cloud"
+LLM_MODEL = "deepseek-v4.1-flash:cloud"                 # LLM default model
+# list of available models with respective providers
 MODEL_PROVIDERS = {
     "gemini-3.1-flash-lite": "gemini",
     "glm-5.1:cloud": "ollama",
@@ -76,12 +77,18 @@ MODEL_PROVIDERS = {
     "gemma4:cloud": "ollama"
 }                           
 AVAILABLE_MODELS = list(MODEL_PROVIDERS.keys())
+# API keys for LLM providers, are loaded from .env file
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")        
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+# base url for different providers        
 AVAILABLE_BASE_URLS = ["https://generativelanguage.googleapis.com/v1beta/openai/", "http://localhost:11434/v1", "https://api.openai.com/v1"]
+# maximum number of safety phaseiterations
 SAFETY_ITERATIONS = 3
+# maximum number of retries to get a valid json
 JSON_RETRIES = 3
+# execution phases order list
 PHASES_ORDER = ['negotiation', 'planning', 'safety', 'testbed_execution', 'execution']
+# mapping of agent names that are shown in the frontend
 AGENT_NAMES = {
     "negotiation": "Intent Analyst",
     "planning": "Action Planner",
@@ -94,12 +101,19 @@ AGENT_NAMES = {
     "testbed_execution": "Testbed Execution",
     "execution": "Execution Reporter"
 }
+# safety subagents list
 SAFETY_SUBAGENT_ROLES = ["safety_agent_1", "safety_agent_2", "safety_agent_3", "safety_agent_4", "safety_agent_5"]
+# diagnostic assistant phases in order of execution
 DIAGNOSTIC_ASSISTANT_PHASES_ORDER = ["diagnostic_intent", "diagnostic_planner", "execution", "diagnostic_reporter"]
+# interactive assistant phases in order of execution
+INTERACTIVE_ASSISTANT_PHASES_ORDER = ["interactive_negotiator", "execution"]
+# timeout after which the request is aborted
 LLM_TIMEOUT_SECONDS = 300
+# max output tokens for LLM
 LLM_MAX_OUTPUT_TOKENS = 16384                                   #16384 - 32768
+# max number of consecutive user messages after that the summary is generated
 MAX_DIAGNOSTIC_ASSISTANT_MESSAGES = 10
-# constants for LLM prevention mechanisms
+# constants for LLM prevention mechanisms, to avoid LLM call when the reservation is close to expire
 FRONTEND_LLM_PREVENTION_MINUTES = 10
 BACKEND_LLM_PREVENTION_MINUTES = 5
 # execution modes of safety agent:

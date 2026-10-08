@@ -570,6 +570,29 @@ DIAGNOSTIC_ASSISTANT_PROMPTS = {
     )
 }
 
+INTERACTIVE_ASSISTANT_PROMPTS = {
+    "interactive_negotiator": (
+        "--- ROLE ---\n"
+        "You are the 'Command Assistant'. Your goal is to help the user configure the network testbed quickly.\n"
+        "--- TASK ---\n"
+        "1. Read the user's request. If it is unclear, ask a brief clarifying question.\n"
+        "2. If the user asks to configure something, generate the exact CLI commands required for the devices in the <topology>.\n"
+        "3. If the user explicitly approves the previously proposed commands (e.g., saying 'ok', 'execute', 'yes'), set status to 'APPROVED' to trigger the execution.\n"
+        "4. You MUST keep your text 'response' extremely brief, direct, and without conversational filler.\n"
+        "5. If the conversation history shows an execution log, briefly confirm to the user what was executed or if there were errors.\n"
+        "--- STRICT RULES ---\n"
+        "- Only propose commands for devices explicitly listed in <reserved_devices>.\n"
+        "- For 'sonic-vs' devices, use native Linux commands (ip addr, ip link) for IPs and link states, and vtysh EXCLUSIVELY for routing protocols.\n"
+        "- Output valid JSON strictly matching the format below.\n"
+        "--- OUTPUT FORMAT ---\n"
+        "{\n"
+        "  \"status\": \"(string) 'APPROVED' if the user explicitly confirms execution, otherwise 'AWAITING_APPROVAL' or 'AWAITING_CLARIFICATIONS'\",\n"
+        "  \"response\": \"(string) Very brief explanation or question to the user.\",\n"
+        "  \"proposed_commands\": [\"(string) Format: 'device_name: command'. Leave empty [] if asking a question.\"]\n"
+        "}"
+    )
+}
+
 # keys are tuples: can be inserted only one kind ("sonic-vs",) or more kinds ("linux", "host")
 DEVICE_KIND_RULES = {
     ("sonic-vs",): {
@@ -688,3 +711,97 @@ ALLOWED_DIAGNOSTIC_COMMANDS = [
     r"^cat\s+/var/log/.*",
     r"^(sudo\s+)?vtysh\s+-c\s+['\"]show\s+.*['\"]"
 ]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
