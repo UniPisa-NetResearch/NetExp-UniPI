@@ -10,6 +10,7 @@ const navItems = [
     { name: 'LLM Agent', path: '/llmAgent' },
     { name: 'Diagnostic Assistant', path: '/diagnosticAssistant' },
     { name: 'Interactive Assistant', path: '/interactiveAssistant' },
+    { name: 'Safe Interactive', path: '/safeInteractiveAssistant' },
     { name: 'Experiment', path: '/experiment' },
     { name: 'Evaluation', path: '/evaluation' },
 ];
@@ -129,7 +130,7 @@ const NavbarLayout = ({ children, username, onLogout, showLogoutButton = true, i
 
     const handleNavClick = async (e, item) => {
         // block navigation to configuration if there is no active reservation/token
-        if ((item.path === '/configuration' || item.path=== '/llmAgent' || item.path === '/diagnosticAssistant' || item.path === '/interactiveAssistant' || item.path === '/experiment' || item.path === '/evaluation') && !isReservationActive) {
+        if ((item.path === '/configuration' || item.path=== '/llmAgent' || item.path === '/diagnosticAssistant' || item.path === '/interactiveAssistant' || item.path === '/safeInteractiveAssistant' || item.path === '/experiment' || item.path === '/evaluation') && !isReservationActive) {
             e.preventDefault();
 
             if (item.path !== '/evaluation') {
@@ -157,7 +158,7 @@ const NavbarLayout = ({ children, username, onLogout, showLogoutButton = true, i
             return;
         }
 
-        if ((item.path === '/configuration' || item.path=== '/llmAgent' || item.path === '/diagnosticAssistant' || item.path === '/interactiveAssistant' || item.path === '/experiment') && !isAccessGranted) {
+        if ((item.path === '/configuration' || item.path=== '/llmAgent' || item.path === '/diagnosticAssistant' || item.path === '/interactiveAssistant' || item.path === '/safeInteractiveAssistant' || item.path === '/experiment') && !isAccessGranted) {
             e.preventDefault();
             // open the progress modal instead of showing an alert
             setIsProgressModalOpen(true);

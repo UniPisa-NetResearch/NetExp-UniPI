@@ -6,11 +6,11 @@ import traceback
 from ...app import app
 from .prompts import AGENT_PROMPTS, DIAGNOSTIC_ASSISTANT_PROMPTS, INTERACTIVE_ASSISTANT_PROMPTS
 from .safety_logic import execute_safety_phase
-from ...config import MAX_DIAGNOSTIC_ASSISTANT_MESSAGES, PHASES_ORDER, DIAGNOSTIC_ASSISTANT_PHASES_ORDER, INTERACTIVE_ASSISTANT_PHASES_ORDER
+from ...config import MAX_DIAGNOSTIC_ASSISTANT_MESSAGES, PHASES_ORDER, DIAGNOSTIC_ASSISTANT_PHASES_ORDER, INTERACTIVE_ASSISTANT_PHASES_ORDER, SAFE_INTERACTIVE_PHASES_ORDER
 from .agent_server_utils import (redis_client, get_last_agent_message, format_as_string, parse_plan, 
                                 open_ssh_connections, run_parallel_commands, close_ssh_connections, get_validated_llm_reply, is_command_whitelisted,
-                                run_agent_execution_plan, delete_agent_history_keys, consume_llm_stream_with_retries, get_dynamic_device_rules, 
-                                get_reserved_devices, get_testbed_topology, extract_xml_tag)
+                                filter_interactive_commands, run_agent_execution_plan, delete_agent_history_keys, consume_llm_stream_with_retries, 
+                                get_dynamic_device_rules, get_reserved_devices, get_testbed_topology, extract_xml_tag, extract_interactive_intent_context)
 
 # helper function to handle the chat logic for execution experiment phases, manages context history to send to the agents and system prompts
 def handle_experiment_chat_logic(username, reservation_id, chat_id, agent_role, message, llm_model, files=None):
@@ -283,11 +283,15 @@ def handle_diagnostic_chat_logic(username, reservation_id, chat_id, agent_role, 
     
     return reply, chat_id
 
-def handle_interactive_chat_logic(username, reservation_id, chat_id, message, llm_model):
+def handle_interactive_chat_logic(username, reservation_id, chat_id, agent_role, message, llm_model, pipeline_mode="standard", files=None):
     if not chat_id:
         chat_id = f"{int(time.time())}_{uuid.uuid4().hex[:8]}"
 
-    session_key = f"agent_history:interactive_assistant_chat:{username}:{reservation_id}:{chat_id}"
+    actual_role = agent_role
+    if pipeline_mode == "safe" and agent_role == "interactive_negotiator":
+        actual_role = "safe_interactive_negotiator"
+
+    session_key = f"agent_history:{actual_role}:{username}:{reservation_id}:{chat_id}"
     history_str = redis_client.get(session_key)
 
     if history_str:
@@ -304,15 +308,40 @@ def handle_interactive_chat_logic(username, reservation_id, chat_id, message, ll
 
         history = [{"role": "system", "content": system_prompt}]
 
-    if message.strip():
-        history.append({"role": "user", "content": message.strip()})
+    user_content = message
+    if files:
+       for f in files:
+            if f.filename != '':
+                try:
+                    file_content = f.read().decode('utf-8')
+                    user_content += f"\n\n<attached_file name=\"{f.filename}\">\n{file_content}\n</attached_file>\n"
+                except UnicodeDecodeError:
+                    user_content += f"\n\n<attached_file name=\"{f.filename}\">\n[Note: The file was ignored because it is not a readable text file.]\n</attached_file>\n"
 
-    valid_output, reply = yield from consume_llm_stream_with_retries(history, "interactive_negotiator", llm_model, reservation_id)
+    latest_user_msg = {"role": "user", "content": user_content.strip()} if user_content.strip() else None
+
+    if agent_role == "interactive_negotiator":
+        if latest_user_msg:
+            history.append(latest_user_msg)
+        llm_history = [m for m in history if m.get("role") != "execution_log"]
+
+    elif agent_role == "interactive_reporter":
+        sys_prompt = INTERACTIVE_ASSISTANT_PROMPTS["interactive_reporter"]
+        llm_history = [{"role": "system", "content": sys_prompt}]
+        if latest_user_msg:
+            llm_history.append(latest_user_msg)
+
+    valid_output, reply = yield from consume_llm_stream_with_retries(llm_history, agent_role, llm_model, reservation_id)
     
     if not valid_output:
         raise Exception("LLM failed to produce valid JSON after retries")
 
-    history.append({"role": "assistant", "content": json.dumps(reply)})
+    if agent_role == "interactive_negotiator":
+        history.append({"role": "assistant", "content": json.dumps(reply)})
+    elif agent_role == "interactive_reporter":
+        exec_report = extract_xml_tag(message, "execution_report") if message else ""
+        history.append({"role": "execution_log", "content": exec_report})
+        history.append({"role": "assistant", "content": json.dumps(reply)})
 
     current_time = time.time()
     for msg in history:
@@ -322,7 +351,119 @@ def handle_interactive_chat_logic(username, reservation_id, chat_id, message, ll
 
     redis_client.set(session_key, json.dumps(history), ex=432000)
     
-    return reply, chat_id, history
+    return reply, chat_id
+
+def execute_testbed_commands_wrapper(pipeline_type, reservation_id, **kwargs):
+    # get the path of ansible inventory
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    inventory_path = os.path.abspath(os.path.join(base_dir, "..", "..", "controller", "inventories", f"res-{reservation_id}-inventory.ini"))
+
+    executed = False
+    execution_report = ""
+
+    if pipeline_type == "experiment":
+        context_payload = kwargs.get("context_payload", "")
+        execution_mode = kwargs.get("execution_mode", "serial")
+
+        # retrieve the approved experiment plan and verification commands from the safety agent
+        plan_str = extract_xml_tag(context_payload, "approved_exec_plan")
+        v_plan_str = extract_xml_tag(context_payload, "approved_verif_plan")
+        
+        plan = [line.strip() for line in plan_str.split('\n') if line.strip()]
+        v_plan = [line.strip() for line in v_plan_str.split('\n') if line.strip()]
+
+        plan = parse_plan(plan)
+        v_plan = parse_plan(v_plan)
+
+        # if there are commands to execute for plan and verification, we execute commands on devices
+        if len(plan) > 0 and len(v_plan) > 0:
+            
+            executed = True
+            
+            if execution_mode == "parallel":
+                # in parallel execution mode, commands are executed in parallel for differente devices, execution and verification are maintained separated and serial for consistency
+                all_devices = set()
+                for item in plan + v_plan:
+                    if ":" in item:
+                        # get all involved devices from the plans
+                        all_devices.add(item.split(":", 1)[0].strip())
+
+                # create connections to all devices in the plan and verification
+                shared_connections = open_ssh_connections(all_devices, inventory_path, reservation_id)
+
+                start_time = time.time()
+                
+                # execute the plans and close the connextion after the execution
+                try:
+                    exec_report = run_parallel_commands(inventory_path, plan, reservation_id, is_intent=False, connections=shared_connections)
+                    verif_report = run_parallel_commands(inventory_path, v_plan, reservation_id, is_intent=False, connections=shared_connections)
+                finally:
+                    close_ssh_connections(shared_connections)
+
+                # generate execution report
+                execution_report = f"--- CONFIGURATION REPORT ---\n{exec_report}\n\n--- VERIFICATION REPORT ---\n{verif_report}"
+
+                elapsed_time = time.time() - start_time
+                print(f"\n[DEBUG EXECUTION] --- PARALLEL PLAN EXECUTED IN {elapsed_time:.2f} SECONDS ---")  
+
+            else:
+                # in serial mode, every command is executed following the order of the execution and verification plans
+                complete_plan = plan + v_plan
+
+                start_time = time.time()
+
+                execution_report = run_agent_execution_plan(inventory_path, complete_plan, reservation_id)
+
+                elapsed_time = time.time() - start_time
+                print(f"\n[DEBUG EXECUTION] --- SERIAL PLAN EXECUTED IN {elapsed_time:.2f} SECONDS ---") 
+
+        else:
+            execution_report = "No execution plan was provided. Report that the safety check passed with no commands to execute.\n"
+
+    elif pipeline_type == "diagnostic":
+        safe_commands = kwargs.get("safe_commands", [])
+        approved_commands = kwargs.get("approved_commands", [])
+
+        # unify safe (inside whitelist) and user approved commands
+        raw_commands_to_run = safe_commands + approved_commands
+        commands_to_run = []
+
+        # add count or timeout to possible infinite read commands, read only last 50 raws of log files
+        for cmd_str in raw_commands_to_run:
+            if ":" in cmd_str:
+                dev, cmd = cmd_str.split(":", 1)
+                cmd = cmd.strip()
+                if cmd.startswith("ping ") and "-c" not in cmd:
+                    cmd = cmd.replace("ping ", "ping -c 4 ", 1)
+                elif (cmd.startswith("iperf ") or cmd.startswith("iperf3 ")) and "-t" not in cmd:
+                    cmd = cmd.replace("iperf", "iperf -t 10", 1)
+                elif "tcpdump" in cmd and "timeout" not in cmd:
+                    cmd = f"timeout 10 {cmd}"
+                elif cmd.startswith("cat /var/log/"):
+                    cmd = cmd.replace("cat ", "tail -n 50 ", 1)
+                commands_to_run.append(f"{dev}: {cmd}")
+            else:
+                commands_to_run.append(cmd_str)
+        
+        # create execution report with a message if there are not commands to run, otherwise with the output of the commands executed on devices
+        if not commands_to_run:
+            execution_report = "[SYSTEM LOG]: The user rejected all proposed commands. No read operations were performed. Inform the user that you cannot complete the analysis without executing the commands, and ask them to try again or rephrase their request."
+        else:
+            execution_report = run_parallel_commands(inventory_path, commands_to_run, reservation_id, is_intent=False)
+            executed = True
+
+    elif pipeline_type == "interactive":
+        cmds_to_run = kwargs.get("proposed_commands", [])
+
+        if cmds_to_run:
+            executed = True
+            execution_report = run_parallel_commands(inventory_path, cmds_to_run, reservation_id, is_intent=False)
+
+        else:
+            execution_report = '{"response": "Execution cancelled: all proposed commands were rejected by the user. If you want to perform other configurations, just ask!"}'
+        
+    return executed, execution_report
+
 
 # generate the SSE stream for the execution phases, handle the logic and the conditions to determine next phase for every agent     
 def generate_experiment_phase_sse(request_data, files):
@@ -464,65 +605,12 @@ def generate_experiment_phase_sse(request_data, files):
             # send message to show in the frontend before starting execution of the plan on devices
             yield f"data: {json.dumps({'type': 'thought', 'content': f'\n\n[System: Executing verified plan on testbed...]\n\n'})}\n\n"
 
-            # retrieve the approved experiment plan and verification commands from the safety agent
-            plan_str = extract_xml_tag(context_payload, "approved_exec_plan")
-            v_plan_str = extract_xml_tag(context_payload, "approved_verif_plan")
-            
-            plan = [line.strip() for line in plan_str.split('\n') if line.strip()]
-            v_plan = [line.strip() for line in v_plan_str.split('\n') if line.strip()]
+            # execute commands on devices
+            _, execution_report = execute_testbed_commands_wrapper(pipeline_type="experiment", reservation_id=reservation_id, context_payload=context_payload, execution_mode=execution_mode)
 
-            # get the path of ansible inventory
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            inventory_path = os.path.abspath(os.path.join(base_dir, "..", "..", "controller", "inventories", f"res-{reservation_id}-inventory.ini"))
-
-            plan = parse_plan(plan)
-            v_plan = parse_plan(v_plan)
-
-            # if there are commands to execute for plan and verification, we execute commands on devices
-            if len(plan) > 0 and len(v_plan) > 0:
-
-                if execution_mode == "parallel":
-                    # in parallel execution mode, commands are executed in parallel for differente devices, execution and verification are maintained separated and serial for consistency
-                    all_devices = set()
-                    for item in plan + v_plan:
-                        if ":" in item:
-                            # get all involved devices from the plans
-                            all_devices.add(item.split(":", 1)[0].strip())
-
-                    # create connections to all devices in the plan and verification
-                    shared_connections = open_ssh_connections(all_devices, inventory_path, reservation_id)
-
-                    start_time = time.time()
-                    
-                    # execute the plans and close the connextion after the execution
-                    try:
-                        exec_report = run_parallel_commands(inventory_path, plan, reservation_id, is_intent=False, connections=shared_connections)
-                        verif_report = run_parallel_commands(inventory_path, v_plan, reservation_id, is_intent=False, connections=shared_connections)
-                    finally:
-                        close_ssh_connections(shared_connections)
-
-                    # generate execution report
-                    execution_report = f"--- CONFIGURATION REPORT ---\n{exec_report}\n\n--- VERIFICATION REPORT ---\n{verif_report}"
-
-                    elapsed_time = time.time() - start_time
-                    print(f"\n[DEBUG EXECUTION] --- PARALLEL PLAN EXECUTED IN {elapsed_time:.2f} SECONDS ---")  
-
-                else:
-                    # in serial mode, every command is executed following the order of the execution and verification plans
-                    complete_plan = plan + v_plan
-
-                    start_time = time.time()
-
-                    execution_report = run_agent_execution_plan(inventory_path, complete_plan, reservation_id)
-
-                    elapsed_time = time.time() - start_time
-                    print(f"\n[DEBUG EXECUTION] --- SERIAL PLAN EXECUTED IN {elapsed_time:.2f} SECONDS ---") 
-
-                # create context for the next phase    
-                next_context = f"<experiment_context>\n{experiment_context}\n</experiment_context>\n\n<exit_conditions>\n{exit_conditions}\n</exit_conditions>\n\n<execution_results>\n{execution_report}\n</execution_results>\n"
-            else:
-                next_context = f"<experiment_context>\n{experiment_context}\n</experiment_context>\n\n<exit_conditions>\n{exit_conditions}\n</exit_conditions>\n\n<execution_results>\nNo execution plan was provided. Report that the safety check passed with no commands to execute.\n</execution_results>\n"
-
+            # create context for the next phase    
+            next_context = f"<experiment_context>\n{experiment_context}\n</experiment_context>\n\n<exit_conditions>\n{exit_conditions}\n</exit_conditions>\n\n<execution_results>\n{execution_report}\n</execution_results>\n"
+           
             # update result_data with new context and next phase    
             result_data = {"chat_id": chat_id, "context": next_context, "next_phase": next_phase}
 
@@ -620,36 +708,9 @@ def generate_diagnostic_assistant_sse(request_data):
                 yield f"data: {json.dumps({'type': 'result', 'data': {'chat_id': chat_id_out, 'requires_approval': False, 'safe_commands': safe_cmds, 'context': context, 'next_phase': next_phase}})}\n\n"
 
         elif current_phase == "execution":
-            # unify safe (inside whitelist) and user approved commands
-            raw_commands_to_run = safe_commands + approved_commands
-            commands_to_run = []
-
-            # add count or timeout to possible infinite read commands, read only last 50 raws of log files
-            for cmd_str in raw_commands_to_run:
-                if ":" in cmd_str:
-                    dev, cmd = cmd_str.split(":", 1)
-                    cmd = cmd.strip()
-                    if cmd.startswith("ping ") and "-c" not in cmd:
-                        cmd = cmd.replace("ping ", "ping -c 4 ", 1)
-                    elif (cmd.startswith("iperf ") or cmd.startswith("iperf3 ")) and "-t" not in cmd:
-                        cmd = cmd.replace("iperf", "iperf -t 10", 1)
-                    elif "tcpdump" in cmd and "timeout" not in cmd:
-                        cmd = f"timeout 10 {cmd}"
-                    elif cmd.startswith("cat /var/log/"):
-                        cmd = cmd.replace("cat ", "tail -n 50 ", 1)
-                    commands_to_run.append(f"{dev}: {cmd}")
-                else:
-                    commands_to_run.append(cmd_str)
+            # run commands on testbed
+            _, exec_report = execute_testbed_commands_wrapper(pipeline_type="diagnostic", reservation_id=reservation_id, safe_commands=safe_commands, approved_commands=approved_commands)
             
-            # create execution report with a message if there are not commands to run, otherwise with the output of the commands executed on devices
-            if not commands_to_run:
-                exec_report = "[SYSTEM LOG]: The user rejected all proposed commands. No read operations were performed. Inform the user that you cannot complete the analysis without executing the commands, and ask them to try again or rephrase their request."
-            else:
-                base_dir = os.path.dirname(os.path.abspath(__file__))
-                inventory_path = os.path.abspath(os.path.join(base_dir, "..", "..", "controller", "inventories", f"res-{reservation_id}-inventory.ini"))
-                
-                exec_report = run_parallel_commands(inventory_path, commands_to_run, reservation_id, is_intent=False)
-
             # send execution report to the worker and update next phase
             yield f"data: {json.dumps({'type': 'result', 'data': {'chat_id': chat_id, 'requires_approval': False, 'execution_report': exec_report, 'context': context, 'next_phase': next_phase}})}\n\n"
 
@@ -670,54 +731,109 @@ def generate_diagnostic_assistant_sse(request_data):
     
     print("[DEBUG SSE] SSE generator ended \n" + "="*50)
 
-def generate_interactive_assistant_sse(request_data):
+def generate_interactive_assistant_sse(request_data, files):
     username = request_data['username']
     reservation_id = request_data['reservation_id']
     chat_id = request_data['chat_id']
     message = request_data['message']
     llm_model = request_data['llm_model']
     current_phase = request_data['current_phase']
-    
+    pipeline_mode = request_data.get('pipeline_mode', 'standard')
+    context_payload = request_data.get('context', '')
+    is_manual_chat = request_data.get('is_manual_chat', False)
+
+    active_phases_order = SAFE_INTERACTIVE_PHASES_ORDER if pipeline_mode == 'safe' else INTERACTIVE_ASSISTANT_PHASES_ORDER
+
     next_phase = None
-    if current_phase in INTERACTIVE_ASSISTANT_PHASES_ORDER:
-        idx = INTERACTIVE_ASSISTANT_PHASES_ORDER.index(current_phase)
-        if idx + 1 < len(INTERACTIVE_ASSISTANT_PHASES_ORDER):
-            next_phase = INTERACTIVE_ASSISTANT_PHASES_ORDER[idx + 1]
+    if current_phase in active_phases_order:
+        idx = active_phases_order.index(current_phase)
+        if idx + 1 < len(active_phases_order):
+            next_phase = active_phases_order[idx + 1]
 
     try:
         if current_phase == "interactive_negotiator":
-            final_reply, chat_id_out, history = yield from handle_interactive_chat_logic(username, reservation_id, chat_id, message, llm_model)
+            final_reply, chat_id_out = yield from handle_interactive_chat_logic(username, reservation_id, chat_id, current_phase, message, llm_model, pipeline_mode, files)
             
             status = final_reply.get("status", "").upper()
             proposed_cmds = final_reply.get("proposed_commands", [])
 
-            if status == "APPROVED" and proposed_cmds:
-                # Passa all'esecuzione
-                request_data['proposed_commands'] = proposed_cmds
-                yield f"data: {json.dumps({'type': 'result', 'data': {'chat_id': chat_id_out, 'next_phase': next_phase}})}\n\n"
+            if proposed_cmds:
+                if pipeline_mode == 'safe' and status == "APPROVED":
+                    
+                    plan_str = "\n".join(proposed_cmds)
+
+                    fallback_msg = final_reply.get("response", "Executing proposed plan.")
+                    intent_context = extract_interactive_intent_context(username, reservation_id, chat_id_out, fallback_msg)
+
+                    safe_context = f"<experiment_context>\nMODE: DIRECT COMMAND EXECUTION.\n{intent_context}\n</experiment_context>\n\n<exit_conditions>\nNO_VERIFICATION_REQUIRED\n</exit_conditions>\n\n<execution_plan>\n{plan_str}\n</execution_plan>\n\n<verification_commands>\n[]\n</verification_commands>"
+                    yield f"data: {json.dumps({'type': 'result', 'data': {'chat_id': chat_id_out, 'context': safe_context, 'requires_approval': False, 'next_phase': next_phase}})}\n\n"
+                
+                else:
+                    # check if all commands are whitelisted
+                    safe_commands, unsafe_commands = filter_interactive_commands(proposed_cmds)
+
+                    if status != "APPROVED" and unsafe_commands:
+                        yield f"data: {json.dumps({'type': 'result', 'data': {'reply': json.dumps(final_reply), 'chat_id': chat_id_out, 'requires_approval': True, 'commands': unsafe_commands, 'next_phase': current_phase}})}\n\n"
+                        
+                    elif status == "APPROVED":
+                        request_data['proposed_commands'] = proposed_cmds
+                        yield f"data: {json.dumps({'type': 'result', 'data': {'chat_id': chat_id_out, 'requires_approval': False, 'next_phase': next_phase}})}\n\n"
+                    
+                    else:
+                        yield f"data: {json.dumps({'type': 'result', 'data': {'reply': json.dumps(final_reply), 'chat_id': chat_id_out, 'requires_approval': False, 'next_phase': None}})}\n\n"
+            
             else:
                 # Resta in attesa di approvazione o chiarimenti (mostra i comandi proposti nella UI se ci sono)
-                yield f"data: {json.dumps({'type': 'result', 'data': {'reply': json.dumps(final_reply), 'chat_id': chat_id_out, 'next_phase': None}})}\n\n"
+                yield f"data: {json.dumps({'type': 'result', 'data': {'reply': json.dumps(final_reply), 'chat_id': chat_id_out, 'requires_approval': False, 'next_phase': None}})}\n\n"
+
+        elif current_phase == "safety":
+            if context_payload:
+                message = context_payload + ("\n\n" + message if message.strip() else "")
+        
+            latest_user_msg = {"role": "user", "content": message} if message.strip() else None
+            
+            final_reply = yield from execute_safety_phase(username, chat_id, latest_user_msg, reservation_id, llm_model, is_manual_chat)
+            
+            status = str(final_reply.get("status", "")).upper()
+            filtered_reply = {"status": status, "executable_plan": final_reply.get("executable_plan", []), "verification_plan": final_reply.get("verification_plan", [])}
+            if "REJECTED" in status: filtered_reply["issues"] = final_reply.get("issues", [])
+            if final_reply.get("clarifying_questions"): filtered_reply["clarifying_questions"] = final_reply.get("clarifying_questions")
+
+            result_data = {"chat_id": chat_id, "reply": json.dumps(filtered_reply)}
+
+            if "APPROVED" in status:
+                safe_exec_plan = format_as_string(final_reply.get("executable_plan", []))
+                safe_context = f"<approved_exec_plan>\n{safe_exec_plan}\n</approved_exec_plan>\n<approved_verif_plan>\n[]\n</approved_verif_plan>"    
+                result_data.update({"context": safe_context, "next_phase": next_phase})
+            else:
+                result_data.update({"is_safety_stopped": True, "next_phase": current_phase})
+
+            yield f"data: {json.dumps({'type': 'result', 'data': result_data})}\n\n"
 
         elif current_phase == "execution":
-            cmds_to_run = request_data.get('proposed_commands', [])
             
-            if cmds_to_run:
-                base_dir = os.path.dirname(os.path.abspath(__file__))
-                inventory_path = os.path.abspath(os.path.join(base_dir, "..", "..", "controller", "inventories", f"res-{reservation_id}-inventory.ini"))
-                exec_report = run_parallel_commands(inventory_path, cmds_to_run, reservation_id, is_intent=False)
+            if pipeline_mode == 'safe':
+                plan_str = extract_xml_tag(context_payload, "approved_exec_plan")
+                cmds_to_run = parse_plan([line.strip() for line in plan_str.split('\n') if line.strip()])
             else:
-                exec_report = "No commands provided to execute."
+                cmds_to_run = request_data.get('proposed_commands', [])
 
-            # Salva il report nella history globale per farlo leggere all'agente al turno successivo
-            session_key = f"agent_history:interactive_assistant_chat:{username}:{reservation_id}:{chat_id}"
-            history_str = redis_client.get(session_key)
-            if history_str:
-                history = json.loads(history_str)
-                history.append({"role": "execution_log", "content": f"<execution_report>\n{exec_report}\n</execution_report>"})
-                redis_client.set(session_key, json.dumps(history), ex=432000)
+            # run commands on testbed
+            executed, exec_report = execute_testbed_commands_wrapper(pipeline_type="interactive", reservation_id=reservation_id, proposed_commands=cmds_to_run)
+            
+            if executed:
+                request_data['execution_report'] = exec_report
+                yield f"data: {json.dumps({'type': 'result', 'data': {'chat_id': chat_id, 'execution_report': exec_report, 'next_phase': next_phase}})}\n\n"
+            else:
+                yield f"data: {json.dumps({'type': 'result', 'data': {'reply': exec_report, 'chat_id': chat_id, 'next_phase': None}})}\n\n"
 
-            yield f"data: {json.dumps({'type': 'result', 'data': {'chat_id': chat_id, 'execution_report': exec_report, 'next_phase': None}})}\n\n"
+        elif current_phase == "interactive_reporter":
+            exec_report = request_data.get('execution_report', '')
+            reporter_msg = f"<execution_report>\n{exec_report}\n</execution_report>"
+            
+            final_reply, chat_id_out = yield from handle_interactive_chat_logic(username, reservation_id, chat_id, current_phase, reporter_msg, llm_model, pipeline_mode, files)
+            
+            yield f"data: {json.dumps({'type': 'result', 'data': {'reply': json.dumps(final_reply), 'chat_id': chat_id_out, 'requires_approval': False, 'next_phase': None}})}\n\n"
 
     except Exception as e:
         yield f"data: {json.dumps({'type': 'result', 'data': {'error': str(e)}})}\n\n"
@@ -834,14 +950,14 @@ def run_diagnostic_pipeline_worker(request_data):
             redis_client.publish(channel, "EOF")
 
 
-def run_interactive_pipeline_worker(request_data):
+def run_interactive_pipeline_worker(request_data, files):
     chat_id = request_data['chat_id']
     channel = f"channel:chat_{chat_id}"
     
     with app.app_context():
         try:
             while True:
-                generator = generate_interactive_assistant_sse(request_data)
+                generator = generate_interactive_assistant_sse(request_data, files)
                 phase_transitioned = False
                 should_stop = False
             
@@ -853,13 +969,24 @@ def run_interactive_pipeline_worker(request_data):
                             if data_payload.get("type") == "result":
                                 res_data = data_payload.get("data", {})
                                 next_phase = res_data.get("next_phase")
+                                requires_approval = res_data.get("requires_approval")
+                                is_safety_stopped = res_data.get("is_safety_stopped")
                             
-                                if not next_phase:
+                                if requires_approval or not next_phase or is_safety_stopped:
                                     should_stop = True
                                     break
                                 
                                 request_data['current_phase'] = next_phase
+
+                                if "context" in res_data:
+                                    request_data['context'] = res_data['context']
+                                    
+                                if "execution_report" in res_data:
+                                    request_data['execution_report'] = res_data['execution_report']
+                                    
                                 phase_transitioned = True
+                                request_data['message'] = ""
+                                files = []
                                 break
                         except json.JSONDecodeError:
                             pass

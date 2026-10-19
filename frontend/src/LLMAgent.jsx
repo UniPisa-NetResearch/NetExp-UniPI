@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import "./style/llmAgent.css";
-import { UniversalPipelineChat } from "./LLMAgents/SharedChatComponents";
+import { UniversalPipelineChat, renderStructuredContent, processSafetyHistory } from "./LLMAgents/SharedChatComponents";
 import { useAgentChat, sendChatRequestStream } from "./LLMAgents/useAgentChat";
 
 // component exclusively for Admins: read-only view of historical JSON messages
@@ -283,94 +283,8 @@ const LLMAgent = ({ username, reservation_id, isAdmin, activeReservationExpirati
         // set the phase from which resume execution
         setResumePhase(detectedPhase);
 
-        // counter for consecutive rejected safety messages
-        let rejectedCount = 0;
+        combinedMessages = processSafetyHistory(allMsgs, safetyIterations);
 
-        const filteredMessages = allMsgs.filter(m => {
-          // show all negotiation phase messages
-          if (m.agent_phase === "negotiation") return true;
-          // show only assistant messages for execution phase
-          if (m.agent_phase === "execution" && m.role === "assistant") return true;
-          // show only approved or last rejected assistant message for safety phase
-          if (m.agent_phase === "safety" && m.role === "assistant") {
-
-            try {
-              const parsed = typeof m.content === 'string' ? JSON.parse(m.content) : m.content;
-              const status = String(parsed.status).toUpperCase();
-              
-              if (status.includes("REJECTED")) {
-                  
-                rejectedCount++;
-                  
-                  // if we reached N rejected messages, we show the message generated in the last turn
-                  if (rejectedCount === safetyIterations) {
-                      rejectedCount = 0; 
-                      return true;
-                  }
-                  
-                  // otherwise, hide previous failed messages
-                  return false;
-              
-                } else if (status.includes("AWAITING_DEVICE_READ")) {
-
-                  // remove reading command messages
-                  return false;
-            
-              } else {
-                  
-                // if status is APPROVED or AWAITING_CLARIFICATIONS, the message is shown and reset the counter
-                  rejectedCount = 0;
-                  return true;
-              }
-            } catch (e) {
-                return true;
-            }
-          }
-
-          // fallback for messagges without agent_phase tag
-          if (!m.agent_phase) return true; 
-          
-          // do not show other messages as default
-          return false;
-
-        }).map(m => {
-          
-          // filter safety messages, get only specific fields
-          if (m.agent_phase === "safety" && m.role === "assistant") {
-            
-            try {
-              const parsed = typeof m.content === 'string' ? JSON.parse(m.content) : m.content;
-              
-              // get only relevant fields
-              const filtered = {
-                status: parsed.status,
-                executable_plan: parsed.executable_plan || [],
-                verification_plan: parsed.verification_plan || []
-              };
-              
-              // get issues from last rejected message (at this point there is at most only a rejected message)
-              if (String(parsed.status).toUpperCase().includes("REJECTED") && parsed.issues) {
-                filtered.issues = parsed.issues;
-              }
-              
-              // get clarifying questions if present
-              if (parsed.clarifying_questions && parsed.clarifying_questions.length > 0) {
-                filtered.clarifying_questions = parsed.clarifying_questions;
-              }
-              
-              return { ...m, content: JSON.stringify(filtered) };
-
-            } catch (e) {
-              return m;
-            }
-          }
-          return m;
-        });
-
-        combinedMessages = filteredMessages.map((m, i) => ({
-            ...m, 
-            id: m.id || `hist-${i}`
-        }));
       }
 
       chat.setMessages(combinedMessages);
@@ -629,50 +543,7 @@ const LLMAgent = ({ username, reservation_id, isAdmin, activeReservationExpirati
     });
   };
 
-  // render structured JSON responses in a readable key/value layout
-  const renderStructuredContent = (parsed) => {
-    // list of fields to show without numbers
-    const plainCommandFields = ["execution_plan", "verification", "executable_plan", "verification_plan"];
-    // list of fields that use markdown
-    const markdownFields = ["summary", "topology_diagram", "report", "context", "context_for_planning"];
-    return (
-      <div>
-        {Object.entries(parsed).map(([key, value]) => (
-          <div key={key} className="en-backend-message">
-            {/* convert keys into readable section labels */}
-            <strong className="en-backend-message-header"> {key.replace(/_/g, " ")} </strong>
-            {/* add None for empty arrays or a list of items */}
-            {markdownFields.includes(key) ? (
-               <div className="en-markdown-layout">
-                  <ReactMarkdown>{String(value)}</ReactMarkdown>
-               </div>
-            ) :Array.isArray(value) ? (
-              value.length === 0 ? (
-                <p className="en-backend-message-key">None</p>
-              ) : plainCommandFields.includes(key) ? (
-                <div className="en-backend-message-list-plain">
-                  {value.map((item, i) => (
-                    <div key={i} className="en-backend-message-list-element">{typeof item === "string" ? item.trimStart() : item}</div>
-                  ))}
-                </div>
-              ) : (
-                <div className="en-backend-message-numbered-list">
-                  {value.map((item, i) => (
-                    <div key={i} className="en-backend-message-numbered-row">
-                      <span className="en-backend-message-number">{i + 1}.</span>
-                      <span className="en-backend-message-list-element">{typeof item === "string" ? item.trimStart() : item}</span>
-                    </div>
-                  ))}
-                </div>
-              )
-            ) : (
-              <div className="en-backend-message-key">{String(value)}</div>
-            )}
-          </div>
-        ))}
-      </div>
-    );
-  };
+  
 
   // render user and assistant messages with phase-aware formatting
   const renderMessage = (message) => {
@@ -692,7 +563,7 @@ const LLMAgent = ({ username, reservation_id, isAdmin, activeReservationExpirati
       );
 
       // remove file content from the user message and replace with a placeholder
-      const fileRegex = /--- Start attached file content: (.*?) ---[\s\S]*?--- End attached file content: \1 ---/g;
+      const fileRegex = /<attached_file name="([^"]+)">[\s\S]*?<\/attached_file>/g;
       // show the file name in the user message and remove the content for better readability
       displayContent = displayContent.replace(fileRegex, "\n[Attached file: $1]\n");
 

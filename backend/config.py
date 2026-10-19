@@ -106,7 +106,9 @@ SAFETY_SUBAGENT_ROLES = ["safety_agent_1", "safety_agent_2", "safety_agent_3", "
 # diagnostic assistant phases in order of execution
 DIAGNOSTIC_ASSISTANT_PHASES_ORDER = ["diagnostic_intent", "diagnostic_planner", "execution", "diagnostic_reporter"]
 # interactive assistant phases in order of execution
-INTERACTIVE_ASSISTANT_PHASES_ORDER = ["interactive_negotiator", "execution"]
+INTERACTIVE_ASSISTANT_PHASES_ORDER = ["interactive_negotiator", "execution", "interactive_reporter"]
+# interactive assistant phases in order of execution with safety
+SAFE_INTERACTIVE_PHASES_ORDER = ["interactive_negotiator", "safety", "execution", "interactive_reporter"]
 # timeout after which the request is aborted
 LLM_TIMEOUT_SECONDS = 300
 # max output tokens for LLM

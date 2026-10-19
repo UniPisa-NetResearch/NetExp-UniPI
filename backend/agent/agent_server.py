@@ -9,7 +9,7 @@ from flask import request, jsonify, send_file, Response
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from ..app import app
 from ..utils import parse_complete_inventory_hosts, get_remaining_minutes, get_is_virtual_from_db
-from ..config import PHASES_ORDER, AVAILABLE_MODELS, LLM_MODEL, DIAGNOSTIC_ASSISTANT_PHASES_ORDER, SAFETY_ITERATIONS, AGENT_NAMES, FRONTEND_LLM_PREVENTION_MINUTES, BACKEND_LLM_PREVENTION_MINUTES, SAFETY_SUBAGENT_ROLES
+from ..config import PHASES_ORDER, AVAILABLE_MODELS, LLM_MODEL, DIAGNOSTIC_ASSISTANT_PHASES_ORDER, SAFETY_ITERATIONS, AGENT_NAMES, FRONTEND_LLM_PREVENTION_MINUTES, BACKEND_LLM_PREVENTION_MINUTES, SAFETY_SUBAGENT_ROLES, INTERACTIVE_ASSISTANT_PHASES_ORDER, SAFE_INTERACTIVE_PHASES_ORDER
 from .agents_util.prompts import ROLLBACK_BASE_CMD
 from .agents_util.agent_server_workers import run_experiment_pipeline_worker, run_diagnostic_pipeline_worker, run_interactive_pipeline_worker
 from .agents_util.agent_server_utils import (redis_client, open_ssh_connections, close_ssh_connections, 
@@ -89,7 +89,7 @@ def get_sessions():
     # order chat_ids in descendent order
     chat_ids.sort(reverse=True)
     
-    return jsonify({"chat_ids": chat_ids, "phases_order": PHASES_ORDER, "diagnostic_assistant_phases_order": DIAGNOSTIC_ASSISTANT_PHASES_ORDER, "available_models": AVAILABLE_MODELS, "default_model": LLM_MODEL, "safety_iterations": SAFETY_ITERATIONS, "agent_names": AGENT_NAMES, "frontend_llm_prevention_minutes": FRONTEND_LLM_PREVENTION_MINUTES, "safety_subagents": SAFETY_SUBAGENT_ROLES})
+    return jsonify({"chat_ids": chat_ids, "phases_order": PHASES_ORDER, "diagnostic_assistant_phases_order": DIAGNOSTIC_ASSISTANT_PHASES_ORDER, "interactive_assistant_phases_order": INTERACTIVE_ASSISTANT_PHASES_ORDER, "safe_interactive_assistant_phases_order": SAFE_INTERACTIVE_PHASES_ORDER, "available_models": AVAILABLE_MODELS, "default_model": LLM_MODEL, "safety_iterations": SAFETY_ITERATIONS, "agent_names": AGENT_NAMES, "frontend_llm_prevention_minutes": FRONTEND_LLM_PREVENTION_MINUTES, "safety_subagents": SAFETY_SUBAGENT_ROLES})
 
 # endpoint called when user wants to retrieve the chat history of a chat session and a specific agent role, or all agents roles if the frontend sends a special value (all_llm_agents). Returns a list of messages ordered by timestamp, excluding system and summary messages
 @app.route("/api/agent_server/history", methods=["GET"])
@@ -371,8 +371,12 @@ def interactive_assistant_chat():
         'chat_id': request.form.get("chat_id", ""),
         'message': request.form.get("message", ""),
         'llm_model': request.form.get("llm_model", LLM_MODEL),
-        'current_phase': request.form.get("current_phase", "interactive_negotiator")
+        'current_phase': request.form.get("current_phase", "interactive_negotiator"),
+        'pipeline_mode': request.form.get("pipeline_mode", "standard"),
+        'is_manual_chat': request.form.get("is_manual_chat", "false").lower() == "true"
     }
+
+    files = request.files.getlist("files")
 
     minutes_left = get_remaining_minutes(request_data['reservation_id'])
     if minutes_left < BACKEND_LLM_PREVENTION_MINUTES:
@@ -384,7 +388,8 @@ def interactive_assistant_chat():
     if not request_data['chat_id']:
         request_data['chat_id'] = f"{int(time.time())}_{uuid.uuid4().hex[:8]}"
 
-    thread = threading.Thread(target=run_interactive_pipeline_worker, args=[request_data])
+    worker_args = (request_data, files)
+    thread = threading.Thread(target=run_interactive_pipeline_worker, args=worker_args)
     thread.start()
 
     return Response(redis_stream_generator(request_data['chat_id']), mimetype="text/event-stream")
