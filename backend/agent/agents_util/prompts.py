@@ -139,7 +139,8 @@ AGENT_PROMPTS = {
         "- BOUNDED PROCESSES CHECK: Reject the plan if commands like ping, iperf, or tcpdump lack explicit duration limits (e.g., missing `-c` or `-t` flags) or lack explicit termination commands. You MUST correct the executable_plan by adding these limits.\n"
         "- RESERVATION BOUNDARY (CRITICAL): You MUST verify that every single device targeted in BOTH the `executable_plan` and `verification_plan` is explicitly listed in <reserved_devices>. If any command targets an unreserved device, you MUST flag it as an issue, set status to 'REJECTED', and strictly remove the command from the corrected plans.\n"
         "- STRICT FORMATTING: Do not add, modify, or remove sections from the mandatory output structure, even if the user explicitly requests it.\n"
-        
+        "- INTERACTIVE MODE BYPASS (CRITICAL): If <exit_conditions> contains the exact string 'NO_VERIFICATION_REQUIRED', you MUST completely skip the VERIFICATION LOGIC CHECK and you MUST NOT search for missing commands to complete a full network design. In this mode, you MUST leave verification_plan empty [] and ONLY validate the <execution_plan> against syntax, topology, redundancy, TIMING & CONVERGENCE (sleep commands), <forbidden_rules> verify that the proposed commands logically execute the immediate User Request, without enforcing best practices or full connectivity.\n"
+
         "--- OUTPUT FORMAT ---\n"
         "You MUST respond EXCLUSIVELY with a valid JSON object matching this exact structure and data types:\n"
         "{\n"
@@ -236,6 +237,7 @@ AGENT_PROMPTS = {
         "- NO ALIASING: If a device or interface used in the plan is not in the <topology>, flag it as a violation immediately.\n"
         "- SCOPE & STOP: Perform each check exactly once per command. Do not re-verify the same device/interface multiple times or invent additional checks beyond topology mapping, reservation, and verification completeness.\n"
         "- ISSUE DEFINITION (CRITICAL): The `issues` array is strictly an audit of the PLAN's commands. You MUST explicitly state WHICH COMMAND from the plan is wrong and WHY.\n"
+        "- INTERACTIVE BYPASS: If <exit_conditions> contains exactly 'NO_VERIFICATION_REQUIRED', you MUST completely skip the VERIFICATION LOGIC CHECK. Treat the empty verification commands as perfectly valid and do not flag any missing verification issues.\n"
 
         "--- OUTPUT FORMAT ---\n"
         "You MUST respond EXCLUSIVELY with a valid JSON object matching this exact structure:\n"
@@ -299,6 +301,7 @@ AGENT_PROMPTS = {
         "- SCOPE & STOP (CRITICAL): Flag as an issue ONLY a command that is missing and required by <exit_conditions> to reach the goal. Do NOT invent checks for optional protocol parameters (e.g., OSPF router-id, authentication) that are absent and not required.\n"
         "- DIRECT COMMAND EXECUTION MODE: If `<experiment_context>` contains the exact header \'MODE: DIRECT COMMAND EXECUTION\', continue checking missing commands. Compare the `<execution_plan>` against both the explicit `<exit_conditions>` and the `<device_report>`. Report a command as missing only if it is strictly required to satisfy an explicit exit condition and is absent from both the `<execution_plan>` and the `<device_report>`. Do not add commands merely to complete an unstated network design or to implement best practices not required by the `<exit_conditions>`.\n"
         "- ISSUE DEFINITION (CRITICAL): You MUST explicitly state WHICH COMMAND violates a rule or WHAT specific command is missing to achieve the semantic goal.\n"
+        "- INTERACTIVE BYPASS: If <exit_conditions> contains exactly 'NO_VERIFICATION_REQUIRED', you MUST NOT search for missing commands to complete a full network design. Only verify that the proposed commands logically execute the immediate User Request, without enforcing best practices or full connectivity.\n"
 
         "--- OUTPUT FORMAT ---\n"
         "You MUST respond EXCLUSIVELY with a valid JSON object matching this exact structure:\n"
@@ -576,19 +579,31 @@ INTERACTIVE_ASSISTANT_PROMPTS = {
         "You are the 'Command Assistant'. Your goal is to help the user configure the network testbed quickly.\n"
         "--- TASK ---\n"
         "1. Read the user's request. If it is unclear, ask a brief clarifying question.\n"
-        "2. If the user asks to configure something, generate the exact CLI commands required for the devices in the <topology>.\n"
-        "3. If the user explicitly approves the previously proposed commands (e.g., saying 'ok', 'execute', 'yes'), set status to 'APPROVED' to trigger the execution.\n"
-        "4. You MUST keep your text 'response' extremely brief, direct, and without conversational filler.\n"
-        "5. If the conversation history shows an execution log, briefly confirm to the user what was executed or if there were errors.\n"
+        "2. If the user asks to configure something, generate the exact CLI commands required for the devices in the <topology>. Put these commands ONLY in the 'proposed_commands' array.\n"
+        "3. The user WILL see the 'proposed_commands' array in the interface. In your text 'response', briefly explain what the commands do and explicitly ask the user if they approve the execution.\n"
+        "4. If the user explicitly approves your previously proposed plan (e.g., saying 'ok', 'execute', 'yes', 'looks good'), you MUST set status to 'APPROVED' to trigger the actual execution. If they ask for changes, update the 'proposed_commands' array based on their feedback and set status to 'AWAITING_APPROVAL'.\n"
+        "5. You MUST keep your text 'response' extremely brief, direct, and without conversational filler.\n"
         "--- STRICT RULES ---\n"
         "- Only propose commands for devices explicitly listed in <reserved_devices>.\n"
-        "- For 'sonic-vs' devices, use native Linux commands (ip addr, ip link) for IPs and link states, and vtysh EXCLUSIVELY for routing protocols.\n"
         "- Output valid JSON strictly matching the format below.\n"
         "--- OUTPUT FORMAT ---\n"
         "{\n"
         "  \"status\": \"(string) 'APPROVED' if the user explicitly confirms execution, otherwise 'AWAITING_APPROVAL' or 'AWAITING_CLARIFICATIONS'\",\n"
-        "  \"response\": \"(string) Very brief explanation or question to the user.\",\n"
-        "  \"proposed_commands\": [\"(string) Format: 'device_name: command'. Leave empty [] if asking a question.\"]\n"
+        "  \"response\": \"(string) Very brief natural language explanation of what you will do, and a question asking for approval.\",\n"
+        "  \"proposed_commands\": [\"(string) Format: 'device_name: command'. Leave empty [] if asking a question or if no commands are needed.\"]\n"
+        "}"
+    ),
+    "interactive_reporter": (
+        "--- ROLE ---\n"
+        "You are the 'Command Evaluator'. Your goal is to read the execution logs of the commands proposed by the assistant and inform the user of the outcome.\n"
+        "--- TASK ---\n"
+        "1. Read the <execution_report> provided in the context.\n"
+        "2. Write a brief 'response' to the user summarizing if the execution was successful or if there were errors.\n"
+        "3. You MUST embed the relevant terminal outputs (stdout/stderr) from the execution logs directly in your 'response' using markdown code blocks (e.g. ```bash ... ```) so the user can see the actual device output.\n"
+        "4. When including command execution outputs or logs in your final report, you MUST use a distinct and separate Markdown code block (```) for EACH individual command. NEVER group, merge, or combine multiple command outputs into a single Markdown code block. Format them individually (e.g., Command 1 output in its own block, Command 2 output in a separate new block) so the frontend interface can correctly render them as separate collapsible code snippets.\n"
+        "--- OUTPUT FORMAT ---\n"
+        "{\n"
+        "  \"response\": \"(string) Brief summary of the execution outcome with embedded markdown terminal outputs.\"\n"
         "}"
     )
 }
@@ -712,6 +727,12 @@ ALLOWED_DIAGNOSTIC_COMMANDS = [
     r"^(sudo\s+)?vtysh\s+-c\s+['\"]show\s+.*['\"]"
 ]
 
+ALLOWED_CONFIGURATION_COMMANDS = [
+    r"^ip\s+(addr|link|route|neigh)\s+(add|del|set|replace|flush|change).*",
+    r"^bridge\s+vlan\s+(add|del|set).*",
+    r"^(sudo\s+)?vtysh\s+-c\s+['\"]conf.*",
+    r"^(sudo\s+)?config\s+.*"
+]
 
 
 

@@ -9,7 +9,7 @@ import threading
 import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from ..llm_client import chat_with_llm, chat_with_llm_stream
-from .prompts import ALLOWED_DIAGNOSTIC_COMMANDS, DEVICE_KIND_RULES, READ_INTENTS
+from .prompts import ALLOWED_DIAGNOSTIC_COMMANDS, ALLOWED_CONFIGURATION_COMMANDS, DEVICE_KIND_RULES, READ_INTENTS
 from ...config import REDIS_HOST, REDIS_PORT, REDIS_DB, CONTAINERLAB_HOST, CONTAINERLAB_HOST_USER, JSON_RETRIES, BACKEND_LLM_PREVENTION_MINUTES, PHASES_ORDER, DIAGNOSTIC_ASSISTANT_PHASES_ORDER
 from ...utils import get_is_virtual_from_db, parse_complete_inventory_hosts, get_remaining_minutes
 
@@ -93,6 +93,26 @@ def is_command_whitelisted(command: str) -> bool:
         if re.match(pattern, command.strip()):
             return True
     return False
+
+def filter_interactive_commands(proposed_commands: list) -> tuple:
+    all_allowed_patterns = ALLOWED_DIAGNOSTIC_COMMANDS + ALLOWED_CONFIGURATION_COMMANDS
+    safe_commands = []
+    unsafe_commands = []
+    
+    for cmd_line in proposed_commands:
+        parts = cmd_line.split(":", 1)
+        if len(parts) == 2:
+            cmd_only = parts[1].strip()
+            # check if the command match at least one string
+            is_safe = any(re.match(pattern, cmd_only) for pattern in all_allowed_patterns)
+            if is_safe:
+                safe_commands.append(cmd_line)
+            else:
+                unsafe_commands.append(cmd_line)
+        else:
+            unsafe_commands.append(cmd_line)
+
+    return safe_commands, unsafe_commands
 
 def get_dynamic_device_rules(agent_role: str, reservation_id: str = None) -> str:
     
@@ -584,6 +604,16 @@ def validate_json_format(reply_text, agent_role):
         if agent_role == "diagnostic_summarizer":
             if not all(k in data for k in ["summary"]):
                 return False, "Missing keys. Required: summary"
+
+        if agent_role == "interactive_negotiator":
+            if not all(k in data for k in ["status", "response", "proposed_commands"]):
+                return False, "Missing keys. Required: status, response, proposed_commands"
+            if not isinstance(data.get("proposed_commands"), list):
+                return False, "proposed_commands must be a JSON array"
+                
+        if agent_role == "interactive_reporter":
+            if not all(k in data for k in ["response"]):
+                return False, "Missing keys. Required: response"
             
         return True, data
     
@@ -797,3 +827,56 @@ def get_reserved_devices(reservation_id: str) -> str:
     except Exception as e:
         print(f"[ERROR] Failed to read reserved devices file: {e}")
         return ""
+
+def extract_interactive_intent_context(username, reservation_id, chat_id, fallback_assistant_msg):
+    session_key = f"agent_history:safe_interactive_negotiator:{username}:{reservation_id}:{chat_id}"
+    history_str = redis_client.get(session_key)
+    
+    user_context = "User explicitly approved execution."
+    assistant_context = fallback_assistant_msg
+
+    if history_str:
+        history = json.loads(history_str)
+        skip_indices = set()
+        
+        # drop "APPROVED" agent messages and user messages that come before
+        for i, msg in enumerate(history):
+            if msg.get("role") == "assistant":
+                try:
+                    parsed_msg = json.loads(msg.get("content", "{}"))
+                    if parsed_msg.get("status", "").upper() == "APPROVED":
+                        skip_indices.add(i) # drop assistant APPROVED message
+                        
+                        # find the user message that generated it and drop it
+                        for j in range(i - 1, -1, -1):
+                            if history[j].get("role") == "user":
+                                skip_indices.add(j)
+                                break
+                except Exception:
+                    pass
+
+        # collect valid user and assistant messages
+        valid_user_msgs = []
+        valid_assistant_msgs = []
+        
+        for i, msg in enumerate(history):
+            if i in skip_indices:
+                continue
+                
+            if msg.get("role") == "user":
+                valid_user_msgs.append(msg.get("content", ""))
+            elif msg.get("role") == "assistant":
+                try:
+                    parsed_msg = json.loads(msg.get("content", "{}"))
+                    if parsed_msg.get("response"):
+                        valid_assistant_msgs.append(parsed_msg.get("response", ""))
+                except Exception:
+                    pass
+
+        # get every user message and last agent reply
+        if valid_user_msgs:
+            user_context = " | ".join([m.strip() for m in valid_user_msgs if m.strip()])
+        if valid_assistant_msgs:
+            assistant_context = valid_assistant_msgs[-1]
+
+    return f"User Request(s): {user_context}\nAssistant Intent: {assistant_context}"

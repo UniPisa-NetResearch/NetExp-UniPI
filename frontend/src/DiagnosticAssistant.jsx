@@ -2,81 +2,11 @@ import React, { useState, useEffect, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import "./style/llmAgent.css";
 
-import { UniversalPipelineChat } from "./LLMAgents/SharedChatComponents";
+import { UniversalPipelineChat, CollapsibleMessageWrapper, CommandApprovalModal, ExecutionLogViewer } from "./LLMAgents/SharedChatComponents";
 import { useAgentChat, sendChatRequestStream } from "./LLMAgents/useAgentChat";
 
 
-// common wrapper component for execution log and code fragments in agent messages
-const CollapsibleMessageWrapper = ({ title, btnTextOpen, btnTextClosed, wrapperClass, renderContent }) => {
-  const [allOpen, setAllOpen] = useState(false);
 
-  const toggleAll = (e) => {
-    e.preventDefault();
-    setAllOpen(!allOpen);
-  };
-
-  return (
-    <div className={`en-message-bubble ${wrapperClass}`}>
-      <div className="en-message-role en-message-role-header">
-        <span>{title}</span>
-        <button 
-          onClick={toggleAll} 
-          className="en-toggle-all-btn" 
-          title={allOpen ? btnTextClosed : btnTextOpen}
-        >
-          {allOpen ? btnTextClosed : btnTextOpen}
-        </button>
-      </div>
-      <div className="en-message-content">
-        {renderContent(allOpen)}
-      </div>
-    </div>
-  );
-};
-
-const ExecutionLogViewer = ({ message }) => {
-
-  // divide report with a delimiter
-  const reports = message.content.split(/[\r\n]*-{20,}[\r\n]*/).filter(Boolean);
-  
-  return (
-    <CollapsibleMessageWrapper
-      title="Device Execution Logs"
-      btnTextOpen="Open all commands"
-      btnTextClosed="Close all commands"
-      wrapperClass="en-message-assistant en-message-execution-report"
-      renderContent={(allOpen) =>
-        reports.map((report, idx) => {
-          // separate command from the output
-          const splitIndex = report.indexOf('===');
-          if (splitIndex === -1) {
-            return (
-              <details key={idx} className="en-execution-log-details" open={allOpen}>
-                <summary>
-                  <span className="en-execution-icon">▶</span>
-                </summary>
-                <pre>{report}</pre>
-              </details>
-            );
-          }
-          // first part is associated to real command
-          const cmdPart = report.substring(0, splitIndex).trim();
-          // second part after the three characters (===) is the output of the command
-          let outputPart = report.substring(splitIndex + 3).trim();
-          // filter ansible execution status from the output
-          outputPart = outputPart.replace(/\[SUCCESS]:?[ \t]*\n?/g, '').replace(/\[FAILED: Return code \d+\][ \t]*\n?/g, '').replace(/\[STDOUT]:[ \t]*\n?/g, '').replace(/\[STDERR]:[ \t]*\n?/g, '').replace(/===[ \t]*/g, '').trim();
-          
-          return (
-            <details key={idx} className="en-execution-log-details" open={allOpen}>
-              <summary><span className="en-execution-icon">▶</span>{cmdPart}</summary>
-              <pre>{outputPart}</pre>
-            </details>
-          );
-        })
-      }
-    />
-  );
-};
 
 const MarkdownMessageViewer = ({ message, username, isUser }) => {
   let displayContent = message.content;
@@ -294,21 +224,6 @@ const DiagnosticAssistant = ({ username, reservation_id, activeReservationExpira
 
   };
 
-  const handleApproveAll = () => {
-    const allDecided = {};
-    pendingCommands.forEach((_, i) => allDecided[i] = "accepted");
-    setCommandDecisions(allDecided);
-  };
-
-  const handleRejectAll = () => {
-    const allDecided = {};
-    pendingCommands.forEach((_, i) => allDecided[i] = "rejected");
-    setCommandDecisions(allDecided);
-  };
-
-  // check if user has selected an option for every command
-  const isAllDecided = pendingCommands.length > 0 && Object.keys(commandDecisions).length === pendingCommands.length;
-
   const handleSubmitApproval = async () => {
     setIsModalOpen(false);
     chat.setIsSending(true);
@@ -386,50 +301,14 @@ const DiagnosticAssistant = ({ username, reservation_id, activeReservationExpira
         reasoningRef={reasoningRef}
       />
 
-      {/* Approval modal */}
-      {isModalOpen && (
-        <div className="en-modal-overlay">
-          <div className="en-modal-content">
-            <div className="en-modal-header">
-              <h3>Necessary Command Approval</h3>
-              <p>The Agent requested commands that are not included in the whitelist. <strong>Select a choice for every command</strong> to continue.</p>
-              <div className="en-modal-all-button">
-                <button onClick={handleApproveAll} className="en-btn-accept">Accept all</button>
-                <button onClick={handleRejectAll} className="en-btn-reject">Reject all</button>
-              </div>
-            </div>
-            
-            <ul className="en-command-approval-list">
-              {pendingCommands.map((cmdString, idx) => (
-                <li key={idx} className="en-command-approval-item">
-                  <span className="en-command-text">{cmdString}</span>
-                  <div className="en-command-actions">
-                    <button 
-                      className={`en-btn-accept ${commandDecisions[idx] === 'accepted' ? 'active' : ''}`}
-                      onClick={() => setCommandDecisions({...commandDecisions, [idx]: 'accepted'})}>
-                      Accept
-                    </button>
-                    <button 
-                      className={`en-btn-reject ${commandDecisions[idx] === 'rejected' ? 'active' : ''}`}
-                      onClick={() => setCommandDecisions({...commandDecisions, [idx]: 'rejected'})}>
-                      Reject
-                    </button>
-                  </div>
-                </li>
-              ))}
-            </ul>
-            
-            <div className="en-modal-footer">
-              <button 
-                className={`en-btn-confirm ${!isAllDecided ? "en-send-button-disabled" : ""}`}
-                onClick={handleSubmitApproval}
-                disabled={!isAllDecided}>
-                Confirm selection
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <CommandApprovalModal 
+        isOpen={isModalOpen}
+        pendingCommands={pendingCommands}
+        commandDecisions={commandDecisions}
+        setCommandDecisions={setCommandDecisions}
+        onSubmitApproval={handleSubmitApproval}
+      />
+
     </>
   );
 };

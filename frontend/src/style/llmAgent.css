@@ -1180,6 +1180,17 @@ input:disabled + .en-slider:before {
   background-color: #d0dcf5;
   border-color: #b9c6e3;
 }
+.interactive-command-message {
+  margin-top: 15px;
+}
+.interactive-command-list {
+  background-color: #000000;
+  padding: 10px;
+}
+.interactive-command-list-element {
+  color: #54f53f; 
+  font-family: monospace;
+}
 @media (max-width: 900px) {
   .experiment-negotiation-main {
     flex-direction: column;
